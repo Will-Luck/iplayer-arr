@@ -98,7 +98,10 @@ func (h *Handler) handleQueue(w http.ResponseWriter, r *http.Request) {
 	downloads, _ := h.store.ListDownloads()
 	var slots []map[string]interface{}
 	for _, dl := range downloads {
-		if dl.Status == store.StatusCompleted || dl.Status == store.StatusFailed {
+		if dl.Status == store.StatusCompleted {
+			continue
+		}
+		if dl.Status == store.StatusFailed && !dl.Retryable {
 			continue
 		}
 
@@ -108,6 +111,8 @@ func (h *Handler) handleQueue(w http.ResponseWriter, r *http.Request) {
 			status = "Downloading"
 		case store.StatusResolving:
 			status = "Queued"
+		case store.StatusFailed:
+			status = "Queued" // retryable failures show as queued to prevent Sonarr blacklisting
 		}
 
 		mbTotal := float64(dl.Size) / 1024 / 1024
