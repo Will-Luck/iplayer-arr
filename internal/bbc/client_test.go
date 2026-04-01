@@ -59,7 +59,9 @@ func TestClientSetsUserAgent(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient()
-	c.Get(srv.URL)
+	if _, err := c.Get(srv.URL); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	if gotUA == "" || gotUA == "Go-http-client/1.1" {
 		t.Errorf("UA should be a browser UA, got %q", gotUA)
 	}

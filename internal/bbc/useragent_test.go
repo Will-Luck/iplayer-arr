@@ -1,6 +1,9 @@
 package bbc
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRandomUA(t *testing.T) {
 	ua := RandomUserAgent()
@@ -11,7 +14,7 @@ func TestRandomUA(t *testing.T) {
 	// should contain browser identifier
 	found := false
 	for _, sig := range []string{"Chrome", "Firefox", "Safari", "Edge"} {
-		if contains(ua, sig) {
+		if strings.Contains(ua, sig) {
 			found = true
 			break
 		}
@@ -30,15 +33,23 @@ func TestRandomUA(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
+func TestValidPID(t *testing.T) {
+	cases := []struct {
+		pid  string
+		want bool
+	}{
+		{"b006qpgr", true},
+		{"m001pb7h", true},
+		{"b006qpgr1", true},
+		{"B006QPGR", false},
+		{"b006qpg", false},
+		{"b006qp!r", false},
+		{"", false},
+		{"abcdefgh", false}, // 'a' and 'e' are vowels
+	}
+	for _, tc := range cases {
+		if got := ValidPID(tc.pid); got != tc.want {
+			t.Errorf("ValidPID(%q) = %v, want %v", tc.pid, got, tc.want)
 		}
 	}
-	return false
 }
