@@ -105,16 +105,20 @@ func (r *PlaylistResolver) Resolve(pid string) (*PlaylistInfo, error) {
 func normaliseVersionType(raw string) string {
 	lower := strings.ToLower(raw)
 	switch {
-	case strings.Contains(lower, "described") || strings.Contains(lower, "description"):
-		return "audiodescribed"
 	case strings.Contains(lower, "sign"):
-		if strings.Contains(lower, "described") {
+		if strings.Contains(lower, "described") || strings.Contains(lower, "description") {
 			return "combined"
 		}
 		return "signed"
+	case strings.Contains(lower, "described") || strings.Contains(lower, "description"):
+		return "audiodescribed"
 	case strings.Contains(lower, "open subtitles"):
 		return "opensubtitles"
 	default:
-		return strings.ToLower(strings.Fields(raw)[0])
+		fields := strings.Fields(raw)
+		if len(fields) == 0 {
+			return "unknown"
+		}
+		return strings.ToLower(fields[0])
 	}
 }

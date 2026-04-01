@@ -36,14 +36,14 @@ type IBLResult struct {
 
 var (
 	reSeriesNum  = regexp.MustCompile(`(?i)(?:Series|Cyfres|Season)\s+(\d+)`)
-	reEpisodeNum = regexp.MustCompile(`(?::\s*|^)(\d+)\.\s+`)
+	reEpisodeNum = regexp.MustCompile(`^(\d+)\.\s*`)
 )
 
 func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
-	url := fmt.Sprintf("%s/search?q=%s&rights=web&page=%d&per_page=20",
+	searchURL := fmt.Sprintf("%s/search?q=%s&rights=web&page=%d&per_page=20",
 		ibl.BaseURL, url.QueryEscape(query), page)
 
-	body, err := ibl.client.Get(url)
+	body, err := ibl.client.Get(searchURL)
 	if err != nil {
 		return nil, fmt.Errorf("iBL search: %w", err)
 	}

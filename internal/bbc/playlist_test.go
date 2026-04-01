@@ -33,6 +33,33 @@ func TestResolveVPID(t *testing.T) {
 		t.Errorf("Duration = %d, want 2700", info.Duration)
 	}
 	if len(info.Versions) != 2 {
-		t.Errorf("Versions len = %d, want 2", len(info.Versions))
+		t.Fatalf("Versions len = %d, want 2", len(info.Versions))
+	}
+	if info.Versions[0].Type != "original" {
+		t.Errorf("Versions[0].Type = %q, want original", info.Versions[0].Type)
+	}
+	if info.Versions[1].Type != "audiodescribed" {
+		t.Errorf("Versions[1].Type = %q, want audiodescribed", info.Versions[1].Type)
+	}
+}
+
+func TestNormaliseVersionType(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"Original", "original"},
+		{"Audio Described", "audiodescribed"},
+		{"Audio Description", "audiodescribed"},
+		{"Signed", "signed"},
+		{"Signed and Audio Described", "combined"},
+		{"Open Subtitles", "opensubtitles"},
+		{"Dubbbed", "dubbbed"},
+		{"", "unknown"},
+		{"  ", "unknown"},
+	}
+	for _, tc := range cases {
+		if got := normaliseVersionType(tc.in); got != tc.want {
+			t.Errorf("normaliseVersionType(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
