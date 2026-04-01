@@ -40,7 +40,7 @@ var (
 )
 
 func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
-	searchURL := fmt.Sprintf("%s/search?q=%s&rights=web&page=%d&per_page=20",
+	searchURL := fmt.Sprintf("%s/new-search?q=%s&rights=web&page=%d&per_page=20",
 		ibl.BaseURL, url.QueryEscape(query), page)
 
 	body, err := ibl.client.Get(searchURL)
@@ -49,7 +49,7 @@ func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
 	}
 
 	var resp struct {
-		Search struct {
+		NewSearch struct {
 			Results []struct {
 				ID       string `json:"id"`
 				Type     string `json:"type"`
@@ -70,7 +70,7 @@ func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
 				ParentPosition int    `json:"parent_position"`
 				TleoID         string `json:"tleo_id"`
 			} `json:"results"`
-		} `json:"search"`
+		} `json:"new_search"`
 	}
 
 	if err := json.Unmarshal(body, &resp); err != nil {
@@ -78,11 +78,7 @@ func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
 	}
 
 	var results []IBLResult
-	for _, r := range resp.Search.Results {
-		if r.Type != "episode" {
-			continue
-		}
-
+	for _, r := range resp.NewSearch.Results {
 		result := IBLResult{
 			PID:      r.ID,
 			Title:    r.Title,
@@ -95,7 +91,7 @@ func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
 		}
 
 		if r.Images.Standard != "" {
-			result.Thumbnail = fmt.Sprintf("https://ichef.bbci.co.uk/images/ic/960x540/%s.jpg", r.Images.Standard)
+			result.Thumbnail = strings.Replace(r.Images.Standard, "{recipe}", "960x540", 1)
 		}
 
 		result.Series, result.EpisodeNum = parseSubtitleNumbers(r.Subtitle)

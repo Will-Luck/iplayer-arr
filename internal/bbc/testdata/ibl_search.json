@@ -1,5 +1,5 @@
 {
-  "search": {
+  "new_search": {
     "page": 1,
     "per_page": 20,
     "results": [
@@ -9,7 +9,7 @@
         "title": "The Unquiet Dead",
         "subtitle": "Series 1: 3. The Unquiet Dead",
         "synopses": {"small": "The Doctor and Rose travel to 1869."},
-        "images": {"standard": "p01tqv8z"},
+        "images": {"standard": "https://ichef.bbci.co.uk/images/ic/{recipe}/p01tqv8z.jpg"},
         "master_brand": {"titles": {"small": "BBC One"}},
         "release_date": "2005-04-09",
         "parent_position": 3,
