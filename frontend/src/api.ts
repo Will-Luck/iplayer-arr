@@ -6,10 +6,6 @@ import type {
   ConfigResponse,
 } from "./types";
 
-function getApiKey(): string {
-  return localStorage.getItem("iplayer_arr_apikey") ?? "";
-}
-
 function buildURL(path: string, params?: Record<string, string>): string {
   const url = new URL(path, window.location.origin);
   if (params) {
@@ -27,10 +23,6 @@ async function request<T>(
   params?: Record<string, string>,
 ): Promise<T> {
   const headers: Record<string, string> = {};
-  const key = getApiKey();
-  if (key) {
-    headers["Authorization"] = `Bearer ${key}`;
-  }
   if (body) {
     headers["Content-Type"] = "application/json";
   }

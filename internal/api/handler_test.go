@@ -57,8 +57,8 @@ func TestDownloadsNoAuth(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != 401 {
-		t.Fatalf("expected 401, got %d", w.Code)
+	if w.Code != 200 {
+		t.Fatalf("expected 200 (no auth required), got %d", w.Code)
 	}
 }
 

@@ -40,7 +40,9 @@ func NewHandler(st *store.Store, hub *Hub, mgr *download.Manager, ibl *bbc.IBL, 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 
-	// Public endpoints (no auth)
+	// All REST API endpoints are unauthenticated (network-level security via
+	// Tailscale/NPM). The SABnzbd and Newznab endpoints have their own API key
+	// auth for Sonarr integration.
 	switch {
 	case path == "/api/status" && r.Method == "GET":
 		h.handleStatus(w, r)
@@ -48,15 +50,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/events" && r.Method == "GET":
 		h.handleEvents(w, r)
 		return
-	}
-
-	// All other routes require auth
-	if !h.authenticate(r) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorised"})
-		return
-	}
-
-	switch {
 	case path == "/api/downloads" && r.Method == "GET":
 		h.handleListDownloads(w, r)
 	case path == "/api/download" && r.Method == "POST":
