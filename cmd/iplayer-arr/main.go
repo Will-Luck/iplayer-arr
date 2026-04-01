@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GiteaLN/iplayer-arr/internal/api"
 	"github.com/GiteaLN/iplayer-arr/internal/bbc"
 	"github.com/GiteaLN/iplayer-arr/internal/download"
 	"github.com/GiteaLN/iplayer-arr/internal/newznab"
@@ -57,16 +58,24 @@ func main() {
 	ibl := bbc.NewIBL(bbcClient)
 	ms := bbc.NewMediaSelector(bbcClient)
 	playlist := bbc.NewPlaylistResolver(bbcClient)
-	mgr := download.NewManager(st, downloadDir, 2, bbcClient, playlist, ms, nil)
+	hub := api.NewHub()
+	mgr := download.NewManager(st, downloadDir, 2, bbcClient, playlist, ms, hub)
 
 	// Start download workers
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	mgr.Start(workerCtx)
 
 	// http routing
+	runtimeStatus := &api.RuntimeStatus{
+		FFmpegVersion: ffVer,
+		GeoOK:         true,
+	}
+	apiHandler := api.NewHandler(st, hub, mgr, ibl, runtimeStatus)
+
 	mux := http.NewServeMux()
 	mux.Handle("/newznab/", newznab.NewHandler(ibl, st, ms))
 	mux.Handle("/sabnzbd/", sabnzbd.NewHandler(st, mgr))
+	mux.Handle("/api/", apiHandler)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
