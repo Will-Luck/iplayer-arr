@@ -56,7 +56,12 @@ func main() {
 	bbcClient := bbc.NewClient()
 	ibl := bbc.NewIBL(bbcClient)
 	ms := bbc.NewMediaSelector(bbcClient)
-	mgr := download.NewManager(st, downloadDir, 2)
+	playlist := bbc.NewPlaylistResolver(bbcClient)
+	mgr := download.NewManager(st, downloadDir, 2, bbcClient, playlist, ms, nil)
+
+	// Start download workers
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	mgr.Start(workerCtx)
 
 	// http routing
 	mux := http.NewServeMux()
@@ -84,6 +89,9 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+
+	workerCancel()
+	mgr.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
