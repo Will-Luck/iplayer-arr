@@ -1,0 +1,66 @@
+export interface Download {
+  id: string;
+  pid: string;
+  vpid: string;
+  title: string;
+  show_name: string;
+  season: number;
+  episode: number;
+  air_date: string;
+  identity_tier: string;
+  quality: string;
+  status: string;
+  category: string;
+  stream_url: string;
+  output_dir: string;
+  output_file: string;
+  progress: number;
+  size: number;
+  downloaded: number;
+  duration: number;
+  error: string;
+  failure_code: string;
+  retryable: boolean;
+  retry_count: number;
+  created_at: string;
+  started_at: string;
+  completed_at: string;
+}
+
+export interface StatusResponse {
+  ffmpeg: string;
+  geo_ok: boolean;
+  active_workers: number;
+  queue_depth: number;
+}
+
+export interface SearchResult {
+  PID: string;
+  Title: string;
+  Subtitle: string;
+  Synopsis: string;
+  Channel: string;
+  Series: number;
+  EpisodeNum: number;
+  Position: number;
+  AirDate: string;
+  Thumbnail: string;
+  BrandPID: string;
+}
+
+export interface ShowOverride {
+  show_name: string;
+  force_date_based: boolean;
+  force_series_num: number;
+  force_position: boolean;
+  series_offset: number;
+  episode_offset: number;
+  custom_name: string;
+}
+
+export interface ConfigResponse {
+  api_key: string;
+  quality: string;
+  max_workers: string;
+  download_dir: string;
+}
