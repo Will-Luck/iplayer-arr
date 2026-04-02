@@ -32,6 +32,7 @@ type IBLResult struct {
 	AirDate    string
 	Thumbnail  string
 	BrandPID   string
+	Duration   int // seconds
 }
 
 var (
@@ -151,6 +152,11 @@ func (ibl *IBL) ListEpisodes(pid string) ([]IBLResult, error) {
 				ReleaseDate    string `json:"release_date"`
 				ParentPosition int    `json:"parent_position"`
 				TleoID         string `json:"tleo_id"`
+				Versions       []struct {
+					Duration struct {
+						Value string `json:"value"`
+					} `json:"duration"`
+				} `json:"versions"`
 			} `json:"elements"`
 		} `json:"programme_episodes"`
 	}
@@ -164,6 +170,10 @@ func (ibl *IBL) ListEpisodes(pid string) ([]IBLResult, error) {
 		if e.Type != "episode" {
 			continue
 		}
+		duration := 0
+		if len(e.Versions) > 0 && e.Versions[0].Duration.Value != "" {
+			duration = parseISODuration(e.Versions[0].Duration.Value)
+		}
 		result := IBLResult{
 			PID:      e.ID,
 			Title:    e.Title,
@@ -173,6 +183,7 @@ func (ibl *IBL) ListEpisodes(pid string) ([]IBLResult, error) {
 			Position: e.ParentPosition,
 			AirDate:  e.ReleaseDate,
 			BrandPID: e.TleoID,
+			Duration: duration,
 		}
 		if e.Images.Standard != "" {
 			result.Thumbnail = strings.Replace(e.Images.Standard, "{recipe}", "960x540", 1)
@@ -182,6 +193,30 @@ func (ibl *IBL) ListEpisodes(pid string) ([]IBLResult, error) {
 	}
 
 	return results, nil
+}
+
+// parseISODuration parses an ISO 8601 duration like "PT10M0.040S" into seconds.
+func parseISODuration(iso string) int {
+	iso = strings.TrimPrefix(iso, "PT")
+	var total float64
+	// Parse hours
+	if i := strings.Index(iso, "H"); i >= 0 {
+		h, _ := strconv.ParseFloat(iso[:i], 64)
+		total += h * 3600
+		iso = iso[i+1:]
+	}
+	// Parse minutes
+	if i := strings.Index(iso, "M"); i >= 0 {
+		m, _ := strconv.ParseFloat(iso[:i], 64)
+		total += m * 60
+		iso = iso[i+1:]
+	}
+	// Parse seconds
+	if i := strings.Index(iso, "S"); i >= 0 {
+		s, _ := strconv.ParseFloat(iso[:i], 64)
+		total += s
+	}
+	return int(total)
 }
 
 func parseSubtitleNumbers(subtitle string) (series, episode int) {

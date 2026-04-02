@@ -177,23 +177,24 @@ func iblResultToProgramme(r bbc.IBLResult) *store.Programme {
 		AirDate:    r.AirDate,
 		Channel:    r.Channel,
 		Thumbnail:  r.Thumbnail,
+		Duration:   r.Duration,
 	}
 }
 
 func estimateSize(durationSec int, quality string) int64 {
 	if durationSec == 0 {
-		durationSec = 3600
+		durationSec = 1800 // default 30 min if unknown
 	}
+	// Realistic BBC iPlayer bitrates (video + audio combined)
 	kbps := map[string]int{
-		"2160p": 20000,
-		"1080p": 8500,
-		"720p":  5000,
-		"540p":  2500,
-		"396p":  1250,
+		"1080p": 5000,
+		"720p":  3200,
+		"540p":  1800,
+		"396p":  1000,
 	}
 	rate, ok := kbps[quality]
 	if !ok {
-		rate = 5000
+		rate = 3200
 	}
 	return int64(durationSec) * int64(rate) * 1000 / 8
 }
