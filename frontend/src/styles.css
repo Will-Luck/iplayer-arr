@@ -340,3 +340,50 @@ select.input {
 .mt-8 { margin-top: 8px; }
 .mb-8 { margin-bottom: 8px; }
 .mb-16 { margin-bottom: 16px; }
+
+/* Toast notifications */
+.toast-container {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  pointer-events: auto;
+  animation: toast-in 0.2s ease-out;
+  max-width: 360px;
+  word-break: break-word;
+}
+
+.toast-success {
+  background: #1a3030;
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+
+.toast-error {
+  background: #3a1a1a;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.toast-warning {
+  background: #3a2a10;
+  color: var(--warning);
+  border: 1px solid var(--warning);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
