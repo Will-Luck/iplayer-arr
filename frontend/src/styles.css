@@ -5,8 +5,8 @@
   --bg-input: #252838;
   --border: #2d3148;
   --text-primary: #e4e6f0;
-  --text-secondary: #8b8fa8;
-  --text-muted: #5c6080;
+  --text-secondary: #9599b3;
+  --text-muted: #7a7f9a;
   --accent: #4f8cff;
   --accent-hover: #3a70d4;
   --success: #44d088;
@@ -197,7 +197,7 @@ body {
   letter-spacing: 0.3px;
 }
 
-.badge-pending { background: #2a2d3d; color: var(--text-muted); }
+.badge-pending { background: #2a2d3d; color: #8e93ad; }
 .badge-resolving { background: #1e2a4a; color: #6ea8ff; }
 .badge-downloading { background: #1e2a4a; color: var(--accent); }
 .badge-converting { background: #2a2540; color: #b488ff; }
@@ -311,8 +311,10 @@ body {
   transition: border-color 0.15s;
 }
 
-.input:focus {
+.input:focus,
+.input:focus-visible {
   border-color: var(--accent);
+  outline: none;
 }
 
 .input::placeholder {
@@ -322,6 +324,28 @@ body {
 select.input {
   appearance: none;
   cursor: pointer;
+}
+
+/* Focus indicators */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--accent);
+}
+
+.nav-link:focus-visible {
+  outline: none;
+  background: var(--bg-card);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.table tr:focus-visible {
+  outline: none;
+  background: var(--bg-input);
 }
 
 /* Page heading */
