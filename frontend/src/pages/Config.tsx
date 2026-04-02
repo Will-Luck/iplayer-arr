@@ -45,21 +45,21 @@ export default function Config() {
       <div class="card">
         <div class="card-header">Settings</div>
         <div class="card-body config-grid">
-          <label class="text-secondary config-label">Default Quality</label>
-          <select class="input" style="width:auto" value={config()!.quality} onChange={e => updateConfig("quality", e.target.value)}>
+          <label class="text-secondary config-label" for="cfg-quality">Default Quality</label>
+          <select id="cfg-quality" class="input" style="width:auto" value={config()!.quality} onChange={e => updateConfig("quality", e.target.value)}>
             <For each={QUALITY_OPTIONS as unknown as string[]}>{q => <option value={q}>{q}</option>}</For>
           </select>
 
-          <label class="text-secondary config-label">Max Workers</label>
+          <label class="text-secondary config-label" for="cfg-workers">Max Workers</label>
           <div>
-            <select class="input" style="width:auto;opacity:0.5" value={config()!.max_workers} disabled aria-disabled="true">
+            <select id="cfg-workers" class="input" style="width:auto;opacity:0.5" value={config()!.max_workers} disabled aria-disabled="true">
               <option value={config()!.max_workers}>{config()!.max_workers}</option>
             </select>
             <p class="text-muted" style="font-size:11px;margin-top:4px">Set via MAX_WORKERS environment variable</p>
           </div>
 
-          <label class="text-secondary config-label">Download Dir</label>
-          <input class="input" type="text" value={config()!.download_dir} disabled aria-disabled="true" style="opacity:0.5" />
+          <label class="text-secondary config-label" for="cfg-dir">Download Dir</label>
+          <input id="cfg-dir" class="input" type="text" value={config()!.download_dir} disabled aria-disabled="true" style="opacity:0.5" />
         </div>
       </div>
 
