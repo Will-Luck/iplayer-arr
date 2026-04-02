@@ -166,18 +166,13 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 		if dl.Status == store.StatusFailed {
 			status = "Failed"
 		}
-		storage := dl.OutputDir
-		if dl.OutputFile != "" {
-			storage = dl.OutputFile
-		}
-
 		slots = append(slots, map[string]interface{}{
 			"nzo_id":        dl.ID,
 			"name":          dl.Title,
 			"nzb_name":      dl.Title + ".nzb",
 			"status":        status,
-			"storage":       storage,
-			"path":          storage,
+			"storage":       dl.OutputDir,
+			"path":          dl.OutputDir,
 			"bytes":         dl.Size,
 			"downloaded":    dl.Size,
 			"completed":     dl.CompletedAt.Unix(),
