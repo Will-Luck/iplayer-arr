@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import type { SearchResult } from "../types";
+import { QUALITY_OPTIONS } from "../types";
 import { api } from "../api";
 
 export default function Search() {
@@ -88,9 +89,7 @@ export default function Search() {
               </div>
               <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
                 <select class="input" style="width:auto" value={qualityFor(r.PID)} onChange={e => setQuality(r.PID, e.target.value)}>
-                  <option value="720p">720p</option>
-                  <option value="540p">540p</option>
-                  <option value="396p">396p</option>
+                  <For each={QUALITY_OPTIONS as unknown as string[]}>{q => <option value={q}>{q}</option>}</For>
                 </select>
                 <button class="btn btn-primary btn-sm" onClick={() => startDownload(r)}>Download</button>
               </div>
