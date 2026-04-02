@@ -45,12 +45,12 @@ export default function Config() {
           </select>
 
           <label class="text-secondary" style="font-size:13px">Max Workers</label>
-          <select class="input" style="width:auto" value={config()!.max_workers} onChange={e => updateConfig("max_workers", e.target.value)}>
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-          </select>
+          <div>
+            <select class="input" style="width:auto;opacity:0.5" value={config()!.max_workers} disabled>
+              <option value={config()!.max_workers}>{config()!.max_workers}</option>
+            </select>
+            <p class="text-muted" style="font-size:11px;margin-top:4px">Set via MAX_WORKERS environment variable</p>
+          </div>
 
           <label class="text-secondary" style="font-size:13px">Download Dir</label>
           <input class="input" type="text" value={config()!.download_dir} disabled style="opacity:0.5" />
