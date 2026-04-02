@@ -159,6 +159,16 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	history, _ := h.store.ListHistory()
+
+	// Also include completed downloads still in the downloads bucket (waiting
+	// for Sonarr to see them before moving to history)
+	downloads, _ := h.store.ListDownloads()
+	for _, dl := range downloads {
+		if dl.Status == store.StatusCompleted {
+			history = append(history, dl)
+		}
+	}
+
 	var slots []map[string]interface{}
 	for _, dl := range history {
 		status := "Completed"
