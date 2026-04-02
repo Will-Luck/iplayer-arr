@@ -61,8 +61,10 @@ func TestVersionNoAuth(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if w.Body.String() != "4.0.0" {
-		t.Errorf("version = %q", w.Body.String())
+	var vResp struct{ Version string }
+	json.Unmarshal(w.Body.Bytes(), &vResp)
+	if vResp.Version != "4.0.0" {
+		t.Errorf("version = %q", vResp.Version)
 	}
 }
 

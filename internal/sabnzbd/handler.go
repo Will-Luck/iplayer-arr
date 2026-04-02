@@ -32,7 +32,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch mode {
 	case "version":
-		w.Write([]byte("4.0.0"))
+		writeJSON(w, map[string]interface{}{"version": "4.0.0"})
 		return
 	case "get_cats":
 		writeJSON(w, map[string]interface{}{"categories": []string{"sonarr", "tv", "manual"}})
