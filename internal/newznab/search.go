@@ -1,8 +1,10 @@
 package newznab
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,10 +40,22 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	seasonStr := r.URL.Query().Get("season")
 	epStr := r.URL.Query().Get("ep")
 
-	if q == "" && tvdbid != "" && h.store != nil {
-		mapping, _ := h.store.GetSeriesMapping(tvdbid)
-		if mapping != nil {
-			q = mapping.ShowName
+	log.Printf("[tvsearch] q=%q tvdbid=%q season=%q ep=%q", q, tvdbid, seasonStr, epStr)
+
+	if q == "" && tvdbid != "" {
+		// Try stored mapping first
+		if h.store != nil {
+			mapping, _ := h.store.GetSeriesMapping(tvdbid)
+			if mapping != nil {
+				q = mapping.ShowName
+			}
+		}
+		// Fall back to Skyhook (Sonarr's TVDB lookup service)
+		if q == "" {
+			q = lookupTVDBTitle(tvdbid)
+			if q != "" && h.store != nil {
+				h.store.PutSeriesMapping(&store.SeriesMapping{TVDBId: tvdbid, ShowName: q})
+			}
 		}
 	}
 
@@ -186,4 +200,24 @@ func baseURL(r *http.Request) string {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s", scheme, r.Host)
+}
+
+func lookupTVDBTitle(tvdbid string) string {
+	resp, err := http.Get("https://skyhook.sonarr.tv/v1/tvdb/shows/en/" + tvdbid)
+	if err != nil || resp.StatusCode != 200 {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var show struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&show); err != nil {
+		return ""
+	}
+	log.Printf("[tvsearch] resolved TVDB %s -> %q", tvdbid, show.Title)
+	return show.Title
 }
