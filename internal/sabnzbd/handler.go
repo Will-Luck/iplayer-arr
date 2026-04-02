@@ -125,8 +125,10 @@ func (h *Handler) handleQueue(w http.ResponseWriter, r *http.Request) {
 			"percentage": fmt.Sprintf("%.0f", dl.Progress),
 			"mb":         fmt.Sprintf("%.2f", mbTotal),
 			"mbleft":     fmt.Sprintf("%.2f", mbLeft),
-			"timeleft":   "unknown",
+			"timeleft":   "0:00:00",
 			"cat":        dl.Category,
+			"size":       fmt.Sprintf("%.2f MB", mbTotal),
+			"sizeleft":   fmt.Sprintf("%.2f MB", mbLeft),
 		})
 	}
 
@@ -136,7 +138,12 @@ func (h *Handler) handleQueue(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, map[string]interface{}{
 		"queue": map[string]interface{}{
-			"slots": slots,
+			"status":    "Downloading",
+			"paused":    false,
+			"noofslots": len(slots),
+			"speed":     "0",
+			"timeleft":  "0:00:00",
+			"slots":     slots,
 		},
 	})
 }
