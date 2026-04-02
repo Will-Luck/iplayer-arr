@@ -97,7 +97,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			override, _ = h.store.GetOverride(prog.Name)
 		}
 
-		qualities := []string{"1080p", "720p"}
+		qualities := []string{"2160p", "1080p", "720p", "540p", "396p"}
 		if len(prog.Qualities) > 0 {
 			qualities = nil
 			for _, q := range prog.Qualities {
@@ -109,9 +109,12 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			title, tier := GenerateTitle(prog, qual, override)
 			guid := EncodeGUID(res.PID, qual, "original")
 
-			cat := "5040"
-			if qual == "540p" || qual == "396p" {
-				cat = "5030"
+			cat := "5040" // HD
+			switch qual {
+			case "2160p":
+				cat = "5045" // UHD
+			case "540p", "396p":
+				cat = "5030" // SD
 			}
 
 			size := estimateSize(prog.Duration, qual)
@@ -182,6 +185,7 @@ func estimateSize(durationSec int, quality string) int64 {
 		durationSec = 3600
 	}
 	kbps := map[string]int{
+		"2160p": 20000,
 		"1080p": 8500,
 		"720p":  5000,
 		"540p":  2500,

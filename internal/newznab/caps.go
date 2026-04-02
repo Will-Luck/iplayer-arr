@@ -15,6 +15,7 @@ func capsXML() string {
   </searching>
   <categories>
     <category id="5000" name="TV">
+      <subcat id="5045" name="TV/UHD" />
       <subcat id="5040" name="TV/HD" />
       <subcat id="5030" name="TV/SD" />
     </category>
