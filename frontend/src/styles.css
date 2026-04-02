@@ -355,6 +355,98 @@ select.input {
   margin-bottom: 20px;
 }
 
+/* Search result layout */
+.search-result {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.search-thumb {
+  width: 120px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.search-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.search-subtitle {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.search-badges {
+  margin-top: 6px;
+}
+
+.search-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.badge-channel {
+  background: var(--accent);
+  color: #fff;
+  margin-left: 6px;
+}
+
+/* Config grid */
+.config-grid {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.config-label {
+  font-size: 13px;
+}
+
+.config-instructions {
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+/* API key display */
+.api-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.api-key-code {
+  background: var(--bg-input);
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  flex: 1;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Override table */
+.override-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.override-actions {
+  display: flex;
+  gap: 4px;
+}
+
 /* Utility */
 .text-muted { color: var(--text-muted); }
 .text-secondary { color: var(--text-secondary); }
@@ -362,6 +454,7 @@ select.input {
 .text-danger { color: var(--danger); }
 .text-warning { color: var(--warning); }
 .mt-8 { margin-top: 8px; }
+.mt-12 { margin-top: 12px; }
 .mb-8 { margin-bottom: 8px; }
 .mb-16 { margin-bottom: 16px; }
 

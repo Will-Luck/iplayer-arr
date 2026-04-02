@@ -74,7 +74,7 @@ export default function Overrides() {
       <td><input class="input" type="number" value={draft().episode_offset} onInput={e => updateDraft("episode_offset", +e.target.value)} style="width:64px" /></td>
       <td><input class="input" value={draft().custom_name} onInput={e => updateDraft("custom_name", e.target.value)} style="min-width:120px" /></td>
       <td>
-        <div style="display:flex;gap:4px">
+        <div class="override-actions">
           <button class="btn btn-primary btn-sm" onClick={save}>Save</button>
           <button class="btn btn-sm" style="background:var(--bg-input);color:var(--text-secondary)" onClick={() => { setEditing(null); setAdding(false); }}>Cancel</button>
         </div>
@@ -84,7 +84,7 @@ export default function Overrides() {
 
   return (
     <div class="card">
-      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+      <div class="card-header override-header">
         <span>Show Overrides</span>
         <button class="btn btn-primary btn-sm" onClick={startAdd} disabled={adding()}>Add Override</button>
       </div>
@@ -116,7 +116,7 @@ export default function Overrides() {
                   <td>{o.episode_offset || "-"}</td>
                   <td>{o.custom_name || "-"}</td>
                   <td>
-                    <div style="display:flex;gap:4px">
+                    <div class="override-actions">
                       <button class="btn btn-sm" style="background:var(--accent);color:#fff" onClick={() => startEdit(o)}>Edit</button>
                       <button class="btn btn-danger btn-sm" onClick={() => remove(o.show_name)}>Delete</button>
                     </div>

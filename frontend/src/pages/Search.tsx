@@ -75,25 +75,25 @@ export default function Search() {
       </div>
 
       <Show when={loading()}>
-        <p class="text-muted" style="padding:8px 0">Searching...</p>
+        <p class="text-muted mt-8 mb-8">Searching...</p>
       </Show>
 
       <For each={results()}>{r => (
         <div class="card">
-          <div class="card-body" style="display:flex;gap:16px;align-items:flex-start">
+          <div class="card-body search-result">
             <Show when={r.Thumbnail}>
-              <img src={r.Thumbnail} alt="" style="width:120px;border-radius:4px;flex-shrink:0" />
+              <img src={r.Thumbnail} alt="" class="search-thumb" />
             </Show>
-            <div style="flex:1;min-width:0">
-              <div style="font-weight:600;font-size:14px">{r.Title}</div>
-              <div class="text-secondary" style="font-size:13px;margin-top:2px">{r.Subtitle}</div>
-              <div style="margin-top:6px">
+            <div class="search-body">
+              <div class="search-title">{r.Title}</div>
+              <div class="text-secondary search-subtitle">{r.Subtitle}</div>
+              <div class="search-badges">
                 <span class={`badge ${tierClass(r)}`}>{tierLabel(r)}</span>
                 <Show when={r.Channel}>
-                  <span class="badge" style="background:var(--accent);color:#fff;margin-left:6px">{r.Channel}</span>
+                  <span class="badge badge-channel">{r.Channel}</span>
                 </Show>
               </div>
-              <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+              <div class="search-actions">
                 <select class="input" style="width:auto" value={qualityFor(r.PID)} onChange={e => setQuality(r.PID, e.target.value)}>
                   <For each={QUALITY_OPTIONS as unknown as string[]}>{q => <option value={q}>{q}</option>}</For>
                 </select>
