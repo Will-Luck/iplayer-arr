@@ -64,3 +64,5 @@ export interface ConfigResponse {
   max_workers: string;
   download_dir: string;
 }
+
+export const QUALITY_OPTIONS = ["1080p", "720p", "540p", "396p"] as const;

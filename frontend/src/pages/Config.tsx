@@ -1,5 +1,6 @@
-import { createSignal, onMount, Show } from "solid-js";
+import { createSignal, onMount, Show, For } from "solid-js";
 import type { ConfigResponse } from "../types";
+import { QUALITY_OPTIONS } from "../types";
 import { api } from "../api";
 
 export default function Config() {
@@ -40,10 +41,7 @@ export default function Config() {
         <div class="card-body" style="display:grid;grid-template-columns:150px 1fr;gap:12px;align-items:center">
           <label class="text-secondary" style="font-size:13px">Default Quality</label>
           <select class="input" style="width:auto" value={config()!.quality} onChange={e => updateConfig("quality", e.target.value)}>
-            <option value="1080p">1080p</option>
-            <option value="720p">720p</option>
-            <option value="540p">540p</option>
-            <option value="396p">396p</option>
+            <For each={QUALITY_OPTIONS as unknown as string[]}>{q => <option value={q}>{q}</option>}</For>
           </select>
 
           <label class="text-secondary" style="font-size:13px">Max Workers</label>
