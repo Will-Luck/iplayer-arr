@@ -1,6 +1,7 @@
 import { createSignal, onMount, For, Show } from "solid-js";
 import type { ShowOverride } from "../types";
 import { api } from "../api";
+import { addToast } from "../toast";
 
 const emptyOverride = (): ShowOverride => ({
   show_name: "", force_date_based: false, force_series_num: 0,
@@ -23,16 +24,26 @@ export default function Overrides() {
       return;
     }
     setNameError("");
-    await api.putOverride(o);
-    setOverrides(await api.listOverrides());
-    setEditing(null);
-    setAdding(false);
+    try {
+      await api.putOverride(o);
+      setOverrides(await api.listOverrides());
+      setEditing(null);
+      setAdding(false);
+      addToast("success", "Override saved");
+    } catch (e) {
+      addToast("error", `Failed to save override: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
   }
 
   async function remove(show: string) {
     if (!confirm(`Delete override for "${show}"?`)) return;
-    await api.deleteOverride(show);
-    setOverrides(await api.listOverrides());
+    try {
+      await api.deleteOverride(show);
+      setOverrides(await api.listOverrides());
+      addToast("success", "Override deleted");
+    } catch (e) {
+      addToast("error", `Failed to delete override: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
   }
 
   function startEdit(o: ShowOverride) {
