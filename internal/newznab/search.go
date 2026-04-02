@@ -97,7 +97,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			override, _ = h.store.GetOverride(prog.Name)
 		}
 
-		qualities := []string{"2160p", "1080p", "720p", "540p", "396p"}
+		qualities := []string{"1080p", "720p", "540p"}
 		if len(prog.Qualities) > 0 {
 			qualities = nil
 			for _, q := range prog.Qualities {
