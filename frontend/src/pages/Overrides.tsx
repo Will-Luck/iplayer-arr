@@ -63,16 +63,16 @@ export default function Overrides() {
   const editRow = () => (
     <tr>
       <td>
-        <input class="input" value={draft().show_name} onInput={e => { updateDraft("show_name", e.target.value); setNameError(""); }} disabled={!!editing()} style="min-width:140px" />
+        <input class="input" value={draft().show_name} onInput={e => { updateDraft("show_name", e.target.value); setNameError(""); }} disabled={!!editing()} style="min-width:140px" aria-label="Show name" />
         <Show when={nameError()}>
           <p class="text-danger" style="font-size:11px;margin-top:2px">{nameError()}</p>
         </Show>
       </td>
-      <td style="text-align:center"><input type="checkbox" checked={draft().force_date_based} onChange={e => updateDraft("force_date_based", e.target.checked)} /></td>
-      <td><input class="input" type="number" value={draft().force_series_num} onInput={e => updateDraft("force_series_num", +e.target.value)} style="width:64px" /></td>
-      <td><input class="input" type="number" value={draft().series_offset} onInput={e => updateDraft("series_offset", +e.target.value)} style="width:64px" /></td>
-      <td><input class="input" type="number" value={draft().episode_offset} onInput={e => updateDraft("episode_offset", +e.target.value)} style="width:64px" /></td>
-      <td><input class="input" value={draft().custom_name} onInput={e => updateDraft("custom_name", e.target.value)} style="min-width:120px" /></td>
+      <td style="text-align:center"><input type="checkbox" checked={draft().force_date_based} onChange={e => updateDraft("force_date_based", e.target.checked)} aria-label="Force date-based" /></td>
+      <td><input class="input" type="number" value={draft().force_series_num} onInput={e => updateDraft("force_series_num", +e.target.value)} style="width:64px" aria-label="Force series number" /></td>
+      <td><input class="input" type="number" value={draft().series_offset} onInput={e => updateDraft("series_offset", +e.target.value)} style="width:64px" aria-label="Series offset" /></td>
+      <td><input class="input" type="number" value={draft().episode_offset} onInput={e => updateDraft("episode_offset", +e.target.value)} style="width:64px" aria-label="Episode offset" /></td>
+      <td><input class="input" value={draft().custom_name} onInput={e => updateDraft("custom_name", e.target.value)} style="min-width:120px" aria-label="Custom name" /></td>
       <td>
         <div class="override-actions">
           <button class="btn btn-primary btn-sm" onClick={save}>Save</button>
@@ -93,15 +93,16 @@ export default function Overrides() {
           Override how specific shows are numbered. Force date-based for daily shows, adjust series/episode offsets for mismatched numbering.
         </p>
         <table class="table">
+          <caption class="sr-only">Show name overrides</caption>
           <thead>
             <tr>
-              <th>Show Name</th>
-              <th>Date-Based</th>
-              <th>Force Series</th>
-              <th>Series Offset</th>
-              <th>Ep Offset</th>
-              <th>Custom Name</th>
-              <th>Actions</th>
+              <th scope="col">Show Name</th>
+              <th scope="col">Date-Based</th>
+              <th scope="col">Force Series</th>
+              <th scope="col">Series Offset</th>
+              <th scope="col">Ep Offset</th>
+              <th scope="col">Custom Name</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -117,8 +118,8 @@ export default function Overrides() {
                   <td>{o.custom_name || "-"}</td>
                   <td>
                     <div class="override-actions">
-                      <button class="btn btn-sm" style="background:var(--accent);color:#fff" onClick={() => startEdit(o)}>Edit</button>
-                      <button class="btn btn-danger btn-sm" onClick={() => remove(o.show_name)}>Delete</button>
+                      <button class="btn btn-sm" style="background:var(--accent);color:#fff" onClick={() => startEdit(o)} aria-label={`Edit ${o.show_name}`}>Edit</button>
+                      <button class="btn btn-danger btn-sm" onClick={() => remove(o.show_name)} aria-label={`Delete ${o.show_name}`}>Delete</button>
                     </div>
                   </td>
                 </tr>

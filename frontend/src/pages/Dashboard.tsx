@@ -130,7 +130,7 @@ export default function Dashboard() {
         {(st) => (
           <div class="status-bar">
             <div class="status-item">
-              <span class="status-dot" classList={{ ok: st().geo_ok, err: !st().geo_ok }} />
+              <span class="status-dot" classList={{ ok: st().geo_ok, err: !st().geo_ok }} aria-label={st().geo_ok ? "Geo check passed" : "Geo check failed"} />
               {st().geo_ok ? "UK geo OK" : "Geo blocked"}
             </div>
             <div class="status-item">
@@ -161,7 +161,7 @@ export default function Dashboard() {
                     <span class="dl-title">{dl.title || dl.pid}</span>
                     <span class={statusBadgeClass(dl.status)}>{dl.status}</span>
                   </div>
-                  <div class="progress-bar">
+                  <div class="progress-bar" role="progressbar" aria-valuenow={Math.round(dl.progress)} aria-valuemin={0} aria-valuemax={100} aria-label={`Download progress for ${dl.title || dl.pid}`}>
                     <div
                       class="progress-fill"
                       classList={{ failed: dl.status === "failed" }}
@@ -218,10 +218,10 @@ export default function Dashboard() {
           <table class="table">
             <thead>
               <tr>
-                <th>Title</th>
-                <th>Quality</th>
-                <th>Status</th>
-                <th>Completed</th>
+                <th scope="col">Title</th>
+                <th scope="col">Quality</th>
+                <th scope="col">Status</th>
+                <th scope="col">Completed</th>
               </tr>
             </thead>
             <tbody>

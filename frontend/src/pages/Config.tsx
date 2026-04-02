@@ -34,7 +34,7 @@ export default function Config() {
         <div class="card-header">API Key</div>
         <div class="card-body">
           <div class="api-key-row">
-            <code class="api-key-code">
+            <code class="api-key-code" aria-label="API key">
               {config()!.api_key}
             </code>
             <button class="btn btn-primary btn-sm" onClick={copyKey}>{copied() ? "Copied!" : "Copy"}</button>
@@ -52,14 +52,14 @@ export default function Config() {
 
           <label class="text-secondary config-label">Max Workers</label>
           <div>
-            <select class="input" style="width:auto;opacity:0.5" value={config()!.max_workers} disabled>
+            <select class="input" style="width:auto;opacity:0.5" value={config()!.max_workers} disabled aria-disabled="true">
               <option value={config()!.max_workers}>{config()!.max_workers}</option>
             </select>
             <p class="text-muted" style="font-size:11px;margin-top:4px">Set via MAX_WORKERS environment variable</p>
           </div>
 
           <label class="text-secondary config-label">Download Dir</label>
-          <input class="input" type="text" value={config()!.download_dir} disabled style="opacity:0.5" />
+          <input class="input" type="text" value={config()!.download_dir} disabled aria-disabled="true" style="opacity:0.5" />
         </div>
       </div>
 

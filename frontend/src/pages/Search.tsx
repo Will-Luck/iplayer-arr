@@ -70,6 +70,7 @@ export default function Search() {
             placeholder="Search for a programme..."
             value={query()}
             onInput={onInput}
+            aria-label="Search BBC iPlayer"
           />
         </div>
       </div>
@@ -94,10 +95,10 @@ export default function Search() {
                 </Show>
               </div>
               <div class="search-actions">
-                <select class="input" style="width:auto" value={qualityFor(r.PID)} onChange={e => setQuality(r.PID, e.target.value)}>
+                <select class="input" style="width:auto" value={qualityFor(r.PID)} onChange={e => setQuality(r.PID, e.target.value)} aria-label={`Download quality for ${r.Title}`}>
                   <For each={QUALITY_OPTIONS as unknown as string[]}>{q => <option value={q}>{q}</option>}</For>
                 </select>
-                <button class="btn btn-primary btn-sm" onClick={() => startDownload(r)}>Download</button>
+                <button class="btn btn-primary btn-sm" onClick={() => startDownload(r)} aria-label={`Download ${r.Title}`}>Download</button>
               </div>
             </div>
           </div>
