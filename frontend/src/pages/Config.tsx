@@ -2,6 +2,7 @@ import { createSignal, onMount, Show, For } from "solid-js";
 import type { ConfigResponse } from "../types";
 import { QUALITY_OPTIONS } from "../types";
 import { api } from "../api";
+import { addToast } from "../toast";
 
 export default function Config() {
   const [config, setConfig] = createSignal<ConfigResponse | null>(null);
@@ -18,8 +19,13 @@ export default function Config() {
   }
 
   async function updateConfig(key: string, value: string) {
-    await api.putConfig(key, value);
-    setConfig(await api.getConfig());
+    try {
+      await api.putConfig(key, value);
+      setConfig(await api.getConfig());
+      addToast("success", "Setting saved");
+    } catch (e) {
+      addToast("error", `Failed to save: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
   }
 
   return (

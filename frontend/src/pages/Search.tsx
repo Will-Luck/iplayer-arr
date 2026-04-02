@@ -2,6 +2,7 @@ import { createSignal, For, Show } from "solid-js";
 import type { SearchResult } from "../types";
 import { QUALITY_OPTIONS } from "../types";
 import { api } from "../api";
+import { addToast } from "../toast";
 
 export default function Search() {
   const [query, setQuery] = createSignal("");
@@ -21,14 +22,19 @@ export default function Search() {
       try {
         const res = await api.search(val);
         setResults(res || []);
-      } catch { setResults([]); }
+      } catch (e) { setResults([]); addToast("error", `Search failed: ${e instanceof Error ? e.message : "unknown error"}`); }
       setLoading(false);
     }, 300);
   }
 
   async function startDownload(r: SearchResult) {
     const quality = selectedQuality()[r.PID] || "720p";
-    await api.manualDownload(r.PID, quality, r.Title, "sonarr");
+    try {
+      await api.manualDownload(r.PID, quality, r.Title, "sonarr");
+      addToast("success", `Download queued: ${r.Title}`);
+    } catch (e) {
+      addToast("error", `Download failed: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
   }
 
   function qualityFor(pid: string) {
