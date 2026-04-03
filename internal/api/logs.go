@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
 // LogEntry is a single structured log line.
@@ -95,7 +94,3 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, filtered)
 }
 
-// nowTimestamp returns the current time formatted as RFC3339.
-func nowTimestamp() string {
-	return time.Now().UTC().Format(time.RFC3339)
-}

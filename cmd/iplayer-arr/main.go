@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -182,42 +183,47 @@ func (rw *ringBufWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// detectLevel returns a log level string based on case-insensitive keyword
-// matching in the message.
+// detectLevel returns a log level string inferred from the message format.
+//
+// For slog text output it looks for the "level=LEVEL" key-value pair which
+// is unambiguous. For legacy log output it limits the keyword scan to the
+// first 80 characters so that level words embedded in the message body (e.g.
+// "no error occurred") do not trigger a false positive.
 func detectLevel(msg string) string {
-	for i := 0; i < len(msg); i++ {
-		switch {
-		case i+7 <= len(msg) && equalCI(msg[i:i+7], "WARNING"):
-			return "warn"
-		case i+5 <= len(msg) && equalCI(msg[i:i+5], "ERROR"):
+	// slog text format: "... level=WARN ..."
+	if i := strings.Index(msg, "level="); i >= 0 {
+		rest := msg[i+6:]
+		if strings.HasPrefix(rest, "ERROR") {
 			return "error"
-		case i+5 <= len(msg) && equalCI(msg[i:i+5], "FATAL"):
-			return "error"
-		case i+5 <= len(msg) && equalCI(msg[i:i+5], "DEBUG"):
-			return "debug"
-		case i+4 <= len(msg) && equalCI(msg[i:i+4], "WARN"):
+		}
+		if strings.HasPrefix(rest, "WARN") {
 			return "warn"
 		}
+		if strings.HasPrefix(rest, "DEBUG") {
+			return "debug"
+		}
+		return "info"
+	}
+	// Legacy log format: only check for keywords near the start of the line.
+	upper := strings.ToUpper(msg[:min(len(msg), 80)])
+	if strings.Contains(upper, "ERROR") || strings.Contains(upper, "FATAL") {
+		return "error"
+	}
+	if strings.Contains(upper, "WARN") {
+		return "warn"
+	}
+	if strings.Contains(upper, "DEBUG") {
+		return "debug"
 	}
 	return "info"
 }
 
-// equalCI reports whether a and b are equal under ASCII case-folding.
-// Both slices must have the same length.
-func equalCI(a, b string) bool {
-	for i := 0; i < len(a); i++ {
-		ca, cb := a[i], b[i]
-		if ca >= 'a' && ca <= 'z' {
-			ca -= 32
-		}
-		if cb >= 'a' && cb <= 'z' {
-			cb -= 32
-		}
-		if ca != cb {
-			return false
-		}
+// min returns the smaller of a and b.
+func min(a, b int) int {
+	if a < b {
+		return a
 	}
-	return true
+	return b
 }
 
 func envOr(key, fallback string) string {
