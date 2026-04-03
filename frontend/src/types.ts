@@ -81,3 +81,38 @@ export interface DirectoryEntry {
 }
 
 export const QUALITY_OPTIONS = ["1080p", "720p", "540p", "396p"] as const;
+
+export interface HistoryPage {
+  items: Download[];
+  total: number;
+}
+
+export interface HistoryStats {
+  completed: number;
+  failed: number;
+  total_bytes: number;
+}
+
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  message: string;
+}
+
+export interface SystemInfo {
+  version: string;
+  go_version: string;
+  uptime_seconds: number;
+  build_date: string;
+  geo_ok: boolean;
+  geo_checked_at?: string;
+  ffmpeg_version: string;
+  ffmpeg_path: string;
+  disk_total: number;
+  disk_free: number;
+  disk_path: string;
+  downloads_completed: number;
+  downloads_failed: number;
+  downloads_total_bytes: number;
+  last_indexer_request?: string;
+}

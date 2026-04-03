@@ -1,5 +1,5 @@
-import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
-import type { Download, StatusResponse } from "../types";
+import { createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
+import type { Download, StatusResponse, HistoryStats } from "../types";
 import { api } from "../api";
 import { connectSSE } from "../sse";
 
@@ -22,24 +22,56 @@ function statusBadgeClass(status: string): string {
   return `badge badge-${status}`;
 }
 
+const todayISO = () => new Date().toISOString().split("T")[0];
+const weekAgoISO = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 7);
+  return d.toISOString().split("T")[0];
+};
+const monthAgoISO = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
+  return d.toISOString().split("T")[0];
+};
+
 export default function Dashboard() {
   const [status, setStatus] = createSignal<StatusResponse | null>(null);
   const [active, setActive] = createSignal<Download[]>([]);
   const [queue, setQueue] = createSignal<Download[]>([]);
-  const [history, setHistory] = createSignal<Download[]>([]);
+  const [historyItems, setHistoryItems] = createSignal<Download[]>([]);
+  const [totalCount, setTotalCount] = createSignal(0);
   const [paused, setPaused] = createSignal(false);
+  const [stats, setStats] = createSignal<HistoryStats | null>(null);
+
+  // History filter/sort/pagination state
+  const [statusFilter, setStatusFilter] = createSignal("");
+  const [sinceFilter, setSinceFilter] = createSignal("");
+  const [sortField, setSortField] = createSignal("completed_at");
+  const [sortOrder, setSortOrder] = createSignal("desc");
+  const [currentPage, setCurrentPage] = createSignal(1);
+  const perPage = 20;
+
+  const totalPages = () => Math.max(1, Math.ceil(totalCount() / perPage));
+
+  function toggleSort(field: string) {
+    if (sortField() === field) {
+      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortOrder("desc");
+    }
+    setCurrentPage(1);
+  }
 
   async function loadData() {
     try {
-      const [st, downloads, hist] = await Promise.all([
+      const [st, downloads] = await Promise.all([
         api.getStatus(),
         api.listDownloads(),
-        api.listHistory(),
       ]);
       setStatus(st);
       setPaused(st.paused);
       splitDownloads(downloads);
-      setHistory(hist.slice(0, 20));
     } catch {
       // API may not be available yet
     }
@@ -74,7 +106,6 @@ export default function Dashboard() {
   }
 
   function updateDownload(data: Download) {
-    // Update in active list
     setActive((prev) => {
       const idx = prev.findIndex((d) => d.id === data.id);
       if (idx >= 0) {
@@ -88,6 +119,63 @@ export default function Dashboard() {
     // Remove from queue if present
     setQueue((prev) => prev.filter((d) => d.id !== data.id));
   }
+
+  function refreshHistory() {
+    const params: Record<string, string> = {
+      page: String(currentPage()),
+      per_page: String(perPage),
+      sort: sortField(),
+      order: sortOrder(),
+    };
+    if (statusFilter()) params.status = statusFilter();
+    if (sinceFilter()) params.since = sinceFilter();
+
+    api
+      .listHistory(params)
+      .then((page) => {
+        setHistoryItems(page.items);
+        setTotalCount(page.total);
+      })
+      .catch(() => {});
+
+    api
+      .getHistoryStats(sinceFilter() || undefined)
+      .then(setStats)
+      .catch(() => {});
+  }
+
+  async function deleteHistoryItem(id: string) {
+    try {
+      await api.deleteHistory(id);
+      refreshHistory();
+    } catch {
+      // silently fail
+    }
+  }
+
+  async function clearAllHistory() {
+    if (!confirm("Delete all history entries? This cannot be undone.")) return;
+    const items = historyItems();
+    for (const dl of items) {
+      try {
+        await api.deleteHistory(dl.id);
+      } catch {
+        // continue
+      }
+    }
+    refreshHistory();
+  }
+
+  // Re-fetch history whenever filters, sort or page change
+  createEffect(() => {
+    // Access all reactive dependencies so the effect re-runs on change
+    void currentPage();
+    void statusFilter();
+    void sinceFilter();
+    void sortField();
+    void sortOrder();
+    refreshHistory();
+  });
 
   onMount(() => {
     loadData();
@@ -112,7 +200,7 @@ export default function Dashboard() {
         const dl = data as Download;
         setActive((prev) => prev.filter((d) => d.id !== dl.id));
         // Refresh history to pick up the completed item
-        api.listHistory().then((h) => setHistory(h.slice(0, 20))).catch(() => {});
+        refreshHistory();
       },
       "pause:changed": (data) => {
         const d = data as { paused: boolean };
@@ -133,7 +221,7 @@ export default function Dashboard() {
         // Refresh after a moment so it appears in history
         setTimeout(() => {
           setActive((prev) => prev.filter((d) => d.id !== dl.id));
-          api.listHistory().then((h) => setHistory(h.slice(0, 20))).catch(() => {});
+          refreshHistory();
         }, 3000);
       },
     });
@@ -150,7 +238,11 @@ export default function Dashboard() {
         {(st) => (
           <div class="status-bar">
             <div class="status-item">
-              <span class="status-dot" classList={{ ok: st().geo_ok, err: !st().geo_ok }} aria-label={st().geo_ok ? "Geo check passed" : "Geo check failed"} />
+              <span
+                class="status-dot"
+                classList={{ ok: st().geo_ok, err: !st().geo_ok }}
+                aria-label={st().geo_ok ? "Geo check passed" : "Geo check failed"}
+              />
               {st().geo_ok ? "UK geo OK" : "Geo blocked"}
             </div>
             <div class="status-item">
@@ -188,7 +280,14 @@ export default function Dashboard() {
                     <span class="dl-title">{dl.title || dl.pid}</span>
                     <span class={statusBadgeClass(dl.status)}>{dl.status}</span>
                   </div>
-                  <div class="progress-bar" role="progressbar" aria-valuenow={Math.round(dl.progress)} aria-valuemin={0} aria-valuemax={100} aria-label={`Download progress for ${dl.title || dl.pid}`}>
+                  <div
+                    class="progress-bar"
+                    role="progressbar"
+                    aria-valuenow={Math.round(dl.progress)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`Download progress for ${dl.title || dl.pid}`}
+                  >
                     <div
                       class="progress-fill"
                       classList={{ failed: dl.status === "failed" }}
@@ -198,7 +297,9 @@ export default function Dashboard() {
                   <div class="dl-meta">
                     <span>{dl.progress.toFixed(1)}%</span>
                     <Show when={dl.size > 0}>
-                      <span>{formatBytes(dl.downloaded)} / {formatBytes(dl.size)}</span>
+                      <span>
+                        {formatBytes(dl.downloaded)} / {formatBytes(dl.size)}
+                      </span>
                     </Show>
                     <Show when={dl.duration > 0}>
                       <span>{formatDuration(dl.duration)}</span>
@@ -238,37 +339,145 @@ export default function Dashboard() {
         </div>
       </Show>
 
-      {/* Recent history */}
+      {/* History */}
       <div class="card">
-        <div class="card-header">Recent History</div>
-        <Show when={history().length > 0} fallback={<div class="card-empty">No history yet</div>}>
-          <table class="table">
-            <thead>
-              <tr>
-                <th scope="col">Title</th>
-                <th scope="col">Quality</th>
-                <th scope="col">Status</th>
-                <th scope="col">Completed</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={history()}>
-                {(dl) => (
-                  <tr>
-                    <td>{dl.title || dl.pid}</td>
-                    <td class="text-muted">{dl.quality}</td>
-                    <td>
-                      <span class={statusBadgeClass(dl.status)}>{dl.status}</span>
-                    </td>
-                    <td class="text-secondary">
-                      {dl.completed_at ? new Date(dl.completed_at).toLocaleString() : ""}
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </Show>
+        <div class="card-header" style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+          <span>History</span>
+          <button class="btn btn-danger btn-sm ml-auto" onClick={clearAllHistory}>
+            Clear All
+          </button>
+        </div>
+        <div class="card-body">
+          {/* Stats row */}
+          <Show when={stats()}>
+            {(s) => (
+              <div class="history-stats">
+                {s().completed} completed / {s().failed} failed / {formatBytes(s().total_bytes)} total
+              </div>
+            )}
+          </Show>
+
+          {/* Filter controls */}
+          <div class="history-controls">
+            <select
+              class="input config-select"
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+            >
+              <option value="">All Statuses</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+            </select>
+            <select
+              class="input config-select"
+              onChange={(e) => {
+                setSinceFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+            >
+              <option value="">All Time</option>
+              <option value={todayISO()}>Today</option>
+              <option value={weekAgoISO()}>7 Days</option>
+              <option value={monthAgoISO()}>30 Days</option>
+            </select>
+          </div>
+
+          {/* Table */}
+          <Show
+            when={historyItems().length > 0}
+            fallback={<div class="card-empty">No history yet</div>}
+          >
+            <table class="table">
+              <thead>
+                <tr>
+                  <th
+                    scope="col"
+                    data-sortable
+                    onClick={() => toggleSort("title")}
+                  >
+                    Title{" "}
+                    {sortField() === "title"
+                      ? sortOrder() === "asc"
+                        ? "▲"
+                        : "▼"
+                      : ""}
+                  </th>
+                  <th scope="col">Quality</th>
+                  <th scope="col">Status</th>
+                  <th
+                    scope="col"
+                    data-sortable
+                    onClick={() => toggleSort("completed_at")}
+                  >
+                    Completed{" "}
+                    {sortField() === "completed_at"
+                      ? sortOrder() === "asc"
+                        ? "▲"
+                        : "▼"
+                      : ""}
+                  </th>
+                  <th scope="col">Size</th>
+                  <th scope="col"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={historyItems()}>
+                  {(dl) => (
+                    <tr>
+                      <td>{dl.title || dl.pid}</td>
+                      <td class="text-muted">{dl.quality}</td>
+                      <td>
+                        <span class={statusBadgeClass(dl.status)}>{dl.status}</span>
+                      </td>
+                      <td class="text-secondary">
+                        {dl.completed_at ? new Date(dl.completed_at).toLocaleString() : ""}
+                      </td>
+                      <td class="text-muted">
+                        <Show when={dl.size > 0}>{formatBytes(dl.size)}</Show>
+                      </td>
+                      <td>
+                        <button
+                          class="btn btn-danger btn-sm"
+                          onClick={() => deleteHistoryItem(dl.id)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </Show>
+
+          {/* Pagination */}
+          <Show when={totalCount() > perPage}>
+            <div class="history-pagination">
+              <span class="text-secondary">
+                Showing {historyItems().length} of {totalCount()}
+              </span>
+              <button
+                class="btn btn-sm"
+                disabled={currentPage() <= 1}
+                onClick={() => setCurrentPage((p) => p - 1)}
+              >
+                Prev
+              </button>
+              <span>
+                Page {currentPage()} of {totalPages()}
+              </span>
+              <button
+                class="btn btn-sm"
+                disabled={currentPage() >= totalPages()}
+                onClick={() => setCurrentPage((p) => p + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </Show>
+        </div>
       </div>
     </div>
   );

@@ -714,6 +714,38 @@ select.input {
   pointer-events: auto;
 }
 
+/* History controls */
+.history-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.history-stats {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.history-pagination {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.table th[data-sortable] {
+  cursor: pointer;
+  user-select: none;
+}
+
+.table th[data-sortable]:hover {
+  color: var(--accent);
+}
+
 @media (max-width: 768px) {
   .mobile-topbar { display: flex; }
   .nav {

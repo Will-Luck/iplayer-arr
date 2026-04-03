@@ -5,6 +5,10 @@ import type {
   ShowOverride,
   ConfigResponse,
   DirectoryEntry,
+  LogEntry,
+  SystemInfo,
+  HistoryPage,
+  HistoryStats,
 } from "./types";
 
 function buildURL(path: string, params?: Record<string, string>): string {
@@ -65,7 +69,8 @@ export const api = {
     post<{ id: string }>("/api/download", { pid, quality, title, category }),
 
   // History
-  listHistory: () => get<Download[]>("/api/history"),
+  listHistory: (params?: Record<string, string>) => get<HistoryPage>("/api/history", params),
+  getHistoryStats: (since?: string) => get<HistoryStats>("/api/history/stats", since ? { since } : undefined),
   deleteHistory: (id: string) => del(`/api/history/${id}`),
 
   // Config
@@ -90,4 +95,16 @@ export const api = {
   // Pause/Resume
   pause: () => post<{ paused: boolean }>("/api/pause", {}),
   resume: () => post<{ paused: boolean }>("/api/resume", {}),
+
+  // Logs
+  getLogs: (level?: string, q?: string) =>
+    get<LogEntry[]>("/api/logs", {
+      ...(level && { level }),
+      ...(q && { q }),
+    }),
+
+  // System
+  getSystem: () => get<SystemInfo>("/api/system"),
+  geoCheck: () =>
+    post<{ geo_ok: boolean; geo_checked_at: string }>("/api/system/geo-check", {}),
 };
