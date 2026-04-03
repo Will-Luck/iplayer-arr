@@ -85,7 +85,8 @@ func (h *Handler) handleListDirectory(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleDeleteDirectory(w http.ResponseWriter, r *http.Request) {
 	folder := strings.TrimPrefix(r.URL.Path, "/api/downloads/directory/")
-	if folder == "" || strings.Contains(folder, "/") || strings.Contains(folder, "..") {
+	folder = filepath.Clean(folder)
+	if folder == "" || folder == "." || folder == ".." || strings.ContainsAny(folder, "/\\") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder name"})
 		return
 	}
@@ -96,6 +97,10 @@ func (h *Handler) handleDeleteDirectory(w http.ResponseWriter, r *http.Request) 
 	}
 
 	fullPath := filepath.Join(downloadDir, folder)
+	if !strings.HasPrefix(fullPath, downloadDir+string(os.PathSeparator)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder name"})
+		return
+	}
 
 	ownedDirs, err := h.store.ListHistoryOutputDirs()
 	if err != nil {
