@@ -46,6 +46,7 @@ body {
   margin-left: var(--nav-width);
   padding: 24px 32px;
   max-width: 1200px;
+  transition: margin-left 0.2s;
 }
 
 /* Navigation */
@@ -61,6 +62,7 @@ body {
   flex-direction: column;
   padding: 16px 0;
   z-index: 10;
+  transition: width 0.2s;
 }
 
 .nav-brand {
@@ -607,4 +609,113 @@ select.input {
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* Collapsible sidebar */
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  margin-top: auto;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  transition: color 0.15s;
+}
+
+.sidebar-toggle:hover {
+  color: var(--text-primary);
+}
+
+.sidebar-toggle svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.2s;
+}
+
+.nav.collapsed {
+  width: 56px;
+}
+
+.nav.collapsed .nav-brand {
+  font-size: 0;
+}
+
+.nav.collapsed .nav-brand::after {
+  content: "ia";
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.nav.collapsed .nav-link {
+  justify-content: center;
+  padding: 10px 0;
+  font-size: 0;
+  gap: 0;
+}
+
+.nav.collapsed .nav-link svg {
+  width: 20px;
+  height: 20px;
+}
+
+.nav.collapsed .sidebar-toggle svg {
+  transform: rotate(180deg);
+}
+
+/* Mobile */
+.mobile-topbar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+  z-index: 100;
+}
+
+.hamburger {
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 8px;
+}
+
+.hamburger svg { width: 20px; height: 20px; }
+
+.nav-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 199;
+}
+
+.nav-overlay.visible { display: block; }
+
+@media (max-width: 768px) {
+  .mobile-topbar { display: flex; }
+  .nav {
+    position: fixed;
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.2s;
+  }
+  .nav.mobile-open {
+    transform: translateX(0);
+  }
+  .main {
+    margin-left: 0 !important;
+    padding-top: 64px;
+  }
+  .sidebar-toggle { display: none; }
 }
