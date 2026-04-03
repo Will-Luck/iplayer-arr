@@ -55,7 +55,7 @@ export default function Downloads() {
         <div class="card">
           <div class="card-header">
             Folders ({entries().length})
-            <button class="btn btn-primary btn-sm" style="margin-left:auto" onClick={loadDirectory}>Refresh</button>
+            <button class="btn btn-primary btn-sm ml-auto" onClick={loadDirectory}>Refresh</button>
           </div>
           <Show when={entries().length > 0} fallback={<div class="card-empty">Downloads directory is empty</div>}>
             <table class="table">
@@ -72,14 +72,14 @@ export default function Downloads() {
                 <For each={entries()}>
                   {(entry) => (
                     <tr>
-                      <td title={entry.name} style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                      <td class="dl-folder-name" title={entry.name}>
                         {entry.name}
                       </td>
                       <td class="text-muted">
                         {entry.files.length} {entry.files.length === 1 ? "file" : "files"}
                         <Show when={entry.files.length > 0}>
                           <br/>
-                          <span style="font-size:11px;color:var(--muted)">{entry.files.map(f => f.name.split('.').pop()).filter((v, i, a) => a.indexOf(v) === i).join(", ")}</span>
+                          <span class="dl-file-types">{entry.files.map(f => f.name.split('.').pop()).filter((v, i, a) => a.indexOf(v) === i).join(", ")}</span>
                         </Show>
                       </td>
                       <td class="text-muted">{formatBytes(entry.total_size)}</td>
@@ -90,8 +90,7 @@ export default function Downloads() {
                       </td>
                       <td>
                         <button
-                          class="btn btn-sm"
-                          style="background:var(--danger);color:white"
+                          class="btn btn-sm btn-delete"
                           disabled={!entry.owned}
                           title={entry.owned ? "Delete folder" : "Cannot delete: not owned by iplayer-arr"}
                           onClick={() => deleteFolder(entry.name)}

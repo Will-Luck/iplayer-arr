@@ -46,24 +46,24 @@ export default function Config() {
         <div class="card-header">Settings</div>
         <div class="card-body config-grid">
           <label class="text-secondary config-label" for="cfg-quality">Default Quality</label>
-          <select id="cfg-quality" class="input" style="width:auto" value={config()!.quality} onChange={e => updateConfig("quality", e.target.value)}>
+          <select id="cfg-quality" class="input config-select" value={config()!.quality} onChange={e => updateConfig("quality", e.target.value)}>
             <For each={QUALITY_OPTIONS as unknown as string[]}>{q => <option value={q}>{q}</option>}</For>
           </select>
 
           <label class="text-secondary config-label" for="cfg-workers">Max Workers</label>
           <div>
-            <select id="cfg-workers" class="input" style="width:auto;opacity:0.5" value={config()!.max_workers} disabled aria-disabled="true">
+            <select id="cfg-workers" class="input config-disabled" value={config()!.max_workers} disabled aria-disabled="true">
               <option value={config()!.max_workers}>{config()!.max_workers}</option>
             </select>
-            <p class="text-muted" style="font-size:11px;margin-top:4px">Set via MAX_WORKERS environment variable</p>
+            <p class="text-muted config-hint">Set via MAX_WORKERS environment variable</p>
           </div>
 
           <label class="text-secondary config-label" for="cfg-dir">Download Dir</label>
-          <input id="cfg-dir" class="input" type="text" value={config()!.download_dir} disabled aria-disabled="true" style="opacity:0.5" />
+          <input id="cfg-dir" class="input config-disabled" type="text" value={config()!.download_dir} disabled aria-disabled="true" />
 
           <label class="text-secondary config-label" for="cfg-cleanup">Auto Cleanup</label>
           <div>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <label class="config-toggle-label">
               <input
                 id="cfg-cleanup"
                 type="checkbox"
@@ -72,7 +72,7 @@ export default function Config() {
               />
               Remove stale download folders
             </label>
-            <p class="text-muted" style="font-size:11px;margin-top:4px">When enabled, folders with no .mp4 files are cleaned up every 5 minutes</p>
+            <p class="text-muted config-hint">When enabled, folders with no .mp4 files are cleaned up every 5 minutes</p>
           </div>
         </div>
       </div>

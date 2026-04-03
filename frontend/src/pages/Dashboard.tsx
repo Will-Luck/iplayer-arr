@@ -166,8 +166,8 @@ export default function Dashboard() {
               {st().queue_depth}
             </div>
             <button
-              class="btn btn-sm"
-              style={`margin-left:auto;background:${st().paused || paused() ? "var(--warning, #f59e0b)" : "var(--muted)"};color:white`}
+              class="btn btn-sm ml-auto"
+              classList={{ "btn-pause-active": paused(), "btn-pause-idle": !paused() }}
               onClick={togglePause}
             >
               {paused() ? "Resume" : "Pause"}

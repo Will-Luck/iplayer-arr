@@ -63,20 +63,20 @@ export default function Overrides() {
   const editRow = () => (
     <tr>
       <td>
-        <input class="input" value={draft().show_name} onInput={e => { updateDraft("show_name", e.target.value); setNameError(""); }} disabled={!!editing()} style="min-width:140px" aria-label="Show name" />
+        <input class="input override-input-name" value={draft().show_name} onInput={e => { updateDraft("show_name", e.target.value); setNameError(""); }} disabled={!!editing()} aria-label="Show name" />
         <Show when={nameError()}>
-          <p class="text-danger" style="font-size:11px;margin-top:2px">{nameError()}</p>
+          <p class="text-danger field-error">{nameError()}</p>
         </Show>
       </td>
-      <td style="text-align:center"><input type="checkbox" checked={draft().force_date_based} onChange={e => updateDraft("force_date_based", e.target.checked)} aria-label="Force date-based" /></td>
-      <td><input class="input" type="number" value={draft().force_series_num} onInput={e => updateDraft("force_series_num", +e.target.value)} style="width:64px" aria-label="Force series number" /></td>
-      <td><input class="input" type="number" value={draft().series_offset} onInput={e => updateDraft("series_offset", +e.target.value)} style="width:64px" aria-label="Series offset" /></td>
-      <td><input class="input" type="number" value={draft().episode_offset} onInput={e => updateDraft("episode_offset", +e.target.value)} style="width:64px" aria-label="Episode offset" /></td>
-      <td><input class="input" value={draft().custom_name} onInput={e => updateDraft("custom_name", e.target.value)} style="min-width:120px" aria-label="Custom name" /></td>
+      <td class="text-center"><input type="checkbox" checked={draft().force_date_based} onChange={e => updateDraft("force_date_based", e.target.checked)} aria-label="Force date-based" /></td>
+      <td><input class="input override-input-num" type="number" value={draft().force_series_num} onInput={e => updateDraft("force_series_num", +e.target.value)} aria-label="Force series number" /></td>
+      <td><input class="input override-input-num" type="number" value={draft().series_offset} onInput={e => updateDraft("series_offset", +e.target.value)} aria-label="Series offset" /></td>
+      <td><input class="input override-input-num" type="number" value={draft().episode_offset} onInput={e => updateDraft("episode_offset", +e.target.value)} aria-label="Episode offset" /></td>
+      <td><input class="input override-input-custom" value={draft().custom_name} onInput={e => updateDraft("custom_name", e.target.value)} aria-label="Custom name" /></td>
       <td>
         <div class="override-actions">
           <button class="btn btn-primary btn-sm" onClick={save}>Save</button>
-          <button class="btn btn-sm" style="background:var(--bg-input);color:var(--text-secondary)" onClick={() => { setEditing(null); setAdding(false); }}>Cancel</button>
+          <button class="btn btn-cancel btn-sm" onClick={() => { setEditing(null); setAdding(false); }}>Cancel</button>
         </div>
       </td>
     </tr>
@@ -88,8 +88,8 @@ export default function Overrides() {
         <span>Show Overrides</span>
         <button class="btn btn-primary btn-sm" onClick={startAdd} disabled={adding()}>Add Override</button>
       </div>
-      <div class="card-body" style="overflow-x:auto">
-        <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+      <div class="card-body overrides-body">
+        <p class="text-muted overrides-desc">
           Override how specific shows are numbered. Force date-based for daily shows, adjust series/episode offsets for mismatched numbering.
         </p>
         <table class="table">
@@ -118,7 +118,7 @@ export default function Overrides() {
                   <td>{o.custom_name || "-"}</td>
                   <td>
                     <div class="override-actions">
-                      <button class="btn btn-sm" style="background:var(--accent);color:#fff" onClick={() => startEdit(o)} aria-label={`Edit ${o.show_name}`}>Edit</button>
+                      <button class="btn btn-primary btn-sm" onClick={() => startEdit(o)} aria-label={`Edit ${o.show_name}`}>Edit</button>
                       <button class="btn btn-danger btn-sm" onClick={() => remove(o.show_name)} aria-label={`Delete ${o.show_name}`}>Delete</button>
                     </div>
                   </td>
@@ -130,7 +130,7 @@ export default function Overrides() {
           </tbody>
         </table>
         <Show when={overrides().length === 0 && !adding()}>
-          <p class="text-muted" style="text-align:center;padding:16px 0;font-size:13px">No overrides configured</p>
+          <p class="text-muted text-center overrides-empty">No overrides configured</p>
         </Show>
       </div>
     </div>
