@@ -2067,16 +2067,134 @@ Replace the "Recent History" card with:
 }
 ```
 
-- [ ] **Step 4: Build and verify**
+- [ ] **Step 4: Add delete per row and Clear All**
+
+In the history table, add a delete button to each row:
+
+```tsx
+<td>
+  <button class="btn btn-sm btn-delete" onClick={async () => {
+    await api.deleteHistory(dl.id);
+    loadHistory();
+    addToast("success", "Deleted");
+  }} aria-label={`Delete ${dl.title}`}>Delete</button>
+</td>
+```
+
+Add a "Clear All" button in the card header alongside the filter:
+
+```tsx
+<button class="btn btn-sm btn-delete" onClick={async () => {
+  if (!confirm("Delete all history?")) return;
+  for (const item of history()) {
+    await api.deleteHistory(item.id);
+  }
+  loadHistory();
+  api.historyStats().then(setHistoryStats);
+  addToast("success", "History cleared");
+}}>Clear All</button>
+```
+
+Add the "Actions" `<th>` header to the table.
+
+- [ ] **Step 5: Add sortable column headers**
+
+Add sort state:
+
+```tsx
+const [sortField, setSortField] = createSignal("completed_at");
+const [sortOrder, setSortOrder] = createSignal("desc");
+```
+
+Update `loadHistory` to pass sort params:
+
+```tsx
+async function loadHistory() {
+  const result = await api.listHistoryPaged({
+    status: historyFilter() || undefined,
+    page: historyPage(),
+    per_page: 20,
+    sort: sortField(),
+    order: sortOrder(),
+  });
+  setHistory(result.items);
+  setHistoryTotal(result.total);
+}
+```
+
+Make column headers clickable:
+
+```tsx
+function toggleSort(field: string) {
+  if (sortField() === field) {
+    setSortOrder((o) => o === "desc" ? "asc" : "desc");
+  } else {
+    setSortField(field);
+    setSortOrder("desc");
+  }
+  loadHistory();
+}
+```
+
+```tsx
+<th scope="col" class="sortable" onClick={() => toggleSort("title")}>
+  Title {sortField() === "title" ? (sortOrder() === "asc" ? "\u25B2" : "\u25BC") : ""}
+</th>
+```
+
+Add CSS:
+
+```css
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.sortable:hover {
+  color: var(--text-primary);
+}
+```
+
+- [ ] **Step 6: Add download speed display to active downloads**
+
+In Dashboard.tsx, track previous progress for speed calculation:
+
+```tsx
+const prevProgress = new Map<string, { time: number; downloaded: number }>();
+
+function calcSpeed(dl: Download): string {
+  const prev = prevProgress.get(dl.id);
+  const now = Date.now();
+  if (prev && now - prev.time > 0) {
+    const bytesPerSec = ((dl.downloaded - prev.downloaded) / ((now - prev.time) / 1000));
+    prevProgress.set(dl.id, { time: now, downloaded: dl.downloaded });
+    if (bytesPerSec > 0) return formatBytes(bytesPerSec) + "/s";
+  } else {
+    prevProgress.set(dl.id, { time: now, downloaded: dl.downloaded });
+  }
+  return "";
+}
+```
+
+Call `calcSpeed(dl)` in the download:progress SSE handler and display it in the `dl-meta` span:
+
+```tsx
+<Show when={calcSpeed(dl)}>
+  <span class="text-muted">{calcSpeed(dl)}</span>
+</Show>
+```
+
+Note: `prevProgress` is a plain `Map` outside reactive state since it's a mutable cache for speed calculation, not displayed directly.
+
+- [ ] **Step 7: Build and verify**
 
 Run: `cd /home/lns/iplayer-arr/frontend && npm run build`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd /home/lns/iplayer-arr
 git add frontend/
-git commit -m "feat(ui): paginated history with stats and status filter"
+git commit -m "feat(ui): paginated history with stats, sort, delete, and download speed"
 ```
 
 ---
