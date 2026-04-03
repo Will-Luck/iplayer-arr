@@ -1,5 +1,5 @@
 import { createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
-import type { Download, StatusResponse, HistoryStats } from "../types";
+import type { Download, StatusResponse, SystemInfo, HistoryStats } from "../types";
 import { api } from "../api";
 import { connectSSE } from "../sse";
 
@@ -22,6 +22,33 @@ function statusBadgeClass(status: string): string {
   return `badge badge-${status}`;
 }
 
+function relativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+const speedMap = new Map<string, { lastProgress: number; lastTime: number }>();
+
+function calcSpeed(id: string, progress: number): string {
+  const now = Date.now();
+  const prev = speedMap.get(id);
+  if (!prev) {
+    speedMap.set(id, { lastProgress: progress, lastTime: now });
+    return "";
+  }
+  const dt = (now - prev.lastTime) / 1000;
+  if (dt < 1) return "";
+  const dp = progress - prev.lastProgress;
+  speedMap.set(id, { lastProgress: progress, lastTime: now });
+  if (dp <= 0) return "";
+  return `${(dp / dt).toFixed(1)}%/s`;
+}
+
 const todayISO = () => new Date().toISOString().split("T")[0];
 const weekAgoISO = () => {
   const d = new Date();
@@ -36,6 +63,7 @@ const monthAgoISO = () => {
 
 export default function Dashboard() {
   const [status, setStatus] = createSignal<StatusResponse | null>(null);
+  const [system, setSystem] = createSignal<SystemInfo | null>(null);
   const [active, setActive] = createSignal<Download[]>([]);
   const [queue, setQueue] = createSignal<Download[]>([]);
   const [historyItems, setHistoryItems] = createSignal<Download[]>([]);
@@ -65,13 +93,15 @@ export default function Dashboard() {
 
   async function loadData() {
     try {
-      const [st, downloads] = await Promise.all([
+      const [st, downloads, sys] = await Promise.all([
         api.getStatus(),
         api.listDownloads(),
+        api.getSystem(),
       ]);
       setStatus(st);
       setPaused(st.paused);
       splitDownloads(downloads);
+      setSystem(sys);
     } catch {
       // API may not be available yet
     }
@@ -183,6 +213,7 @@ export default function Dashboard() {
     const cleanup = connectSSE({
       "download:progress": (data) => {
         const dl = data as Download;
+        calcSpeed(dl.id, dl.progress);
         setActive((prev) => {
           const idx = prev.findIndex((d) => d.id === dl.id);
           if (idx >= 0) {
@@ -233,33 +264,74 @@ export default function Dashboard() {
     <div>
       <h1 class="page-title">Dashboard</h1>
 
-      {/* Status bar */}
+      {/* Health strip */}
       <Show when={status()}>
         {(st) => (
-          <div class="status-bar">
-            <div class="status-item">
+          <div class="health-strip">
+            {/* Geo Check */}
+            <div class="health-pill">
               <span
                 class="status-dot"
                 classList={{ ok: st().geo_ok, err: !st().geo_ok }}
-                aria-label={st().geo_ok ? "Geo check passed" : "Geo check failed"}
+                aria-hidden="true"
               />
-              {st().geo_ok ? "UK geo OK" : "Geo blocked"}
+              <span style={{ color: st().geo_ok ? "var(--success)" : "var(--danger)" }}>
+                {st().geo_ok ? "UK OK" : "Geo Blocked"}
+              </span>
             </div>
-            <div class="status-item">
-              <span class="text-secondary">ffmpeg:</span>
-              {st().ffmpeg || "not found"}
+
+            {/* ffmpeg */}
+            <div class="health-pill">
+              <span
+                class="status-dot"
+                classList={{ ok: !!st().ffmpeg, err: !st().ffmpeg }}
+                aria-hidden="true"
+              />
+              <span style={{ color: st().ffmpeg ? undefined : "var(--danger)" }}>
+                {st().ffmpeg ? st().ffmpeg : "Not Found"}
+              </span>
             </div>
-            <div class="status-item">
-              <span class="text-secondary">Workers:</span>
-              {st().active_workers}
+
+            {/* Sonarr */}
+            <Show when={system()}>
+              {(sys) => (
+                <div class="health-pill">
+                  <span
+                    class="status-dot"
+                    classList={{ ok: !!sys().last_indexer_request, warn: !sys().last_indexer_request }}
+                    aria-hidden="true"
+                  />
+                  <span style={{ color: sys().last_indexer_request ? undefined : "var(--warning)" }}>
+                    {sys().last_indexer_request
+                      ? `Connected · ${relativeTime(sys().last_indexer_request!)}`
+                      : "No requests yet"}
+                  </span>
+                </div>
+              )}
+            </Show>
+
+            {/* Disk Space */}
+            <div class="health-pill">
+              <span
+                class="status-dot"
+                classList={{
+                  ok: st().disk_free > 1_073_741_824,
+                  err: st().disk_free > 0 && st().disk_free <= 1_073_741_824,
+                }}
+                aria-hidden="true"
+              />
+              <span style={{ color: st().disk_free <= 1_073_741_824 && st().disk_free > 0 ? "var(--danger)" : undefined }}>
+                {st().disk_free > 0 ? `${formatBytes(st().disk_free)} free` : "Disk unknown"}
+              </span>
             </div>
-            <div class="status-item">
-              <span class="text-secondary">Queue:</span>
-              {st().queue_depth}
-            </div>
+
             <button
-              class="btn btn-sm ml-auto"
-              classList={{ "btn-pause-active": paused(), "btn-pause-idle": !paused() }}
+              class="btn btn-sm"
+              style={{
+                "margin-left": "auto",
+                background: paused() ? "var(--warning)" : "var(--muted)",
+                color: "white",
+              }}
               onClick={togglePause}
             >
               {paused() ? "Resume" : "Pause"}
@@ -296,6 +368,12 @@ export default function Dashboard() {
                   </div>
                   <div class="dl-meta">
                     <span>{dl.progress.toFixed(1)}%</span>
+                    <Show when={speedMap.get(dl.id)?.lastProgress !== undefined}>
+                      {(() => {
+                        const speed = calcSpeed(dl.id, dl.progress);
+                        return speed ? <span class="text-muted">{speed}</span> : null;
+                      })()}
+                    </Show>
                     <Show when={dl.size > 0}>
                       <span>
                         {formatBytes(dl.downloaded)} / {formatBytes(dl.size)}

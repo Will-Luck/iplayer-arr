@@ -33,6 +33,8 @@ export interface StatusResponse {
   active_workers: number;
   queue_depth: number;
   paused: boolean;
+  disk_free: number;
+  disk_total: number;
 }
 
 export interface SearchResult {

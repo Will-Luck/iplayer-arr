@@ -137,6 +137,32 @@ body {
 .status-dot.warn { background: var(--warning); }
 .status-dot.err { background: var(--danger); }
 
+/* Health strip */
+.health-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.health-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.health-pill .status-dot {
+  width: 8px;
+  height: 8px;
+}
+
 /* Cards */
 .card {
   background: var(--bg-surface);
