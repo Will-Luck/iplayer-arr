@@ -76,6 +76,13 @@ func (h *Handler) handleSystem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Last time Sonarr (or any Newznab client) queried the indexer.
+	if v := h.lastIndexerRequest.Load(); v != nil {
+		if t, ok := v.(time.Time); ok && !t.IsZero() {
+			info.LastIndexerRequest = t.Format(time.RFC3339)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, info)
 }
 
