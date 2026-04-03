@@ -89,6 +89,15 @@ export default function Config() {
           <p class="text-secondary">Category: <code>sonarr</code></p>
         </div>
       </div>
+
+      <div class="mt-12">
+        <button
+          class="btn btn-secondary btn-sm"
+          onClick={() => window.dispatchEvent(new Event("rerun-wizard"))}
+        >
+          Re-run Setup Wizard
+        </button>
+      </div>
     </Show>
   );
 }
