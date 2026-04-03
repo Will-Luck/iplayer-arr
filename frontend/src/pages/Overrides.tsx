@@ -76,7 +76,7 @@ export default function Overrides() {
       <td>
         <div class="override-actions">
           <button class="btn btn-primary btn-sm" onClick={save}>Save</button>
-          <button class="btn btn-cancel btn-sm" onClick={() => { setEditing(null); setAdding(false); }}>Cancel</button>
+          <button class="btn btn-secondary btn-sm" onClick={() => { setEditing(null); setAdding(false); }}>Cancel</button>
         </div>
       </td>
     </tr>
