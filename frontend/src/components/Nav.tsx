@@ -1,5 +1,5 @@
 import { A, useLocation } from "@solidjs/router";
-import { createSignal, onMount } from "solid-js";
+import { createSignal, onMount, onCleanup } from "solid-js";
 
 export default function Nav() {
   const location = useLocation();
@@ -9,6 +9,11 @@ export default function Nav() {
   onMount(() => {
     const stored = localStorage.getItem("sidebar-collapsed");
     if (stored === "true") setCollapsed(true);
+
+    const mq = window.matchMedia("(max-width: 768px)");
+    const handler = (e: MediaQueryListEvent) => { if (!e.matches) closeMobile(); };
+    mq.addEventListener("change", handler);
+    onCleanup(() => mq.removeEventListener("change", handler));
   });
 
   function toggleCollapsed() {
@@ -110,6 +115,7 @@ export default function Nav() {
           class="hamburger"
           onClick={() => setMobileOpen(!mobileOpen())}
           aria-label="Toggle navigation"
+          aria-expanded={mobileOpen()}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="3" y1="6" x2="21" y2="6" />
@@ -143,7 +149,7 @@ export default function Nav() {
               onClick={closeMobile}
             >
               {item.icon}
-              {item.label}
+              <span class="nav-label">{item.label}</span>
             </A>
           ))}
         </div>

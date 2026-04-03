@@ -12,6 +12,7 @@
   --border: #2a2e3d;
   --radius: 8px;
   --nav-width: 220px;
+  --nav-collapsed: 56px;
 }
 
 *,
@@ -636,7 +637,11 @@ select.input {
 }
 
 .nav.collapsed {
-  width: 56px;
+  width: var(--nav-collapsed);
+}
+
+.nav.collapsed ~ .main {
+  margin-left: var(--nav-collapsed);
 }
 
 .nav.collapsed .nav-brand {
@@ -653,8 +658,10 @@ select.input {
 .nav.collapsed .nav-link {
   justify-content: center;
   padding: 10px 0;
-  font-size: 0;
-  gap: 0;
+}
+
+.nav.collapsed .nav-label {
+  display: none;
 }
 
 .nav.collapsed .nav-link svg {
@@ -693,14 +700,19 @@ select.input {
 .hamburger svg { width: 20px; height: 20px; }
 
 .nav-overlay {
-  display: none;
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.5);
   z-index: 199;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
 }
 
-.nav-overlay.visible { display: block; }
+.nav-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 @media (max-width: 768px) {
   .mobile-topbar { display: flex; }
