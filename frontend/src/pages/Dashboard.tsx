@@ -27,6 +27,7 @@ export default function Dashboard() {
   const [active, setActive] = createSignal<Download[]>([]);
   const [queue, setQueue] = createSignal<Download[]>([]);
   const [history, setHistory] = createSignal<Download[]>([]);
+  const [paused, setPaused] = createSignal(false);
 
   async function loadData() {
     try {
@@ -36,10 +37,25 @@ export default function Dashboard() {
         api.listHistory(),
       ]);
       setStatus(st);
+      setPaused(st.paused);
       splitDownloads(downloads);
       setHistory(hist.slice(0, 20));
     } catch {
       // API may not be available yet
+    }
+  }
+
+  async function togglePause() {
+    try {
+      if (paused()) {
+        await api.resume();
+        setPaused(false);
+      } else {
+        await api.pause();
+        setPaused(true);
+      }
+    } catch {
+      // silently fail
     }
   }
 
@@ -98,6 +114,10 @@ export default function Dashboard() {
         // Refresh history to pick up the completed item
         api.listHistory().then((h) => setHistory(h.slice(0, 20))).catch(() => {});
       },
+      "pause:changed": (data) => {
+        const d = data as { paused: boolean };
+        setPaused(d.paused);
+      },
       "download:failed": (data) => {
         const dl = data as Download;
         // Mark as failed in the active list briefly, then move to history
@@ -145,6 +165,13 @@ export default function Dashboard() {
               <span class="text-secondary">Queue:</span>
               {st().queue_depth}
             </div>
+            <button
+              class="btn btn-sm"
+              style={`margin-left:auto;background:${st().paused || paused() ? "var(--warning, #f59e0b)" : "var(--muted)"};color:white`}
+              onClick={togglePause}
+            >
+              {paused() ? "Resume" : "Pause"}
+            </button>
           </div>
         )}
       </Show>

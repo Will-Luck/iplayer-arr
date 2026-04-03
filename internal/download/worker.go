@@ -28,7 +28,9 @@ func (m *Manager) worker(ctx context.Context, id int) {
 			log.Printf("worker %d stopping", id)
 			return
 		case <-ticker.C:
-			m.processNext(ctx, id)
+			if !m.paused.Load() {
+				m.processNext(ctx, id)
+			}
 		}
 	}
 }
@@ -166,9 +168,10 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		m.downloadSubtitles(streams.SubtitleURL, dl.OutputDir, dl.Title)
 	}
 
-	// 6. Complete -- keep in downloads bucket so Sonarr sees "Completed" in
-	// the SABnzbd queue before we move it to history. Sonarr polls every ~30s
-	// and needs to see the transition to trigger import.
+	// 6. Complete -- move straight to history. The SABnzbd history endpoint
+	// returns these as Completed so Sonarr can see them and trigger import.
+	// Previously we slept 90s in the downloads bucket, but Sonarr's delete
+	// request would race and wipe the record before MoveToHistory ran.
 	dl.Status = store.StatusCompleted
 	dl.Progress = 100
 	dl.CompletedAt = time.Now()
@@ -176,9 +179,6 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		log.Printf("store update on complete: %v", err)
 	}
 	m.broadcast("download:complete", dl)
-
-	// Wait for Sonarr to see the completed status before moving to history
-	time.Sleep(90 * time.Second)
 
 	if err := m.store.MoveToHistory(dl.ID); err != nil {
 		log.Printf("move to history: %v", err)

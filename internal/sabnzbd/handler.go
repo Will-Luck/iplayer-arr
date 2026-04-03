@@ -17,6 +17,7 @@ import (
 type DownloadStarter interface {
 	StartDownload(pid, quality, title, category string) (string, error)
 	CancelDownload(nzoID string) error
+	IsPaused() bool
 }
 
 type Handler struct {
@@ -100,7 +101,12 @@ func (h *Handler) handleQueue(w http.ResponseWriter, r *http.Request) {
 		if h.starter != nil {
 			h.starter.CancelDownload(value)
 		}
-		h.store.DeleteDownload(value)
+		// Move to history instead of hard-deleting so Sonarr can still
+		// see the Completed entry. If the download is already gone
+		// (e.g. worker moved it first), just delete from both buckets.
+		if err := h.store.MoveToHistory(value); err != nil {
+			h.store.DeleteDownload(value)
+		}
 		writeJSON(w, map[string]interface{}{"status": true})
 		return
 	}
@@ -145,10 +151,11 @@ func (h *Handler) handleQueue(w http.ResponseWriter, r *http.Request) {
 		slots = []map[string]interface{}{}
 	}
 
+	paused := h.starter != nil && h.starter.IsPaused()
 	resp := map[string]interface{}{
 		"queue": map[string]interface{}{
 			"status":    "Downloading",
-			"paused":    false,
+			"paused":    paused,
 			"noofslots": len(slots),
 			"speed":     "0",
 			"timeleft":  "0:00:00",

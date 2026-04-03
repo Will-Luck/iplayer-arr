@@ -4,6 +4,7 @@ import type {
   SearchResult,
   ShowOverride,
   ConfigResponse,
+  DirectoryEntry,
 } from "./types";
 
 function buildURL(path: string, params?: Record<string, string>): string {
@@ -81,4 +82,12 @@ export const api = {
 
   // Search
   search: (q: string) => get<SearchResult[]>("/api/search", { q }),
+
+  // Directory
+  listDirectory: () => get<DirectoryEntry[]>("/api/downloads/directory"),
+  deleteDirectoryFolder: (name: string) => del(`/api/downloads/directory/${encodeURIComponent(name)}`),
+
+  // Pause/Resume
+  pause: () => post<{ paused: boolean }>("/api/pause", {}),
+  resume: () => post<{ paused: boolean }>("/api/resume", {}),
 };

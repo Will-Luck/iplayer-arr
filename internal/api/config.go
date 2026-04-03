@@ -5,12 +5,13 @@ import (
 	"net/http"
 )
 
-var configKeys = []string{"api_key", "quality", "max_workers", "download_dir"}
+var configKeys = []string{"api_key", "quality", "max_workers", "download_dir", "auto_cleanup"}
 
 var configDefaults = map[string]string{
 	"quality":      "720p",
 	"max_workers":  "2",
 	"download_dir": "/downloads",
+	"auto_cleanup": "false",
 }
 
 func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {

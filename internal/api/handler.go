@@ -70,6 +70,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDeleteOverride(w, r)
 	case path == "/api/search" && r.Method == "GET":
 		h.handleSearch(w, r)
+	case path == "/api/downloads/directory" && r.Method == "GET":
+		h.handleListDirectory(w, r)
+	case strings.HasPrefix(path, "/api/downloads/directory/") && r.Method == "DELETE":
+		h.handleDeleteDirectory(w, r)
+	case path == "/api/pause" && r.Method == "POST":
+		h.mgr.Pause()
+		writeJSON(w, http.StatusOK, map[string]bool{"paused": true})
+	case path == "/api/resume" && r.Method == "POST":
+		h.mgr.Resume()
+		writeJSON(w, http.StatusOK, map[string]bool{"paused": false})
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}

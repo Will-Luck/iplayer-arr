@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/GiteaLN/iplayer-arr/internal/bbc"
@@ -29,6 +30,7 @@ type Manager struct {
 	ms       *bbc.MediaSelector
 	hub      EventBroadcaster
 
+	paused  atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	claimed map[string]context.CancelFunc
@@ -72,6 +74,18 @@ func (m *Manager) Stop() {
 	m.wg.Wait()
 	log.Println("download manager stopped")
 }
+
+func (m *Manager) Pause() {
+	m.paused.Store(true)
+	m.hub.Broadcast("pause:changed", map[string]bool{"paused": true})
+}
+
+func (m *Manager) Resume() {
+	m.paused.Store(false)
+	m.hub.Broadcast("pause:changed", map[string]bool{"paused": false})
+}
+
+func (m *Manager) IsPaused() bool { return m.paused.Load() }
 
 func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) {
 	existing, _ := m.store.FindDownloadByPIDQuality(pid, quality)

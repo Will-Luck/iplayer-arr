@@ -35,6 +35,23 @@ func (s *Store) ListHistory() ([]*Download, error) {
 	return history, err
 }
 
+func (s *Store) ListHistoryOutputDirs() (map[string]bool, error) {
+	dirs := make(map[string]bool)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketHistory).ForEach(func(k, v []byte) error {
+			var dl Download
+			if err := json.Unmarshal(v, &dl); err != nil {
+				return err
+			}
+			if dl.OutputDir != "" {
+				dirs[dl.OutputDir] = true
+			}
+			return nil
+		})
+	})
+	return dirs, err
+}
+
 func (s *Store) DeleteHistory(id string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketHistory).Delete([]byte(id))

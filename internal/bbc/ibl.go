@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const defaultIBLBase = "https://ibl.api.bbci.co.uk/ibl/v1"
@@ -192,6 +194,8 @@ func (ibl *IBL) ListEpisodes(pid string) ([]IBLResult, error) {
 		results = append(results, result)
 	}
 
+	assignMissingEpisodeNumbers(results)
+
 	return results, nil
 }
 
@@ -217,6 +221,55 @@ func parseISODuration(iso string) int {
 		total += s
 	}
 	return int(total)
+}
+
+// assignMissingEpisodeNumbers fills in episode numbers for series that have
+// Series>0 but all episodes have EpisodeNum=0 and Position=0.  It sorts
+// episodes within each series by air date (ascending) and assigns 1, 2, 3...
+// This handles shows like "Rafi the Wishing Wizard" where the BBC provides
+// series numbers but no per-episode numbering or parent_position.
+func assignMissingEpisodeNumbers(results []IBLResult) {
+	// Group indices by series number, skipping series 0 (no series)
+	bySeries := map[int][]int{}
+	for i, r := range results {
+		if r.Series > 0 {
+			bySeries[r.Series] = append(bySeries[r.Series], i)
+		}
+	}
+
+	for _, indices := range bySeries {
+		// Check: all episodes in this series must lack numbering
+		allMissing := true
+		for _, i := range indices {
+			if results[i].EpisodeNum > 0 || results[i].Position > 0 {
+				allMissing = false
+				break
+			}
+		}
+		if !allMissing {
+			continue
+		}
+
+		// Sort by air date ascending (earliest = episode 1)
+		sort.Slice(indices, func(a, b int) bool {
+			return parseLooseDate(results[indices[a]].AirDate).Before(
+				parseLooseDate(results[indices[b]].AirDate))
+		})
+
+		for ep, i := range indices {
+			results[i].EpisodeNum = ep + 1
+		}
+	}
+}
+
+// parseLooseDate handles BBC's inconsistent date format ("1 Jan 2026" or "2026-01-01").
+func parseLooseDate(s string) time.Time {
+	for _, layout := range []string{"2 Jan 2006", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func parseSubtitleNumbers(subtitle string) (series, episode int) {

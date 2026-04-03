@@ -60,6 +60,20 @@ export default function Config() {
 
           <label class="text-secondary config-label" for="cfg-dir">Download Dir</label>
           <input id="cfg-dir" class="input" type="text" value={config()!.download_dir} disabled aria-disabled="true" style="opacity:0.5" />
+
+          <label class="text-secondary config-label" for="cfg-cleanup">Auto Cleanup</label>
+          <div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input
+                id="cfg-cleanup"
+                type="checkbox"
+                checked={config()!.auto_cleanup === "true"}
+                onChange={e => updateConfig("auto_cleanup", e.target.checked ? "true" : "false")}
+              />
+              Remove stale download folders
+            </label>
+            <p class="text-muted" style="font-size:11px;margin-top:4px">When enabled, folders with no .mp4 files are cleaned up every 5 minutes</p>
+          </div>
         </div>
       </div>
 

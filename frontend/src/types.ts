@@ -32,6 +32,7 @@ export interface StatusResponse {
   geo_ok: boolean;
   active_workers: number;
   queue_depth: number;
+  paused: boolean;
 }
 
 export interface SearchResult {
@@ -63,6 +64,20 @@ export interface ConfigResponse {
   quality: string;
   max_workers: string;
   download_dir: string;
+  auto_cleanup: string;
+}
+
+export interface DirectoryFile {
+  name: string;
+  size: number;
+}
+
+export interface DirectoryEntry {
+  name: string;
+  path: string;
+  files: DirectoryFile[];
+  total_size: number;
+  owned: boolean;
 }
 
 export const QUALITY_OPTIONS = ["1080p", "720p", "540p", "396p"] as const;

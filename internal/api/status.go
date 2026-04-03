@@ -21,5 +21,6 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"geo_ok":         h.status.GeoOK,
 		"active_workers": activeWorkers,
 		"queue_depth":    queueDepth,
+		"paused":         h.mgr != nil && h.mgr.IsPaused(),
 	})
 }

@@ -60,11 +60,12 @@ func main() {
 	ms := bbc.NewMediaSelector(bbcClient)
 	playlist := bbc.NewPlaylistResolver(bbcClient)
 	hub := api.NewHub()
-	mgr := download.NewManager(st, downloadDir, 2, bbcClient, playlist, ms, hub)
+	mgr := download.NewManager(st, downloadDir, 10, bbcClient, playlist, ms, hub)
 
 	// Start download workers
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	mgr.Start(workerCtx)
+	go mgr.RunCleanupLoop(workerCtx)
 
 	// Geo-probe: check if BBC content is accessible
 	geoOK := false

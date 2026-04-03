@@ -39,6 +39,10 @@ func (m *mockStarter) CancelDownload(nzoID string) error {
 	return nil
 }
 
+func (m *mockStarter) IsPaused() bool {
+	return false
+}
+
 func testHandler(t *testing.T) (*Handler, *store.Store) {
 	t.Helper()
 	dir := t.TempDir()
