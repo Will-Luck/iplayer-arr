@@ -6,17 +6,8 @@ import Downloads from "./pages/Downloads";
 import Search from "./pages/Search";
 import Config from "./pages/Config";
 import Overrides from "./pages/Overrides";
-
-function ComingSoon() {
-  return (
-    <div class="card">
-      <div class="card-body">
-        <h2 class="page-title">Coming Soon</h2>
-        <p class="text-secondary">This page is under construction.</p>
-      </div>
-    </div>
-  );
-}
+import Logs from "./pages/Logs";
+import System from "./pages/System";
 
 function Layout(props: { children?: any }) {
   return (
@@ -36,8 +27,8 @@ export default function App() {
       <Route path="/search" component={Search} />
       <Route path="/config" component={Config} />
       <Route path="/overrides" component={Overrides} />
-      <Route path="/logs" component={ComingSoon} />
-      <Route path="/system" component={ComingSoon} />
+      <Route path="/logs" component={Logs} />
+      <Route path="/system" component={System} />
     </Router>
   );
 }
