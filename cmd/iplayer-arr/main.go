@@ -121,7 +121,9 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/newznab/", newznab.NewHandler(ibl, st, ms))
+	nzHandler := newznab.NewHandler(ibl, st, ms)
+	nzHandler.SetOnRequest(apiHandler.RecordIndexerRequest)
+	mux.Handle("/newznab/", nzHandler)
 	mux.Handle("/sabnzbd/", sabnzbd.NewHandler(st, mgr))
 	mux.Handle("/api/", apiHandler)
 

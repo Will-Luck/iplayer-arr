@@ -269,3 +269,247 @@ func TestUnknownRoute(t *testing.T) {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
 }
+
+// seedAPIHistory inserts completed history entries directly into the store
+// using PutHistory so that CompletedAt is deterministic.
+func seedAPIHistory(t *testing.T, st *store.Store, base time.Time, entries []struct {
+	id     string
+	title  string
+	status string
+	size   int64
+	offset time.Duration
+}) {
+	t.Helper()
+	for _, e := range entries {
+		dl := &store.Download{
+			ID:          e.id,
+			PID:         "pid_" + e.id,
+			Title:       e.title,
+			Status:      e.status,
+			Size:        e.size,
+			CompletedAt: base.Add(e.offset),
+		}
+		if err := st.PutHistory(dl); err != nil {
+			t.Fatalf("PutHistory %q: %v", e.id, err)
+		}
+	}
+}
+
+// TestHistoryListEnvelope verifies GET /api/history returns a HistoryPage JSON
+// object with "items" array and "total" integer.
+func TestHistoryListEnvelope(t *testing.T) {
+	h, st := testAPI(t)
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	seedAPIHistory(t, st, base, []struct {
+		id     string
+		title  string
+		status string
+		size   int64
+		offset time.Duration
+	}{
+		{"env_1", "Show One", store.StatusCompleted, 100, 0},
+		{"env_2", "Show Two", store.StatusCompleted, 200, time.Hour},
+		{"env_3", "Show Three", store.StatusFailed, 0, 2 * time.Hour},
+	})
+
+	req := httptest.NewRequest("GET", "/api/history?apikey=test-api-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var page store.HistoryPage
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("unmarshal: %v (body: %s)", err, w.Body.String())
+	}
+	if page.Total != 3 {
+		t.Errorf("Total = %d, want 3", page.Total)
+	}
+	if len(page.Items) != 3 {
+		t.Errorf("Items len = %d, want 3", len(page.Items))
+	}
+}
+
+// TestHistoryListStatusFilter verifies ?status=completed filters correctly.
+func TestHistoryListStatusFilter(t *testing.T) {
+	h, st := testAPI(t)
+	base := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	seedAPIHistory(t, st, base, []struct {
+		id     string
+		title  string
+		status string
+		size   int64
+		offset time.Duration
+	}{
+		{"sf_c1", "Completed A", store.StatusCompleted, 100, 0},
+		{"sf_c2", "Completed B", store.StatusCompleted, 200, time.Hour},
+		{"sf_f1", "Failed A", store.StatusFailed, 0, 2 * time.Hour},
+	})
+
+	req := httptest.NewRequest("GET", "/api/history?apikey=test-api-key&status=completed", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var page store.HistoryPage
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if page.Total != 2 {
+		t.Errorf("Total = %d, want 2", page.Total)
+	}
+	for _, item := range page.Items {
+		if item.Status != store.StatusCompleted {
+			t.Errorf("unexpected status %q for item %s", item.Status, item.ID)
+		}
+	}
+}
+
+// TestHistoryListPagination verifies ?page=1&per_page=2 returns only 2 items
+// and that page 2 returns the next batch.
+func TestHistoryListPagination(t *testing.T) {
+	h, st := testAPI(t)
+	base := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	seedAPIHistory(t, st, base, []struct {
+		id     string
+		title  string
+		status string
+		size   int64
+		offset time.Duration
+	}{
+		{"pg_1", "Item 1", store.StatusCompleted, 100, 0},
+		{"pg_2", "Item 2", store.StatusCompleted, 100, time.Hour},
+		{"pg_3", "Item 3", store.StatusCompleted, 100, 2 * time.Hour},
+		{"pg_4", "Item 4", store.StatusCompleted, 100, 3 * time.Hour},
+		{"pg_5", "Item 5", store.StatusCompleted, 100, 4 * time.Hour},
+	})
+
+	doGet := func(url string) store.HistoryPage {
+		t.Helper()
+		req := httptest.NewRequest("GET", url, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+		}
+		var page store.HistoryPage
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return page
+	}
+
+	p1 := doGet("/api/history?apikey=test-api-key&page=1&per_page=2")
+	if p1.Total != 5 {
+		t.Errorf("page1 Total = %d, want 5", p1.Total)
+	}
+	if len(p1.Items) != 2 {
+		t.Errorf("page1 Items len = %d, want 2", len(p1.Items))
+	}
+
+	p2 := doGet("/api/history?apikey=test-api-key&page=2&per_page=2")
+	if len(p2.Items) != 2 {
+		t.Errorf("page2 Items len = %d, want 2", len(p2.Items))
+	}
+
+	// No overlap between pages.
+	page1IDs := make(map[string]bool)
+	for _, item := range p1.Items {
+		page1IDs[item.ID] = true
+	}
+	for _, item := range p2.Items {
+		if page1IDs[item.ID] {
+			t.Errorf("ID %q appears on both page 1 and page 2", item.ID)
+		}
+	}
+}
+
+// TestHistoryStats verifies GET /api/history/stats returns completed/failed/total_bytes counts.
+func TestHistoryStats(t *testing.T) {
+	h, st := testAPI(t)
+	base := time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
+	seedAPIHistory(t, st, base, []struct {
+		id     string
+		title  string
+		status string
+		size   int64
+		offset time.Duration
+	}{
+		{"hs_c1", "Completed One", store.StatusCompleted, 1000, 0},
+		{"hs_c2", "Completed Two", store.StatusCompleted, 2000, time.Hour},
+		{"hs_f1", "Failed One", store.StatusFailed, 0, 2 * time.Hour},
+	})
+
+	req := httptest.NewRequest("GET", "/api/history/stats?apikey=test-api-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var stats struct {
+		Completed  int   `json:"completed"`
+		Failed     int   `json:"failed"`
+		TotalBytes int64 `json:"total_bytes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("unmarshal: %v (body: %s)", err, w.Body.String())
+	}
+	if stats.Completed != 2 {
+		t.Errorf("completed = %d, want 2", stats.Completed)
+	}
+	if stats.Failed != 1 {
+		t.Errorf("failed = %d, want 1", stats.Failed)
+	}
+	if stats.TotalBytes != 3000 {
+		t.Errorf("total_bytes = %d, want 3000", stats.TotalBytes)
+	}
+}
+
+// TestHistoryStatsSinceFilter verifies ?since= filters by date for stats.
+func TestHistoryStatsSinceFilter(t *testing.T) {
+	h, st := testAPI(t)
+	// Two entries: one old, one new.
+	oldTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	newTime := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	oldDL := &store.Download{
+		ID: "hss_old", PID: "p_old", Title: "Old", Status: store.StatusCompleted,
+		Size: 500, CompletedAt: oldTime,
+	}
+	newDL := &store.Download{
+		ID: "hss_new", PID: "p_new", Title: "New", Status: store.StatusCompleted,
+		Size: 1500, CompletedAt: newTime,
+	}
+	st.PutHistory(oldDL)
+	st.PutHistory(newDL)
+
+	// Stats since 2024-03-01 should only count the new entry.
+	req := httptest.NewRequest("GET", "/api/history/stats?apikey=test-api-key&since=2024-03-01", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var stats struct {
+		Completed  int   `json:"completed"`
+		TotalBytes int64 `json:"total_bytes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if stats.Completed != 1 {
+		t.Errorf("completed = %d, want 1", stats.Completed)
+	}
+	if stats.TotalBytes != 1500 {
+		t.Errorf("total_bytes = %d, want 1500", stats.TotalBytes)
+	}
+}

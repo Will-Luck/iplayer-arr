@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/GiteaLN/iplayer-arr/internal/bbc"
@@ -26,6 +27,11 @@ type Handler struct {
 	ibl    *bbc.IBL
 	status *RuntimeStatus
 
+	// lastIndexerRequest stores the most recent time Sonarr (or any Newznab
+	// client) queried the indexer endpoint.  Stored as atomic.Value holding a
+	// time.Time so it can be updated from the newznab goroutine without locks.
+	lastIndexerRequest atomic.Value
+
 	// Fields set after construction (exported so main.go can populate them).
 	RingBuf     *RingBuffer
 	StartedAt   time.Time
@@ -33,6 +39,12 @@ type Handler struct {
 	// GeoProbe, when non-nil, re-runs the BBC geo check and returns true when
 	// UK access is confirmed.
 	GeoProbe func() bool
+}
+
+// RecordIndexerRequest records the current time as the most recent Newznab
+// indexer query.  Safe to call from any goroutine.
+func (h *Handler) RecordIndexerRequest() {
+	h.lastIndexerRequest.Store(time.Now().UTC())
 }
 
 // NewHandler creates a new API handler.
