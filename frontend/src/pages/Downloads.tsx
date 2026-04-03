@@ -5,20 +5,22 @@ import { addToast } from "../toast";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return (bytes / Math.pow(1024, i)).toFixed(1) + " " + units[i];
 }
 
 export default function Downloads() {
   const [entries, setEntries] = createSignal<DirectoryEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
+  const [error, setError] = createSignal<string | null>(null);
 
   async function loadDirectory() {
     try {
       setEntries(await api.listDirectory());
-    } catch {
-      // API may not be available
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load directory");
     } finally {
       setLoading(false);
     }
@@ -44,6 +46,10 @@ export default function Downloads() {
   return (
     <div>
       <h1 class="page-title">Downloads Directory</h1>
+
+      <Show when={error()}>
+        <p class="text-error">Failed to load downloads: {error()}</p>
+      </Show>
 
       <Show when={!loading()} fallback={<p class="text-muted">Loading...</p>}>
         <div class="card">
