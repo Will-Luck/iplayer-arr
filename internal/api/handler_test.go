@@ -30,6 +30,7 @@ func testAPI(t *testing.T) (*Handler, *store.Store) {
 	status := &RuntimeStatus{FFmpegVersion: "ffmpeg version 6.0"}
 
 	h := NewHandler(st, hub, nil, ibl, status)
+	h.RingBuf = NewRingBuffer(100)
 	return h, st
 }
 
@@ -59,6 +60,28 @@ func TestDownloadsNoAuth(t *testing.T) {
 
 	if w.Code != 200 {
 		t.Fatalf("expected 200 (no auth required), got %d", w.Code)
+	}
+}
+
+func TestHistoryListNoAuth(t *testing.T) {
+	h, _ := testAPI(t)
+	req := httptest.NewRequest("GET", "/api/history", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestHistoryStatsNoAuth(t *testing.T) {
+	h, _ := testAPI(t)
+	req := httptest.NewRequest("GET", "/api/history/stats", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
 

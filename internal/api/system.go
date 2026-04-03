@@ -41,9 +41,10 @@ func (h *Handler) handleSystem(w http.ResponseWriter, r *http.Request) {
 
 	// Geo status from runtime status.
 	if h.status != nil {
-		info.GeoOK = h.status.GeoOK
-		info.GeoCheckedAt = h.status.GeoCheckedAt
-		info.FFmpegVersion = h.status.FFmpegVersion
+		ffmpeg, geoOK, geoCheckedAt := h.status.Snapshot()
+		info.FFmpegVersion = ffmpeg
+		info.GeoOK = geoOK
+		info.GeoCheckedAt = geoCheckedAt
 	}
 
 	// FFmpeg binary path.
@@ -98,8 +99,7 @@ func (h *Handler) handleGeoCheck(w http.ResponseWriter, r *http.Request) {
 	checkedAt := time.Now().UTC().Format(time.RFC3339)
 
 	if h.status != nil {
-		h.status.GeoOK = geoOK
-		h.status.GeoCheckedAt = checkedAt
+		h.status.SetGeo(geoOK, checkedAt)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -14,9 +15,25 @@ import (
 
 // RuntimeStatus holds startup health check results for the status endpoint.
 type RuntimeStatus struct {
+	mu            sync.RWMutex
 	FFmpegVersion string
 	GeoOK         bool
 	GeoCheckedAt  string
+}
+
+// SetGeo updates GeoOK and GeoCheckedAt under the write lock.
+func (rs *RuntimeStatus) SetGeo(ok bool, checkedAt string) {
+	rs.mu.Lock()
+	rs.GeoOK = ok
+	rs.GeoCheckedAt = checkedAt
+	rs.mu.Unlock()
+}
+
+// Snapshot returns a consistent read of all RuntimeStatus fields.
+func (rs *RuntimeStatus) Snapshot() (ffmpeg string, geoOK bool, geoCheckedAt string) {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+	return rs.FFmpegVersion, rs.GeoOK, rs.GeoCheckedAt
 }
 
 // Handler is the REST API router for the frontend dashboard.
@@ -55,7 +72,6 @@ func NewHandler(st *store.Store, hub *Hub, mgr *download.Manager, ibl *bbc.IBL, 
 		mgr:       mgr,
 		ibl:       ibl,
 		status:    status,
-		RingBuf:   NewRingBuffer(1000),
 		StartedAt: time.Now(),
 	}
 }
@@ -76,8 +92,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/download" && r.Method == "POST":
 		h.handleManualDownload(w, r)
 	case path == "/api/history" && r.Method == "GET":
+		if !h.authenticate(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
 		h.handleListHistory(w, r)
 	case path == "/api/history/stats" && r.Method == "GET":
+		if !h.authenticate(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
 		h.handleHistoryStats(w, r)
 	case strings.HasPrefix(path, "/api/history/") && r.Method == "DELETE":
 		h.handleDeleteHistory(w, r)
