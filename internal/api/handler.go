@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/GiteaLN/iplayer-arr/internal/bbc"
 	"github.com/GiteaLN/iplayer-arr/internal/download"
@@ -14,25 +15,36 @@ import (
 type RuntimeStatus struct {
 	FFmpegVersion string
 	GeoOK         bool
+	GeoCheckedAt  string
 }
 
 // Handler is the REST API router for the frontend dashboard.
 type Handler struct {
-	store   *store.Store
-	hub     *Hub
-	mgr     *download.Manager
-	ibl     *bbc.IBL
-	status  *RuntimeStatus
+	store  *store.Store
+	hub    *Hub
+	mgr    *download.Manager
+	ibl    *bbc.IBL
+	status *RuntimeStatus
+
+	// Fields set after construction (exported so main.go can populate them).
+	RingBuf     *RingBuffer
+	StartedAt   time.Time
+	DownloadDir string
+	// GeoProbe, when non-nil, re-runs the BBC geo check and returns true when
+	// UK access is confirmed.
+	GeoProbe func() bool
 }
 
 // NewHandler creates a new API handler.
 func NewHandler(st *store.Store, hub *Hub, mgr *download.Manager, ibl *bbc.IBL, status *RuntimeStatus) *Handler {
 	return &Handler{
-		store:  st,
-		hub:    hub,
-		mgr:    mgr,
-		ibl:    ibl,
-		status: status,
+		store:     st,
+		hub:       hub,
+		mgr:       mgr,
+		ibl:       ibl,
+		status:    status,
+		RingBuf:   NewRingBuffer(1000),
+		StartedAt: time.Now(),
 	}
 }
 
@@ -40,9 +52,6 @@ func NewHandler(st *store.Store, hub *Hub, mgr *download.Manager, ibl *bbc.IBL, 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 
-	// All REST API endpoints are unauthenticated (network-level security via
-	// Tailscale/NPM). The SABnzbd and Newznab endpoints have their own API key
-	// auth for Sonarr integration.
 	switch {
 	case path == "/api/status" && r.Method == "GET":
 		h.handleStatus(w, r)
@@ -56,6 +65,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleManualDownload(w, r)
 	case path == "/api/history" && r.Method == "GET":
 		h.handleListHistory(w, r)
+	case path == "/api/history/stats" && r.Method == "GET":
+		h.handleHistoryStats(w, r)
 	case strings.HasPrefix(path, "/api/history/") && r.Method == "DELETE":
 		h.handleDeleteHistory(w, r)
 	case path == "/api/config" && r.Method == "GET":
@@ -80,6 +91,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/resume" && r.Method == "POST":
 		h.mgr.Resume()
 		writeJSON(w, http.StatusOK, map[string]bool{"paused": false})
+	case path == "/api/logs" && r.Method == "GET":
+		if !h.authenticate(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		h.handleLogs(w, r)
+	case path == "/api/system" && r.Method == "GET":
+		if !h.authenticate(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		h.handleSystem(w, r)
+	case path == "/api/system/geo-check" && r.Method == "POST":
+		if !h.authenticate(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		h.handleGeoCheck(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
@@ -107,7 +136,8 @@ func (h *Handler) authenticate(r *http.Request) bool {
 	return false
 }
 
-// writeJSON encodes v as JSON and writes it to the response with the given status code.
+// writeJSON encodes v as JSON and writes it to the response with the given
+// status code.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
