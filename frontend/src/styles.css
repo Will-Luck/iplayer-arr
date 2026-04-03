@@ -763,3 +763,117 @@ select.input {
   }
   .sidebar-toggle { display: none; }
 }
+
+/* Logs page */
+.log-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.log-panel {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 70vh;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.log-line { white-space: pre-wrap; word-break: break-all; }
+.log-debug { color: var(--text-secondary); }
+.log-info { color: var(--text-primary); }
+.log-warn { color: var(--warning); }
+.log-error { color: var(--danger); }
+
+.log-jump {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 50;
+}
+
+/* System page */
+.system-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.system-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.system-value {
+  font-size: 14px;
+}
+
+.system-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.system-row:last-child { border-bottom: none; }
+
+/* Setup wizard */
+.wizard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wizard-modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 90%;
+  max-width: 560px;
+  padding: 32px;
+}
+
+.wizard-progress {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.wizard-step {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-elevated);
+}
+
+.wizard-step.active {
+  background: var(--accent);
+}
+
+.wizard-step.done {
+  background: var(--success);
+}
+
+.copy-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.copy-btn:hover { background: var(--border); }
