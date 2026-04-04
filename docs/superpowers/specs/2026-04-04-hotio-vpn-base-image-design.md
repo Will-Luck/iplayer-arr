@@ -33,7 +33,7 @@ RUN apk add --no-cache ffmpeg tzdata su-exec
 FROM ghcr.io/hotio/base:alpinevpn
 RUN apk add --no-cache ffmpeg
 
-COPY --from=backend /iplayer-arr /app/iplayer-arr
+COPY --from=go-build /iplayer-arr /app/iplayer-arr
 COPY ./s6/ /etc/s6-overlay/s6-rc.d/
 
 ENV WEBUI_PORTS="8191/tcp"
@@ -52,7 +52,7 @@ Three files added in `s6/` at the repo root:
 ```
 s6/
   service-iplayer-arr/
-    run              # #!/usr/bin/env bash\nexec /app/iplayer-arr
+    run              # #!/usr/bin/env bash\nexec s6-setuidgid hotio /app/iplayer-arr
     type             # longrun
     dependencies.d/
       init-wireguard # empty file (start after VPN is ready)
@@ -63,6 +63,7 @@ s6/
 
 ### Behaviour
 
+- `s6-setuidgid hotio` in the run script drops privileges to the `hotio` user before exec-ing the binary. Hotio's `init-setup` service creates this user from `PUID`/`PGID` env vars and chowns `/config` and `/downloads` -- the same mechanism all hotio app images use.
 - s6-overlay starts `service-iplayer-arr` after `init-wireguard` completes
 - When VPN is disabled, `init-wireguard` is a no-op -- the app starts immediately
 - s6 handles restart-on-crash and graceful shutdown
@@ -87,14 +88,14 @@ docker run -d \
   -e TZ=Europe/London \
   -e VPN_ENABLED=true \
   -e VPN_PROVIDER=pia \
-  -e VPN_LAN_NETWORK=<media-station_default CIDR> \
+  -e VPN_LAN_NETWORK=192.168.1.0/24 \
   -e VPN_PIA_USER=<from 1password pia-vpn> \
   -e VPN_PIA_PASS=<from 1password pia-vpn> \
   -e VPN_PIA_PREFERRED_REGION=uk \
   iplayer-arr:latest
 ```
 
-`VPN_LAN_NETWORK` must be set to the Docker network subnet (from `docker network inspect media-station_default | grep Subnet`) so Sonarr can reach iplayer-arr through the kill switch.
+`VPN_LAN_NETWORK` is the home LAN CIDR (`192.168.1.0/24`) for access to ports listed in `WEBUI_PORTS`. Docker bridge network traffic between containers is auto-allowed by hotio's nftables rules (detected from interfaces matching `VPN_INTERFACE_PREFIXES`), so Sonarr reaches iplayer-arr through the Docker network without needing to be listed here. `VPN_LAN_NETWORK` is only needed for direct LAN access (e.g., browsing the UI from a desktop on the home network).
 
 ### Without VPN (public users)
 
