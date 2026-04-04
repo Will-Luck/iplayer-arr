@@ -13,7 +13,12 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend-build /app/frontend/dist ./internal/web/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -o /iplayer-arr ./cmd/iplayer-arr/
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build \
+  -ldflags "-X github.com/Will-Luck/iplayer-arr/internal/api.appVersion=${VERSION} \
+            -X github.com/Will-Luck/iplayer-arr/internal/api.buildDate=${BUILD_DATE}" \
+  -o /iplayer-arr ./cmd/iplayer-arr/
 
 # Stage 3: Runtime (hotio base with optional VPN)
 FROM ghcr.io/hotio/base:alpinevpn
