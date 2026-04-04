@@ -413,7 +413,24 @@ cd /home/lns/iplayer-arr
 docker build -t iplayer-arr:latest .
 ```
 
-- [ ] **Step 3: Stop and remove the current container**
+- [ ] **Step 3: Capture pre-redeploy baseline**
+
+Record current state so the persistence check in Step 7 has concrete values to compare against:
+
+```bash
+echo "=== PRE-REDEPLOY BASELINE ==="
+echo "API key prefix:"
+curl -s http://localhost:62932/api/config | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('api_key','MISSING')[:8])"
+echo "History total:"
+curl -s http://localhost:62932/api/history | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total', 'MISSING'))"
+echo "Overrides count:"
+curl -s http://localhost:62932/api/overrides | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else 'unexpected')"
+echo "=== END BASELINE ==="
+```
+
+Save this output -- you will compare against it in Step 7.
+
+- [ ] **Step 4: Stop and remove the current container**
 
 **APPROVAL GATE: Display the following before proceeding and wait for explicit permission.**
 
@@ -433,7 +450,7 @@ Changes:
 docker stop iplayer-arr && docker rm iplayer-arr
 ```
 
-- [ ] **Step 4: Start the new container**
+- [ ] **Step 5: Start the new container**
 
 ```bash
 docker run -d \
@@ -457,7 +474,7 @@ docker run -d \
   iplayer-arr:latest
 ```
 
-- [ ] **Step 5: Verify VPN and app health**
+- [ ] **Step 6: Verify VPN and app health**
 
 ```bash
 sleep 15
@@ -468,7 +485,7 @@ docker exec iplayer-arr wget -qO- https://ipinfo.io/country
 
 Expected: Logs show clean s6 init + WireGuard handshake, health returns `ok`, country returns `GB`.
 
-- [ ] **Step 5a: Verify LAN access through kill switch**
+- [ ] **Step 6a: Verify LAN access through kill switch**
 
 From the .58 Tailscale VM:
 
@@ -478,7 +495,7 @@ ssh tailscale-server "curl -s http://192.168.1.57:62932/health"
 
 Expected: `ok`. Confirms `VPN_LAN_NETWORK=192.168.1.0/24` allows inbound LAN access.
 
-- [ ] **Step 6: Verify Sonarr integration**
+- [ ] **Step 7: Verify Sonarr integration**
 
 ```bash
 docker exec sonarr wget -qO- http://iplayer-arr.internal:8191/health
@@ -486,22 +503,27 @@ docker exec sonarr wget -qO- http://iplayer-arr.internal:8191/health
 
 Expected: `ok`
 
-- [ ] **Step 7: Verify existing config/data survived**
+- [ ] **Step 8: Verify existing config/data survived**
 
-The `/api/status` endpoint only returns runtime state (ffmpeg, geo_ok, queue_depth). To verify the database persisted, check config and history endpoints:
+Compare against the baseline captured in Step 3:
 
 ```bash
-# Verify API key survived (config bucket)
-curl -s http://localhost:62932/api/config | python3 -c "import sys,json; d=json.load(sys.stdin); print('api_key:', d.get('api_key','MISSING')[:8] + '...')"
-
-# Verify history survived (history bucket)
-curl -s http://localhost:62932/api/history | python3 -c "import sys,json; d=json.load(sys.stdin); print('history_count:', len(d) if isinstance(d, list) else 'unexpected format')"
-
-# Verify overrides survived (overrides bucket)
-curl -s http://localhost:62932/api/overrides | python3 -c "import sys,json; d=json.load(sys.stdin); print('overrides_count:', len(d) if isinstance(d, list) else 'unexpected format')"
+echo "=== POST-REDEPLOY CHECK ==="
+echo "API key prefix (must match baseline):"
+curl -s http://localhost:62932/api/config | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('api_key','MISSING')[:8])"
+echo "History total (must match baseline):"
+curl -s http://localhost:62932/api/history | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total', 'MISSING'))"
+echo "Overrides count (must match baseline):"
+curl -s http://localhost:62932/api/overrides | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else 'unexpected')"
+echo "=== END CHECK ==="
 ```
 
-Expected: API key starts with the same prefix as before the redeploy, history count matches previous state, overrides are present. If any return empty/MISSING, the volume mount failed.
+Compare each value against the Step 3 baseline output:
+- API key prefix must be identical (same 8-char prefix)
+- History total must be equal or greater (new downloads may have occurred)
+- Overrides count must match exactly (zero is valid if baseline was zero)
+
+If any value is `MISSING` or does not match, the named volume did not mount correctly.
 
 ---
 
