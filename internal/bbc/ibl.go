@@ -124,79 +124,95 @@ func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
 }
 
 // ListEpisodes fetches all episodes for a brand or series PID.
+// It paginates through all pages (up to 20, i.e. 4000 episodes) to avoid
+// silently truncating brands with more than 200 episodes.
 func (ibl *IBL) ListEpisodes(pid string) ([]IBLResult, error) {
-	epURL := fmt.Sprintf("%s/programmes/%s/episodes?per_page=200&page=1",
-		ibl.BaseURL, pid)
+	var allResults []IBLResult
+	const perPage = 200
+	const maxPages = 20
 
-	body, err := ibl.client.Get(epURL)
-	if err != nil {
-		return nil, fmt.Errorf("iBL episodes: %w", err)
-	}
+	for page := 1; page <= maxPages; page++ {
+		epURL := fmt.Sprintf("%s/programmes/%s/episodes?per_page=%d&page=%d",
+			ibl.BaseURL, pid, perPage, page)
 
-	var resp struct {
-		ProgrammeEpisodes struct {
-			Elements []struct {
-				ID       string `json:"id"`
-				Type     string `json:"type"`
-				Title    string `json:"title"`
-				Subtitle string `json:"subtitle"`
-				Synopses struct {
-					Small string `json:"small"`
-				} `json:"synopses"`
-				Images struct {
-					Standard string `json:"standard"`
-				} `json:"images"`
-				MasterBrand struct {
-					Titles struct {
+		body, err := ibl.client.Get(epURL)
+		if err != nil {
+			return nil, fmt.Errorf("iBL episodes page %d: %w", page, err)
+		}
+
+		var resp struct {
+			ProgrammeEpisodes struct {
+				Elements []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Title    string `json:"title"`
+					Subtitle string `json:"subtitle"`
+					Synopses struct {
 						Small string `json:"small"`
-					} `json:"titles"`
-				} `json:"master_brand"`
-				ReleaseDate    string `json:"release_date"`
-				ParentPosition int    `json:"parent_position"`
-				TleoID         string `json:"tleo_id"`
-				Versions       []struct {
-					Duration struct {
-						Value string `json:"value"`
-					} `json:"duration"`
-				} `json:"versions"`
-			} `json:"elements"`
-		} `json:"programme_episodes"`
+					} `json:"synopses"`
+					Images struct {
+						Standard string `json:"standard"`
+					} `json:"images"`
+					MasterBrand struct {
+						Titles struct {
+							Small string `json:"small"`
+						} `json:"titles"`
+					} `json:"master_brand"`
+					ReleaseDate    string `json:"release_date"`
+					ParentPosition int    `json:"parent_position"`
+					TleoID         string `json:"tleo_id"`
+					Versions       []struct {
+						Duration struct {
+							Value string `json:"value"`
+						} `json:"duration"`
+					} `json:"versions"`
+				} `json:"elements"`
+				Page    int `json:"page"`
+				PerPage int `json:"per_page"`
+				Count   int `json:"count"`
+			} `json:"programme_episodes"`
+		}
+
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("parse iBL episodes page %d: %w", page, err)
+		}
+
+		for _, e := range resp.ProgrammeEpisodes.Elements {
+			if e.Type != "episode" {
+				continue
+			}
+			duration := 0
+			if len(e.Versions) > 0 && e.Versions[0].Duration.Value != "" {
+				duration = parseISODuration(e.Versions[0].Duration.Value)
+			}
+			result := IBLResult{
+				PID:      e.ID,
+				Title:    e.Title,
+				Subtitle: e.Subtitle,
+				Synopsis: e.Synopses.Small,
+				Channel:  e.MasterBrand.Titles.Small,
+				Position: e.ParentPosition,
+				AirDate:  e.ReleaseDate,
+				BrandPID: e.TleoID,
+				Duration: duration,
+			}
+			if e.Images.Standard != "" {
+				result.Thumbnail = strings.Replace(e.Images.Standard, "{recipe}", "960x540", 1)
+			}
+			result.Series, result.EpisodeNum = parseSubtitleNumbers(e.Subtitle)
+			allResults = append(allResults, result)
+		}
+
+		// Stop if we have all episodes or this page was empty.
+		total := resp.ProgrammeEpisodes.Count
+		if total <= 0 || len(allResults) >= total || len(resp.ProgrammeEpisodes.Elements) == 0 {
+			break
+		}
 	}
 
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse episodes: %w", err)
-	}
+	assignMissingEpisodeNumbers(allResults)
 
-	var results []IBLResult
-	for _, e := range resp.ProgrammeEpisodes.Elements {
-		if e.Type != "episode" {
-			continue
-		}
-		duration := 0
-		if len(e.Versions) > 0 && e.Versions[0].Duration.Value != "" {
-			duration = parseISODuration(e.Versions[0].Duration.Value)
-		}
-		result := IBLResult{
-			PID:      e.ID,
-			Title:    e.Title,
-			Subtitle: e.Subtitle,
-			Synopsis: e.Synopses.Small,
-			Channel:  e.MasterBrand.Titles.Small,
-			Position: e.ParentPosition,
-			AirDate:  e.ReleaseDate,
-			BrandPID: e.TleoID,
-			Duration: duration,
-		}
-		if e.Images.Standard != "" {
-			result.Thumbnail = strings.Replace(e.Images.Standard, "{recipe}", "960x540", 1)
-		}
-		result.Series, result.EpisodeNum = parseSubtitleNumbers(e.Subtitle)
-		results = append(results, result)
-	}
-
-	assignMissingEpisodeNumbers(results)
-
-	return results, nil
+	return allResults, nil
 }
 
 // parseISODuration parses an ISO 8601 duration like "PT10M0.040S" into seconds.
