@@ -162,9 +162,27 @@ func TestConfigGet(t *testing.T) {
 	if resp["quality"] != "1080p" {
 		t.Errorf("quality = %q", resp["quality"])
 	}
-	// api_key should be present in config response
-	if resp["api_key"] != "test-api-key" {
-		t.Errorf("api_key = %q", resp["api_key"])
+	// api_key must not be exposed in config response
+	if val, ok := resp["api_key"]; ok && val != "" {
+		t.Errorf("api_key should be absent or empty in response, got %q", val)
+	}
+}
+
+func TestConfigGetRedactsAPIKey(t *testing.T) {
+	h, _ := testAPI(t)
+	req := httptest.NewRequest("GET", "/api/config", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var cfg map[string]string
+	json.NewDecoder(w.Body).Decode(&cfg)
+
+	if val, ok := cfg["api_key"]; ok && val != "" {
+		t.Errorf("api_key should be empty or absent in response, got %q", val)
 	}
 }
 

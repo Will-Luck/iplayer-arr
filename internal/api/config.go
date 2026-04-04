@@ -24,6 +24,7 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg[key] = val
 	}
+	delete(cfg, "api_key")
 	writeJSON(w, http.StatusOK, cfg)
 }
 
