@@ -41,9 +41,9 @@ EXPOSE 8191
 VOLUME ["/config", "/downloads"]
 ```
 
-**Removed packages:** `tzdata`, `su-exec` (included in hotio base).
+**Removed packages:** `tzdata` (included in hotio base), `su-exec` (no longer needed -- s6-setuidgid handles privilege drop).
 **Removed:** Inline entrypoint script (hotio s6-overlay handles PUID/PGID, process management).
-**Added:** `WEBUI_PORTS` env var (tells the kill switch which ports to allow inbound LAN access on, so Sonarr can reach the Newznab/SABnzbd endpoints).
+**Added:** `WEBUI_PORTS` env var (tells the kill switch which ports to allow inbound from the home LAN via `VPN_LAN_NETWORK`). Docker bridge traffic between containers is auto-allowed by hotio's nftables rules.
 
 ## s6 Service Definition
 
@@ -135,7 +135,7 @@ Identical to the current experience. No `--cap-add`, no VPN env vars.
 ### README (when repo goes public)
 
 - **Basic usage section:** Simple docker run without VPN (default, primary documentation)
-- **VPN section:** Explains `--cap-add=NET_ADMIN`, `VPN_ENABLED=true`, provider env vars, `VPN_LAN_NETWORK` for container-to-container access
+- **VPN section:** Explains `--cap-add=NET_ADMIN`, `VPN_ENABLED=true`, provider env vars, `VPN_LAN_NETWORK` for direct LAN access to the web UI
 - **Links to hotio VPN docs** for the full env var reference rather than duplicating 20+ vars
 - **Environment variable table:** Extended with VPN vars marked as optional
 
