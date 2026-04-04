@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec s6-setuidgid hotio /app/iplayer-arr
