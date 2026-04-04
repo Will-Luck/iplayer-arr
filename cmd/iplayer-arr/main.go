@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/GiteaLN/iplayer-arr/internal/api"
-	"github.com/GiteaLN/iplayer-arr/internal/bbc"
-	"github.com/GiteaLN/iplayer-arr/internal/download"
-	"github.com/GiteaLN/iplayer-arr/internal/newznab"
-	"github.com/GiteaLN/iplayer-arr/internal/sabnzbd"
-	"github.com/GiteaLN/iplayer-arr/internal/store"
-	"github.com/GiteaLN/iplayer-arr/internal/web"
+	"github.com/Will-Luck/iplayer-arr/internal/api"
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
+	"github.com/Will-Luck/iplayer-arr/internal/download"
+	"github.com/Will-Luck/iplayer-arr/internal/newznab"
+	"github.com/Will-Luck/iplayer-arr/internal/sabnzbd"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/web"
 )
 
 func main() {

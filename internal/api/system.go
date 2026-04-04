@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/GiteaLN/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 // SystemInfo is the response body for GET /api/system.

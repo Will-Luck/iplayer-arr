@@ -1,4 +1,4 @@
-module github.com/GiteaLN/iplayer-arr
+module github.com/Will-Luck/iplayer-arr
 
 go 1.24.13
 

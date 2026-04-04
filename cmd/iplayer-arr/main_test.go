@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/GiteaLN/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 func testStore(t *testing.T) *store.Store {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GiteaLN/iplayer-arr/internal/bbc"
-	"github.com/GiteaLN/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GiteaLN/iplayer-arr/internal/bbc"
-	"github.com/GiteaLN/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 // testAPI creates a temporary store with an API key set and returns a Handler wired up for testing.

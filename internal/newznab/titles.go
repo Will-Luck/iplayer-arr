@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/GiteaLN/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 const releaseGroup = "iParr"

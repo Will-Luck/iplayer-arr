@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/GiteaLN/iplayer-arr/internal/bbc"
-	"github.com/GiteaLN/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 // EventBroadcaster sends real-time events to connected clients (e.g. SSE hub).

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GiteaLN/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 // mockStarter records StartDownload calls and creates real store entries.

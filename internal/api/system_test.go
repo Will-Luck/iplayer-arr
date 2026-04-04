@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GiteaLN/iplayer-arr/internal/store"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 func TestHandleSystemBasic(t *testing.T) {
