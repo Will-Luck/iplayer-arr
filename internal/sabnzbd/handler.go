@@ -29,9 +29,28 @@ func NewHandler(st *store.Store, starter DownloadStarter) *Handler {
 	return &Handler{store: st, starter: starter}
 }
 
+func sanitiseQuery(raw string) string {
+	if !strings.Contains(raw, "apikey=") {
+		return raw
+	}
+	params, err := url.ParseQuery(raw)
+	if err != nil {
+		return raw
+	}
+	if !params.Has("apikey") {
+		return raw
+	}
+	params.Del("apikey")
+	encoded := params.Encode()
+	if encoded == "" {
+		return "apikey=***"
+	}
+	return encoded + "&apikey=***"
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mode := r.URL.Query().Get("mode")
-	log.Printf("[sabnzbd] %s %s mode=%s params=%s", r.Method, r.URL.Path, mode, r.URL.RawQuery)
+	log.Printf("[sabnzbd] %s %s mode=%s params=%s", r.Method, r.URL.Path, mode, sanitiseQuery(r.URL.RawQuery))
 
 	switch mode {
 	case "version":
