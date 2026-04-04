@@ -35,6 +35,9 @@ type Manager struct {
 	wg      sync.WaitGroup
 	claimed map[string]context.CancelFunc
 	claimMu sync.Mutex
+
+	cancelled   map[string]struct{}
+	cancelledMu sync.Mutex
 }
 
 func NewManager(st *store.Store, downloadDir string, maxWorkers int,
@@ -49,6 +52,7 @@ func NewManager(st *store.Store, downloadDir string, maxWorkers int,
 		ms:          ms,
 		hub:         hub,
 		claimed:     make(map[string]context.CancelFunc),
+		cancelled:   make(map[string]struct{}),
 	}
 }
 
@@ -124,6 +128,7 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 }
 
 func (m *Manager) CancelDownload(nzoID string) error {
+	m.MarkCancelled(nzoID)
 	// If a worker is processing this download, cancel its context to kill ffmpeg
 	m.claimMu.Lock()
 	if cancel, ok := m.claimed[nzoID]; ok {
@@ -132,6 +137,25 @@ func (m *Manager) CancelDownload(nzoID string) error {
 	m.claimMu.Unlock()
 	m.store.DeleteDownload(nzoID)
 	return nil
+}
+
+func (m *Manager) MarkCancelled(id string) {
+	m.cancelledMu.Lock()
+	m.cancelled[id] = struct{}{}
+	m.cancelledMu.Unlock()
+}
+
+func (m *Manager) IsCancelled(id string) bool {
+	m.cancelledMu.Lock()
+	defer m.cancelledMu.Unlock()
+	_, ok := m.cancelled[id]
+	return ok
+}
+
+func (m *Manager) clearCancelled(id string) {
+	m.cancelledMu.Lock()
+	delete(m.cancelled, id)
+	m.cancelledMu.Unlock()
 }
 
 func (m *Manager) StartDownload(pid, quality, title, category string) (string, error) {

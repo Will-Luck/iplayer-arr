@@ -262,3 +262,30 @@ func TestWorkerLifecycle(t *testing.T) {
 	// but it should have gone through resolving and downloading stages.
 	t.Logf("final status: %s (error: %s)", dl.Status, dl.Error)
 }
+
+func TestCancelDownloadNoRezombie(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	m := NewManager(st, filepath.Join(dir, "downloads"), 2, nil, nil, nil, nil)
+
+	id, err := m.Enqueue("p_cancel_test", "720p", "Cancel.Test.S01E01", "sonarr")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	m.CancelDownload(id)
+
+	dl, _ := st.GetDownload(id)
+	if dl != nil {
+		t.Fatalf("download %s should be deleted, but still exists with status %q", id, dl.Status)
+	}
+
+	if m.IsCancelled(id) != true {
+		t.Error("expected IsCancelled to return true for a cancelled download")
+	}
+}

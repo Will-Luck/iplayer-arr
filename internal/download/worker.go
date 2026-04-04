@@ -153,8 +153,12 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 
 	ffErr := RunFFmpeg(ctx, job)
 	if ffErr != nil {
-		// If context was cancelled, return to pending (not failed) so it can be restarted.
 		if ctx.Err() != nil {
+			if m.IsCancelled(dl.ID) {
+				m.clearCancelled(dl.ID)
+				log.Printf("download %s cancelled by user, not returning to pending", dl.ID)
+				return
+			}
 			m.setStatus(dl, store.StatusPending, "")
 			log.Printf("download %s returned to pending (context cancelled)", dl.ID)
 			return
