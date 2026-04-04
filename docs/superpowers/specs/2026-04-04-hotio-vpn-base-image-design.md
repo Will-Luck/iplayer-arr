@@ -36,6 +36,7 @@ RUN apk add --no-cache ffmpeg
 COPY --from=go-build /iplayer-arr /app/iplayer-arr
 COPY ./s6/ /etc/s6-overlay/s6-rc.d/
 
+ENV TZ=Europe/London
 ENV WEBUI_PORTS="8191/tcp"
 EXPOSE 8191
 VOLUME ["/config", "/downloads"]
@@ -107,10 +108,11 @@ docker run -d \
   -v /path/to/downloads:/downloads \
   -e PUID=1000 \
   -e PGID=1000 \
+  -e TZ=Europe/London \
   iplayer-arr:latest
 ```
 
-Identical to the current experience. No `--cap-add`, no VPN env vars.
+Identical to the current experience. No `--cap-add`, no VPN env vars. The `TZ` default is baked into the image (`ENV TZ=Europe/London`) so it can be omitted, but shown here for clarity.
 
 ## CI/CD
 
