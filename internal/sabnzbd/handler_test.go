@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"mime/multipart"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/GiteaLN/iplayer-arr/internal/store"
@@ -229,5 +232,29 @@ func TestAddFile(t *testing.T) {
 	}
 	if dl.Quality != "720p" {
 		t.Errorf("quality = %q", dl.Quality)
+	}
+}
+
+func TestSABnzbdLogSanitisesAPIKey(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+	st.SetConfig("api_key", "secret-key-12345")
+
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stderr)
+
+	h := NewHandler(st, nil)
+	req := httptest.NewRequest("GET", "/sabnzbd/api?mode=version&apikey=secret-key-12345", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	logOutput := logBuf.String()
+	if strings.Contains(logOutput, "secret-key-12345") {
+		t.Errorf("log output contains raw API key:\n%s", logOutput)
+	}
+	if !strings.Contains(logOutput, "apikey=***") {
+		t.Errorf("log output should contain redacted apikey=***:\n%s", logOutput)
 	}
 }
