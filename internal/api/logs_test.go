@@ -126,6 +126,21 @@ func TestHandleLogsNoFilter(t *testing.T) {
 	}
 }
 
+func TestHandleLogsNoAuth(t *testing.T) {
+	entries := []LogEntry{
+		{Level: "info", Message: "startup complete"},
+	}
+	h := makeLogsHandler(t, entries)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/logs", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}
+
 func TestHandleLogsFilterByLevel(t *testing.T) {
 	entries := []LogEntry{
 		{Level: "info", Message: "ok"},

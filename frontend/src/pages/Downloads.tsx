@@ -53,8 +53,8 @@ export default function Downloads() {
 
       <Show when={!loading()} fallback={<p class="text-muted">Loading...</p>}>
         <div class="card">
-          <div class="card-header">
-            Folders ({entries().length})
+          <div class="card-header" style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+            <span>Folders ({entries().length})</span>
             <button class="btn btn-primary btn-sm ml-auto" onClick={loadDirectory}>Refresh</button>
           </div>
           <Show when={entries().length > 0} fallback={<div class="card-empty">Downloads directory is empty</div>}>

@@ -5,6 +5,7 @@ import { api } from "../api";
 import { addToast } from "../toast";
 
 export default function Config() {
+  const workerOptions = ["1", "2", "3", "5", "10", "15", "20"];
   const [config, setConfig] = createSignal<ConfigResponse | null>(null);
   const [copied, setCopied] = createSignal(false);
 
@@ -52,10 +53,13 @@ export default function Config() {
 
           <label class="text-secondary config-label" for="cfg-workers">Max Workers</label>
           <div>
-            <select id="cfg-workers" class="input config-disabled" value={config()!.max_workers} disabled aria-disabled="true">
-              <option value={config()!.max_workers}>{config()!.max_workers}</option>
+            <select id="cfg-workers" class="input config-select" value={config()!.max_workers} onChange={e => updateConfig("max_workers", e.target.value)}>
+              <Show when={!workerOptions.includes(config()!.max_workers)}>
+                <option value={config()!.max_workers}>{config()!.max_workers}</option>
+              </Show>
+              <For each={workerOptions}>{workers => <option value={workers}>{workers}</option>}</For>
             </select>
-            <p class="text-muted config-hint">Set via MAX_WORKERS environment variable</p>
+            <p class="text-muted config-hint">Number of concurrent download workers. Changes apply after restart.</p>
           </div>
 
           <label class="text-secondary config-label" for="cfg-dir">Download Dir</label>

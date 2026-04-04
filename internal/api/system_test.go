@@ -38,11 +38,24 @@ func TestHandleSystemBasic(t *testing.T) {
 	}
 }
 
+func TestHandleSystemNoAuth(t *testing.T) {
+	h, _ := testAPI(t)
+	h.StartedAt = time.Now().Add(-5 * time.Second)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/system", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}
+
 func TestHandleSystemGeoStatus(t *testing.T) {
 	h, _ := testAPI(t)
 	h.status = &RuntimeStatus{
-		GeoOK:        true,
-		GeoCheckedAt: "2026-04-01T10:00:00Z",
+		GeoOK:         true,
+		GeoCheckedAt:  "2026-04-01T10:00:00Z",
 		FFmpegVersion: "ffmpeg version 6.0",
 	}
 
@@ -137,12 +150,23 @@ func TestHandleGeoCheckNilProbe(t *testing.T) {
 
 func TestHandleGeoCheckNoAuth(t *testing.T) {
 	h, _ := testAPI(t)
+	h.status = &RuntimeStatus{GeoOK: false}
+	h.GeoProbe = func() bool { return true }
 
 	req := httptest.NewRequest(http.MethodPost, "/api/system/geo-check", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if !resp["geo_ok"].(bool) {
+		t.Error("expected geo_ok=true in response")
 	}
 }

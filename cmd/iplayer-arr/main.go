@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -63,7 +64,7 @@ func main() {
 	ms := bbc.NewMediaSelector(bbcClient)
 	playlist := bbc.NewPlaylistResolver(bbcClient)
 	hub := api.NewHub()
-	mgr := download.NewManager(st, downloadDir, 10, bbcClient, playlist, ms, hub)
+	mgr := download.NewManager(st, downloadDir, configuredMaxWorkers(st), bbcClient, playlist, ms, hub)
 
 	// Start download workers
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -231,4 +232,25 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func configuredMaxWorkers(st *store.Store) int {
+	const defaultMaxWorkers = 10
+
+	if st == nil {
+		return defaultMaxWorkers
+	}
+
+	raw, _ := st.GetConfig("max_workers")
+	if raw == "" {
+		return defaultMaxWorkers
+	}
+
+	workers, err := strconv.Atoi(raw)
+	if err != nil || workers < 1 {
+		log.Printf("invalid max_workers %q, using default %d", raw, defaultMaxWorkers)
+		return defaultMaxWorkers
+	}
+
+	return workers
 }

@@ -92,16 +92,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/download" && r.Method == "POST":
 		h.handleManualDownload(w, r)
 	case path == "/api/history" && r.Method == "GET":
-		if !h.authenticate(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
 		h.handleListHistory(w, r)
 	case path == "/api/history/stats" && r.Method == "GET":
-		if !h.authenticate(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
 		h.handleHistoryStats(w, r)
 	case strings.HasPrefix(path, "/api/history/") && r.Method == "DELETE":
 		h.handleDeleteHistory(w, r)
@@ -128,22 +120,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mgr.Resume()
 		writeJSON(w, http.StatusOK, map[string]bool{"paused": false})
 	case path == "/api/logs" && r.Method == "GET":
-		if !h.authenticate(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
 		h.handleLogs(w, r)
 	case path == "/api/system" && r.Method == "GET":
-		if !h.authenticate(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
 		h.handleSystem(w, r)
 	case path == "/api/system/geo-check" && r.Method == "POST":
-		if !h.authenticate(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
 		h.handleGeoCheck(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})

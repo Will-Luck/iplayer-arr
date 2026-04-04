@@ -334,7 +334,7 @@ export default function Dashboard() {
               }}
               onClick={togglePause}
             >
-              {paused() ? "Resume" : "Pause"}
+              {paused() ? "Resume Downloads" : "Pause Downloads"}
             </button>
           </div>
         )}

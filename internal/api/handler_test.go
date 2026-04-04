@@ -69,8 +69,19 @@ func TestHistoryListNoAuth(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var page store.HistoryPage
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if page.Total != 0 {
+		t.Errorf("total = %d, want 0", page.Total)
+	}
+	if len(page.Items) != 0 {
+		t.Errorf("items len = %d, want 0", len(page.Items))
 	}
 }
 
@@ -80,8 +91,26 @@ func TestHistoryStatsNoAuth(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var stats struct {
+		Completed  int   `json:"completed"`
+		Failed     int   `json:"failed"`
+		TotalBytes int64 `json:"total_bytes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if stats.Completed != 0 {
+		t.Errorf("completed = %d, want 0", stats.Completed)
+	}
+	if stats.Failed != 0 {
+		t.Errorf("failed = %d, want 0", stats.Failed)
+	}
+	if stats.TotalBytes != 0 {
+		t.Errorf("total_bytes = %d, want 0", stats.TotalBytes)
 	}
 }
 
@@ -154,6 +183,24 @@ func TestConfigPut(t *testing.T) {
 	val, _ := st.GetConfig("quality")
 	if val != "480p" {
 		t.Errorf("stored quality = %q", val)
+	}
+}
+
+func TestConfigPutMaxWorkers(t *testing.T) {
+	h, st := testAPI(t)
+
+	body := `{"key":"max_workers","value":"15"}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	val, _ := st.GetConfig("max_workers")
+	if val != "15" {
+		t.Errorf("stored max_workers = %q", val)
 	}
 }
 
