@@ -185,12 +185,12 @@ export default function Dashboard() {
 
   async function clearAllHistory() {
     if (!confirm("Delete all history entries? This cannot be undone.")) return;
-    const items = historyItems();
-    for (const dl of items) {
-      try {
-        await api.deleteHistory(dl.id);
-      } catch {
-        // continue
+    try {
+      await api.clearAllHistory();
+    } catch {
+      const items = historyItems();
+      for (const dl of items) {
+        try { await api.deleteHistory(dl.id); } catch { /* continue */ }
       }
     }
     refreshHistory();

@@ -95,6 +95,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleListHistory(w, r)
 	case path == "/api/history/stats" && r.Method == "GET":
 		h.handleHistoryStats(w, r)
+	case path == "/api/history" && r.Method == "DELETE":
+		h.handleClearHistory(w, r)
 	case strings.HasPrefix(path, "/api/history/") && r.Method == "DELETE":
 		h.handleDeleteHistory(w, r)
 	case path == "/api/config" && r.Method == "GET":

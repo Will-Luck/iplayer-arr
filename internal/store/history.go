@@ -185,3 +185,21 @@ func (s *Store) PutHistory(dl *Download) error {
 		return tx.Bucket(bucketHistory).Put([]byte(dl.ID), data)
 	})
 }
+
+// ClearHistory deletes every entry in the history bucket and returns the count
+// of entries removed.
+func (s *Store) ClearHistory() (int, error) {
+	var count int
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketHistory)
+		c := b.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+			count++
+		}
+		return nil
+	})
+	return count, err
+}

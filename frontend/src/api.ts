@@ -72,6 +72,7 @@ export const api = {
   listHistory: (params?: Record<string, string>) => get<HistoryPage>("/api/history", params),
   getHistoryStats: (since?: string) => get<HistoryStats>("/api/history/stats", since ? { since } : undefined),
   deleteHistory: (id: string) => del(`/api/history/${id}`),
+  clearAllHistory: () => del("/api/history"),
 
   // Config
   getConfig: () => get<ConfigResponse>("/api/config"),

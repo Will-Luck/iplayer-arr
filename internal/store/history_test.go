@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -217,5 +218,39 @@ func TestListHistoryFilteredSortByTitle(t *testing.T) {
 	}
 	if asc.Items[len(asc.Items)-1].Title != "Zebra" {
 		t.Errorf("title asc[last] = %q, want Zebra", asc.Items[len(asc.Items)-1].Title)
+	}
+}
+
+func TestClearHistory(t *testing.T) {
+	s := testStore(t)
+
+	for i := 0; i < 3; i++ {
+		dl := &Download{
+			ID:     fmt.Sprintf("test_%d", i),
+			PID:    fmt.Sprintf("p%d", i),
+			Status: StatusCompleted,
+			Title:  fmt.Sprintf("Test %d", i),
+		}
+		if err := s.PutHistory(dl); err != nil {
+			t.Fatalf("PutHistory: %v", err)
+		}
+	}
+
+	all, _ := s.ListHistory()
+	if len(all) != 3 {
+		t.Fatalf("expected 3 history entries, got %d", len(all))
+	}
+
+	n, err := s.ClearHistory()
+	if err != nil {
+		t.Fatalf("ClearHistory: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("ClearHistory returned %d, want 3", n)
+	}
+
+	all, _ = s.ListHistory()
+	if len(all) != 0 {
+		t.Errorf("expected 0 history entries after clear, got %d", len(all))
 	}
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -599,5 +600,37 @@ func TestHistoryStatsSinceFilter(t *testing.T) {
 	}
 	if stats.TotalBytes != 1500 {
 		t.Errorf("total_bytes = %d, want 1500", stats.TotalBytes)
+	}
+}
+
+func TestClearAllHistory(t *testing.T) {
+	h, st := testAPI(t)
+
+	for i := 0; i < 5; i++ {
+		st.PutHistory(&store.Download{
+			ID:     fmt.Sprintf("h_%d", i),
+			PID:    fmt.Sprintf("p%d", i),
+			Status: store.StatusCompleted,
+			Title:  fmt.Sprintf("Test %d", i),
+		})
+	}
+
+	req := httptest.NewRequest("DELETE", "/api/history", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["deleted"] != float64(5) {
+		t.Errorf("deleted = %v, want 5", resp["deleted"])
+	}
+
+	all, _ := st.ListHistory()
+	if len(all) != 0 {
+		t.Errorf("history should be empty, got %d", len(all))
 	}
 }

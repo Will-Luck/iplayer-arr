@@ -65,6 +65,15 @@ func (h *Handler) handleListHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
+func (h *Handler) handleClearHistory(w http.ResponseWriter, r *http.Request) {
+	n, err := h.store.ClearHistory()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": n})
+}
+
 func (h *Handler) handleDeleteHistory(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/history/")
 	if id == "" {
