@@ -269,7 +269,14 @@ rm -rf /tmp/iplayer-test-config /tmp/iplayer-test-downloads
 
 - [ ] **Step 7: Commit any fixes if needed**
 
-If steps 3-5 revealed issues, fix them and commit before proceeding.
+If any steps above failed, diagnose from `docker logs iplayer-arr-vpn-test`, fix the relevant file (likely `s6/service-iplayer-arr/run` or `Dockerfile`), rebuild with `docker build -t iplayer-arr:vpn-test .`, and re-run from Step 2. Once passing:
+
+```bash
+git add -A
+git commit -m "fix: correct s6/Dockerfile issues found during no-VPN testing"
+```
+
+If all steps passed, skip this step.
 
 ---
 
@@ -344,7 +351,19 @@ curl -s http://localhost:63000/health
 
 Expected: `ok`
 
-This confirms `WEBUI_PORTS` + `VPN_LAN_NETWORK` allows inbound LAN access through the kill switch.
+This confirms the container port mapping works through Docker's NAT. It does not test LAN access through the kill switch (that requires a request from a different host on 192.168.1.0/24).
+
+- [ ] **Step 6a: Verify LAN access through the kill switch**
+
+From the .58 Tailscale VM (a different host on the LAN):
+
+```bash
+ssh tailscale-server "curl -s http://192.168.1.57:63000/health"
+```
+
+Expected: `ok`
+
+This confirms `WEBUI_PORTS` + `VPN_LAN_NETWORK` allows inbound access from the home LAN through the nftables kill switch. If this fails but Step 6 passes, the kill switch is blocking LAN traffic and `VPN_LAN_NETWORK` needs checking.
 
 - [ ] **Step 7: Verify Docker bridge access (Sonarr path)**
 
@@ -449,6 +468,16 @@ docker exec iplayer-arr wget -qO- https://ipinfo.io/country
 
 Expected: Logs show clean s6 init + WireGuard handshake, health returns `ok`, country returns `GB`.
 
+- [ ] **Step 5a: Verify LAN access through kill switch**
+
+From the .58 Tailscale VM:
+
+```bash
+ssh tailscale-server "curl -s http://192.168.1.57:62932/health"
+```
+
+Expected: `ok`. Confirms `VPN_LAN_NETWORK=192.168.1.0/24` allows inbound LAN access.
+
 - [ ] **Step 6: Verify Sonarr integration**
 
 ```bash
@@ -459,11 +488,20 @@ Expected: `ok`
 
 - [ ] **Step 7: Verify existing config/data survived**
 
+The `/api/status` endpoint only returns runtime state (ffmpeg, geo_ok, queue_depth). To verify the database persisted, check config and history endpoints:
+
 ```bash
-curl -s http://localhost:62932/api/status
+# Verify API key survived (config bucket)
+curl -s http://localhost:62932/api/config | python3 -c "import sys,json; d=json.load(sys.stdin); print('api_key:', d.get('api_key','MISSING')[:8] + '...')"
+
+# Verify history survived (history bucket)
+curl -s http://localhost:62932/api/history | python3 -c "import sys,json; d=json.load(sys.stdin); print('history_count:', len(d) if isinstance(d, list) else 'unexpected format')"
+
+# Verify overrides survived (overrides bucket)
+curl -s http://localhost:62932/api/overrides | python3 -c "import sys,json; d=json.load(sys.stdin); print('overrides_count:', len(d) if isinstance(d, list) else 'unexpected format')"
 ```
 
-Expected: Status response with existing API key, queue state, history -- proving the named volume mounted correctly and the database is intact.
+Expected: API key starts with the same prefix as before the redeploy, history count matches previous state, overrides are present. If any return empty/MISSING, the volume mount failed.
 
 ---
 
@@ -484,7 +522,7 @@ Use the `/lucknet-ops:post-deploy` skill or manually update:
 3. Check `networklayout.md` -- port mapping is unchanged (62932:8191) so only the image description needs updating if listed
 4. Append to `changes.md`:
    ```
-   ## 2026-04-XX - iplayer-arr: hotio VPN base image integration
+   ## 2026-04-04 - iplayer-arr: hotio VPN base image integration
    - Switched runtime base from alpine:3.21 to ghcr.io/hotio/base:alpinevpn
    - Added optional WireGuard VPN with nftables kill switch (VPN_ENABLED=true)
    - PIA UK region configured for BBC iPlayer geo-compliance
@@ -554,9 +592,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
 
       - uses: docker/build-push-action@v6
         with:
