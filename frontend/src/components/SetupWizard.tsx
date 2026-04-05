@@ -1,5 +1,6 @@
 import { createSignal, onMount, Show } from "solid-js";
 import { api } from "../api";
+import { getSonarrSetup } from "../lib/sonarr-setup";
 import type { ConfigResponse } from "../types";
 
 export default function SetupWizard(props: { show: boolean; onComplete: () => void }) {
@@ -8,11 +9,8 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
   const [ffmpegOk, setFfmpegOk] = createSignal<boolean | null>(null);
   const [geoChecking, setGeoChecking] = createSignal(false);
   const [config, setConfig] = createSignal<ConfigResponse | null>(null);
-  const [testingIndexer, setTestingIndexer] = createSignal(false);
-  const [indexerOk, setIndexerOk] = createSignal<boolean | null>(null);
-  const [testingSab, setTestingSab] = createSignal(false);
-  const [sabOk, setSabOk] = createSignal<boolean | null>(null);
   const [copiedField, setCopiedField] = createSignal<string | null>(null);
+  const sonarrSetup = () => getSonarrSetup(window.location);
 
   onMount(async () => {
     try {
@@ -48,32 +46,6 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
     });
   }
 
-  async function testIndexer() {
-    setTestingIndexer(true);
-    setIndexerOk(null);
-    try {
-      const res = await fetch("/newznab/api?t=caps");
-      setIndexerOk(res.ok);
-    } catch {
-      setIndexerOk(false);
-    } finally {
-      setTestingIndexer(false);
-    }
-  }
-
-  async function testSab() {
-    setTestingSab(true);
-    setSabOk(null);
-    try {
-      const res = await fetch("/sabnzbd/api?mode=version");
-      setSabOk(res.ok);
-    } catch {
-      setSabOk(false);
-    } finally {
-      setTestingSab(false);
-    }
-  }
-
   function stepClass(n: number) {
     const s = step();
     if (n < s) return "wizard-step done";
@@ -100,14 +72,11 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
     <Show when={props.show}>
       <div class="wizard-overlay" role="dialog" aria-modal="true" aria-label="Setup wizard">
         <div class="wizard-modal">
-          {/* Progress bar */}
           <div class="wizard-progress" aria-label="Setup progress">
             <div class={stepClass(1)} />
             <div class={stepClass(2)} />
-            <div class={stepClass(3)} />
           </div>
 
-          {/* Step 1: Welcome & Health Check */}
           <Show when={step() === 1}>
             <h2 class="page-title" style="margin-bottom:8px">Welcome to iplayer-arr</h2>
             <p class="text-secondary" style="margin-bottom:20px">
@@ -158,26 +127,32 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
             </div>
           </Show>
 
-          {/* Step 2: Sonarr Indexer Setup */}
           <Show when={step() === 2}>
-            <h2 class="page-title" style="margin-bottom:8px">Sonarr Indexer Setup</h2>
+            <h2 class="page-title" style="margin-bottom:8px">Sonarr Setup</h2>
             <p class="text-secondary" style="margin-bottom:20px">
-              Add iplayer-arr as a Newznab indexer in Sonarr (Settings &gt; Indexers).
+              Add iplayer-arr to Sonarr using the values below.
             </p>
 
             <div class="card" style="margin-bottom:16px">
+              <div class="card-header">Newznab Indexer</div>
               <div class="card-body">
                 <div class="system-row">
                   <span class="system-label">Indexer URL</span>
                   <span style="display:flex;align-items:center;gap:8px">
-                    <code style="font-size:12px">http://&lt;host&gt;:&lt;port&gt;/newznab/api</code>
+                    <code style="font-size:12px">{sonarrSetup().indexerUrl}</code>
+                    <button
+                      class="copy-btn"
+                      onClick={() => copyField(sonarrSetup().indexerUrl, "indexer-url")}
+                    >
+                      {copiedField() === "indexer-url" ? "Copied!" : "Copy"}
+                    </button>
                   </span>
                 </div>
                 <div class="system-row">
                   <span class="system-label">API Key</span>
                   <span style="display:flex;align-items:center;gap:8px">
                     <code style="font-size:12px">{config()?.api_key ?? "—"}</code>
-                    <Show when={config()}>
+                    <Show when={config()?.api_key}>
                       <button
                         class="copy-btn"
                         onClick={() => copyField(config()!.api_key, "indexer-key")}
@@ -190,39 +165,14 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
               </div>
             </div>
 
-            <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn btn-sm" onClick={testIndexer} disabled={testingIndexer()}>
-                {testingIndexer() ? "Testing..." : "Test Connection"}
-              </button>
-              <Show when={indexerOk() !== null}>
-                <span class={indexerOk() ? "text-success" : "text-danger"} style="font-size:13px">
-                  {indexerOk() ? "Connected" : "Failed"}
-                </span>
-              </Show>
-              <button
-                class="btn btn-primary btn-sm"
-                style="margin-left:auto"
-                onClick={() => setStep(3)}
-              >
-                Next
-              </button>
-            </div>
-          </Show>
-
-          {/* Step 3: Sonarr Download Client Setup */}
-          <Show when={step() === 3}>
-            <h2 class="page-title" style="margin-bottom:8px">Sonarr Download Client</h2>
-            <p class="text-secondary" style="margin-bottom:20px">
-              Add iplayer-arr as a SABnzbd download client in Sonarr (Settings &gt; Download Clients).
-            </p>
-
             <div class="card" style="margin-bottom:16px">
+              <div class="card-header">SABnzbd Download Client</div>
               <div class="card-body">
                 {[
-                  { label: "Host", value: "<host>", key: "sab-host" },
-                  { label: "Port", value: "<port>", key: "sab-port" },
-                  { label: "URL Base", value: "/sabnzbd", key: "sab-base" },
-                  { label: "Category", value: "sonarr", key: "sab-cat" },
+                  { label: "Host", value: sonarrSetup().sabHost, key: "sab-host" },
+                  { label: "Port", value: sonarrSetup().sabPort, key: "sab-port" },
+                  { label: "URL Base", value: sonarrSetup().sabBase, key: "sab-base" },
+                  { label: "Category", value: sonarrSetup().sabCategory, key: "sab-cat" },
                 ].map((row) => (
                   <div class="system-row">
                     <span class="system-label">{row.label}</span>
@@ -241,7 +191,7 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
                   <span class="system-label">API Key</span>
                   <span style="display:flex;align-items:center;gap:8px">
                     <code style="font-size:12px">{config()?.api_key ?? "—"}</code>
-                    <Show when={config()}>
+                    <Show when={config()?.api_key}>
                       <button
                         class="copy-btn"
                         onClick={() => copyField(config()!.api_key, "sab-key")}
@@ -255,14 +205,9 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
             </div>
 
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn btn-sm" onClick={testSab} disabled={testingSab()}>
-                {testingSab() ? "Testing..." : "Test"}
+              <button class="btn btn-sm" onClick={() => setStep(1)}>
+                Back
               </button>
-              <Show when={sabOk() !== null}>
-                <span class={sabOk() ? "text-success" : "text-danger"} style="font-size:13px">
-                  {sabOk() ? "Connected" : "Failed"}
-                </span>
-              </Show>
               <button
                 class="btn btn-primary btn-sm"
                 style="margin-left:auto"

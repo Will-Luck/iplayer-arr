@@ -1,4 +1,6 @@
-# iplayer-arr
+<p align="center">
+  <img src="docs/logo.png" alt="iplayer-arr" width="500" />
+</p>
 
 BBC iPlayer download manager with a web UI, Sonarr integration, and built-in VPN support.
 

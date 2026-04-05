@@ -1,5 +1,6 @@
 import { A, useLocation } from "@solidjs/router";
 import { createSignal, onMount, onCleanup } from "solid-js";
+import Brand from "./Brand";
 
 export default function Nav() {
   const location = useLocation();
@@ -123,7 +124,7 @@ export default function Nav() {
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <div class="nav-brand">iplayer-arr</div>
+        <Brand />
       </div>
 
       <div
@@ -137,7 +138,7 @@ export default function Nav() {
         classList={{ collapsed: collapsed(), "mobile-open": mobileOpen() }}
         aria-label="Main navigation"
       >
-        <div class="nav-brand">iplayer-arr</div>
+        <Brand collapsed={collapsed()} />
 
         <div class="nav-links">
           {navItems.map((item) => (

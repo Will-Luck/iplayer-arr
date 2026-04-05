@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
@@ -15,8 +16,10 @@
     "solid-js": "^1.9.12"
   },
   "devDependencies": {
+    "jsdom": "^29.0.1",
     "typescript": "^6.0.2",
     "vite": "^8.0.3",
-    "vite-plugin-solid": "^2.11.11"
+    "vite-plugin-solid": "^2.11.11",
+    "vitest": "^3.2.4"
   }
 }

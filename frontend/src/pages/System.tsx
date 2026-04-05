@@ -2,6 +2,7 @@ import { createSignal, onMount, Show } from "solid-js";
 import type { SystemInfo } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
+import { getSonarrSetup } from "../lib/sonarr-setup";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -24,6 +25,7 @@ function formatUptime(seconds: number): string {
 export default function System() {
   const [info, setInfo] = createSignal<SystemInfo | null>(null);
   const [geoLoading, setGeoLoading] = createSignal(false);
+  const sonarrSetup = () => getSonarrSetup(window.location);
 
   onMount(async () => {
     try {
@@ -191,7 +193,7 @@ export default function System() {
                   <div class="system-row">
                     <span class="system-label">Indexer URL</span>
                     <span class="system-value text-secondary" style="word-break:break-all;font-size:12px">
-                      http://&lt;host&gt;:&lt;port&gt;/newznab/api
+                      {sonarrSetup().indexerUrl}
                     </span>
                   </div>
                   <div class="system-row">

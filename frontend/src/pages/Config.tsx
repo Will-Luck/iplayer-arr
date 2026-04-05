@@ -3,11 +3,13 @@ import type { ConfigResponse } from "../types";
 import { QUALITY_OPTIONS } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
+import { getSonarrSetup } from "../lib/sonarr-setup";
 
 export default function Config() {
   const workerOptions = ["1", "2", "3", "5", "10", "15", "20"];
   const [config, setConfig] = createSignal<ConfigResponse | null>(null);
   const [copied, setCopied] = createSignal(false);
+  const sonarrSetup = () => getSonarrSetup(window.location);
 
   onMount(async () => {
     setConfig(await api.getConfig());
@@ -85,12 +87,12 @@ export default function Config() {
         <div class="card-header">Sonarr Setup</div>
         <div class="card-body config-instructions">
           <p><strong>1. Add Indexer</strong> (Settings &gt; Indexers &gt; + &gt; Newznab)</p>
-          <p class="text-secondary">URL: <code>http://&lt;host&gt;:8191/newznab/api</code></p>
+          <p class="text-secondary">URL: <code>{sonarrSetup().indexerUrl}</code></p>
           <p class="text-secondary">API Key: <code>{config()!.api_key}</code></p>
           <p class="mt-12"><strong>2. Add Download Client</strong> (Settings &gt; Download Clients &gt; + &gt; SABnzbd)</p>
-          <p class="text-secondary">Host: <code>&lt;host&gt;</code> &nbsp; Port: <code>8191</code> &nbsp; URL Base: <code>/sabnzbd</code></p>
+          <p class="text-secondary">Host: <code>{sonarrSetup().sabHost}</code> &nbsp; Port: <code>{sonarrSetup().sabPort}</code> &nbsp; URL Base: <code>{sonarrSetup().sabBase}</code></p>
           <p class="text-secondary">API Key: <code>{config()!.api_key}</code></p>
-          <p class="text-secondary">Category: <code>sonarr</code></p>
+          <p class="text-secondary">Category: <code>{sonarrSetup().sabCategory}</code></p>
         </div>
       </div>
 
