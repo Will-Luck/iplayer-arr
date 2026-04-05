@@ -541,7 +541,7 @@ select.input {
   margin-top: 2px;
 }
 
-.text-center {
+.text-center, .table th.text-center, .table td.text-center {
   text-align: center;
 }
 
