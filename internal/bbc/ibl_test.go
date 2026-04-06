@@ -52,6 +52,73 @@ func TestIBLSearch(t *testing.T) {
 	}
 }
 
+func TestListEpisodesNormalisesLooseAirDate(t *testing.T) {
+	// BBC IBL returns release_date in human format ("6 Apr 2026") for some
+	// shows like EastEnders, alongside ISO format ("2026-04-09") for others.
+	// IBLResult.AirDate must always be canonical YYYY-MM-DD so downstream code
+	// (filters, title generation, pubDate) can rely on a single format.
+	payload := `{
+		"programme_episodes": {
+			"elements": [
+				{"id": "ep1", "type": "episode", "title": "EastEnders", "subtitle": "06/04/2026", "release_date": "6 Apr 2026", "parent_position": 7307},
+				{"id": "ep2", "type": "episode", "title": "EastEnders", "subtitle": "07/04/2026", "release_date": "2026-04-07", "parent_position": 7308}
+			],
+			"page": 1, "per_page": 2, "count": 2
+		}
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.ListEpisodes("b006m86d")
+	if err != nil {
+		t.Fatalf("ListEpisodes: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("len = %d, want 2", len(results))
+	}
+	if got := results[0].AirDate; got != "2026-04-06" {
+		t.Errorf("loose date: AirDate = %q, want %q", got, "2026-04-06")
+	}
+	if got := results[1].AirDate; got != "2026-04-07" {
+		t.Errorf("ISO date: AirDate = %q, want %q", got, "2026-04-07")
+	}
+}
+
+func TestSearchNormalisesLooseAirDate(t *testing.T) {
+	payload := `{
+		"new_search": {
+			"results": [
+				{"id": "ep1", "type": "episode", "title": "EastEnders", "subtitle": "06/04/2026", "release_date": "6 Apr 2026", "parent_position": 7307}
+			]
+		}
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.Search("eastenders", 1)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len = %d, want 1", len(results))
+	}
+	if got := results[0].AirDate; got != "2026-04-06" {
+		t.Errorf("AirDate = %q, want %q", got, "2026-04-06")
+	}
+}
+
 func TestListEpisodesPagination(t *testing.T) {
 	page1 := `{
 		"programme_episodes": {

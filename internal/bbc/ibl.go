@@ -90,14 +90,14 @@ func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
 
 		if r.Type == "episode" {
 			result := IBLResult{
-				PID:      r.ID,
-				Title:    r.Title,
-				Subtitle: r.Subtitle,
-				Synopsis: r.Synopses.Small,
-				Channel:  channel,
-				Position: r.ParentPosition,
-				AirDate:  r.ReleaseDate,
-				BrandPID: r.TleoID,
+				PID:       r.ID,
+				Title:     r.Title,
+				Subtitle:  r.Subtitle,
+				Synopsis:  r.Synopses.Small,
+				Channel:   channel,
+				Position:  r.ParentPosition,
+				AirDate:   normaliseAirDate(r.ReleaseDate),
+				BrandPID:  r.TleoID,
 				Thumbnail: thumb,
 			}
 			result.Series, result.EpisodeNum = parseSubtitleNumbers(r.Subtitle)
@@ -192,7 +192,7 @@ func (ibl *IBL) ListEpisodes(pid string) ([]IBLResult, error) {
 				Synopsis: e.Synopses.Small,
 				Channel:  e.MasterBrand.Titles.Small,
 				Position: e.ParentPosition,
-				AirDate:  e.ReleaseDate,
+				AirDate:  normaliseAirDate(e.ReleaseDate),
 				BrandPID: e.TleoID,
 				Duration: duration,
 			}
@@ -286,6 +286,20 @@ func parseLooseDate(s string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// normaliseAirDate converts BBC's mixed release_date formats ("6 Apr 2026",
+// "2026-04-06", etc.) to canonical YYYY-MM-DD so downstream code (filters,
+// title generation, RSS pubDate) can rely on a single format. Returns the
+// input unchanged if it can't be parsed.
+func normaliseAirDate(s string) string {
+	if s == "" {
+		return ""
+	}
+	if t := parseLooseDate(s); !t.IsZero() {
+		return t.Format("2006-01-02")
+	}
+	return s
 }
 
 func parseSubtitleNumbers(subtitle string) (series, episode int) {

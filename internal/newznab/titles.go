@@ -14,7 +14,17 @@ var (
 	reSpecialMarker = regexp.MustCompile(`(?i)\b(special|christmas|easter|new year|halloween|bonfire)\b`)
 	reUnsafe        = regexp.MustCompile(`[^a-zA-Z0-9.\- ]`)
 	reMultiDot      = regexp.MustCompile(`\.{2,}`)
+	// reDateSubtitle matches a bare date subtitle in DD/MM/YYYY (or .  / -)
+	// form, used by BBC daily soaps where the iPlayer subtitle is just the
+	// air date and there is no real series/episode numbering.
+	reDateSubtitle = regexp.MustCompile(`^\s*\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}\s*$`)
 )
+
+// isDateSubtitle reports whether s looks like a bare date (the only thing in
+// the subtitle field), as opposed to a normal episode title.
+func isDateSubtitle(s string) bool {
+	return reDateSubtitle.MatchString(s)
+}
 
 // GenerateTitle builds a Sonarr-compatible release title for the given
 // programme using the 4-tier identity resolution chain.  It returns the
@@ -61,6 +71,19 @@ func GenerateTitle(p *store.Programme, quality string, override *store.ShowOverr
 	// Tier 1: both series and episode number are known.
 	if series > 0 && episodeNum > 0 {
 		return buildSxxExxTitle(name, episode, series, episodeNum, quality), store.TierFull
+	}
+
+	// Tier 1.5: BBC daily soaps (EastEnders, Casualty, Holby City, Doctors,
+	// Coronation Street, Neighbours, ...) come from iPlayer with the
+	// subtitle as a literal date and parent_position as a flat cumulative
+	// counter. Without this branch we would fall through to Tier 2 and emit
+	// "S01E<position>" — Sonarr's parser would then try to look up
+	// season 1 episode <position> in TVDB and reject the release because no
+	// such episode exists. Promote to date tier so Sonarr matches by air
+	// date instead. The redundant date subtitle is dropped from the title
+	// to avoid the "S01E7307.06042026" tail.
+	if airDate != "" && isDateSubtitle(episode) {
+		return buildDateTitle(name, "", airDate, quality), store.TierDate
 	}
 
 	// Tier 2: use parent_position as the episode number within series 1.

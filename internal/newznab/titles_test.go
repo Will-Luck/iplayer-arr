@@ -142,6 +142,79 @@ func TestGenerateTitleForcePosition(t *testing.T) {
 	}
 }
 
+func TestGenerateTitleSubtitleIsBareDate(t *testing.T) {
+	// BBC daily soaps (EastEnders, Casualty, Holby City, Coronation Street,
+	// Doctors, Neighbours) come from iPlayer with the subtitle as a literal
+	// date and parent_position as a flat cumulative counter. Without
+	// auto-detection, the title would emit "S01E7307" via Tier 2, which
+	// Sonarr's parser maps to season 1 episode 7307 — no such episode exists
+	// for any of these long-running shows, and the release is rejected.
+	//
+	// When the subtitle is a bare date and we have an air date, GenerateTitle
+	// must promote to date tier so Sonarr's daily-episode parser matches by
+	// air date and finds the correct S/E.
+	p := &store.Programme{
+		Name:     "EastEnders",
+		Episode:  "06/04/2026",
+		Position: 7307,
+		AirDate:  "2026-04-06",
+	}
+	title, tier := GenerateTitle(p, "1080p", nil)
+	if tier != store.TierDate {
+		t.Errorf("tier = %q, want %q", tier, store.TierDate)
+	}
+	expected := "EastEnders.2026.04.06.1080p.WEB-DL.AAC.H264-iParr"
+	if title != expected {
+		t.Errorf("title = %q\nwant  = %q", title, expected)
+	}
+}
+
+func TestGenerateTitleSubtitleDateAlternateSeparators(t *testing.T) {
+	cases := []string{
+		"06/04/2026",
+		"06-04-2026",
+		"06.04.2026",
+		"6/4/2026",
+	}
+	for _, sub := range cases {
+		p := &store.Programme{
+			Name:     "Casualty",
+			Episode:  sub,
+			Position: 1234,
+			AirDate:  "2026-04-06",
+		}
+		title, tier := GenerateTitle(p, "720p", nil)
+		if tier != store.TierDate {
+			t.Errorf("subtitle=%q: tier = %q, want %q", sub, tier, store.TierDate)
+		}
+		expected := "Casualty.2026.04.06.720p.WEB-DL.AAC.H264-iParr"
+		if title != expected {
+			t.Errorf("subtitle=%q: title = %q\nwant  = %q", sub, title, expected)
+		}
+	}
+}
+
+func TestGenerateTitleNumberedShowNotPromoted(t *testing.T) {
+	// Shows with proper S/E numbering (Doctor Who etc.) must continue to use
+	// Tier 1 even if their air date is set. Auto-detection should only fire
+	// when series/episode numbering is missing.
+	p := &store.Programme{
+		Name:       "Doctor Who",
+		Episode:    "The Unquiet Dead",
+		Series:     1,
+		EpisodeNum: 3,
+		AirDate:    "2005-04-09",
+	}
+	title, tier := GenerateTitle(p, "720p", nil)
+	if tier != store.TierFull {
+		t.Errorf("tier = %q, want %q", tier, store.TierFull)
+	}
+	expected := "Doctor.Who.S01E03.The.Unquiet.Dead.720p.WEB-DL.AAC.H264-iParr"
+	if title != expected {
+		t.Errorf("title = %q\nwant  = %q", title, expected)
+	}
+}
+
 func TestSanitiseTitle(t *testing.T) {
 	tests := []struct {
 		in, want string

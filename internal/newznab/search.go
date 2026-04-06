@@ -31,7 +31,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeResultsRSS(w, r, results, 0, 0)
+	h.writeResultsRSS(w, r, results, 0, 0, "")
 }
 
 func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
@@ -76,20 +76,63 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	season, _ := strconv.Atoi(seasonStr)
 	ep, _ := strconv.Atoi(epStr)
 
-	h.writeResultsRSS(w, r, results, season, ep)
+	// Sonarr sends two distinct tvsearch shapes:
+	//   - Standard:    season=<int>          ep=<int>
+	//   - Daily series: season=<YYYY>         ep=<MM/DD>
+	// For daily soaps the integer compare against prog.Series/EpisodeNum
+	// can never match (iPlayer reports Series=0 + Position=<flat counter>),
+	// so detect the daily shape and filter by air date instead.
+	filterDate := parseDailySearchDate(seasonStr, epStr)
+
+	h.writeResultsRSS(w, r, results, season, ep, filterDate)
 }
 
-func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int) {
+// parseDailySearchDate returns YYYY-MM-DD when season looks like a 4-digit
+// year and ep looks like MM/DD (Sonarr's daily-series tvsearch convention).
+// Returns "" for any other shape so the standard integer filter is used.
+func parseDailySearchDate(seasonStr, epStr string) string {
+	if len(seasonStr) != 4 {
+		return ""
+	}
+	year, err := strconv.Atoi(seasonStr)
+	if err != nil || year < 1900 || year > 2100 {
+		return ""
+	}
+	parts := strings.Split(epStr, "/")
+	if len(parts) != 2 {
+		return ""
+	}
+	mm, err1 := strconv.Atoi(parts[0])
+	dd, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	if mm < 1 || mm > 12 || dd < 1 || dd > 31 {
+		return ""
+	}
+	return fmt.Sprintf("%04d-%02d-%02d", year, mm, dd)
+}
+
+func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate string) {
 	var items []string
 
 	for _, res := range results {
 		prog := iblResultToProgramme(res)
 
-		if filterSeason > 0 && prog.Series != filterSeason {
-			continue
-		}
-		if filterEp > 0 && prog.EpisodeNum != filterEp {
-			continue
+		if filterDate != "" {
+			// Daily-series filter: match against canonical YYYY-MM-DD
+			// air date instead of integer season/episode. Skips items
+			// that have no air date.
+			if prog.AirDate != filterDate {
+				continue
+			}
+		} else {
+			if filterSeason > 0 && prog.Series != filterSeason {
+				continue
+			}
+			if filterEp > 0 && prog.EpisodeNum != filterEp {
+				continue
+			}
 		}
 
 		var override *store.ShowOverride
