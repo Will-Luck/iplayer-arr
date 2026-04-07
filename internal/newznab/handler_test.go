@@ -1,13 +1,16 @@
 package newznab
 
 import (
+	"context"
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
+	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
 // fakeBBCServer returns an httptest.Server that responds to BBC iBL Search
@@ -25,11 +28,39 @@ func fakeBBCSearchServer(t *testing.T, payload string) *httptest.Server {
 // newHandlerWithBBC builds a Handler whose IBL is pointed at a fake BBC
 // server. Used by handleTVSearch tests.
 func newHandlerWithBBC(t *testing.T, payload string) *Handler {
+	return newHandlerWithBBCProber(t, payload, nil)
+}
+
+func newHandlerWithBBCProber(t *testing.T, payload string, prober qualityProber) *Handler {
 	t.Helper()
 	srv := fakeBBCSearchServer(t, payload)
 	ibl := bbc.NewIBL(bbc.NewClient())
 	ibl.BaseURL = srv.URL
-	return NewHandler(ibl, nil, nil)
+	return NewHandler(ibl, nil, nil, prober)
+}
+
+// mockProber is a test double for the quality prefetcher. It returns a
+// fixed map of PID -> heights (or nil for "probe failed"). Every
+// PrefetchPIDs call appends the received probeItems slice to calls
+// so tests can assert which PIDs were submitted.
+type mockProber struct {
+	results map[string][]int
+	calls   [][]bbc.ProbeItem
+}
+
+func (m *mockProber) PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) map[string][]int {
+	copied := make([]bbc.ProbeItem, len(items))
+	copy(copied, items)
+	m.calls = append(m.calls, copied)
+	out := make(map[string][]int, len(items))
+	for _, it := range items {
+		if heights, ok := m.results[it.PID]; ok {
+			out[it.PID] = heights
+		} else {
+			out[it.PID] = nil
+		}
+	}
+	return out
 }
 
 const eastendersOneEpisodePayload = `{
@@ -41,7 +72,7 @@ const eastendersOneEpisodePayload = `{
 }`
 
 func TestCapsEndpoint(t *testing.T) {
-	h := NewHandler(nil, nil, nil)
+	h := NewHandler(nil, nil, nil, nil)
 	req := httptest.NewRequest("GET", "/newznab/api?t=caps", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -66,14 +97,17 @@ func TestCapsEndpoint(t *testing.T) {
 	}
 }
 
+type rssItem struct {
+	Title string `xml:"title"`
+	GUID  string `xml:"guid"`
+}
+
 // itemTitles extracts <title> values from a Newznab RSS body, skipping the
 // channel title.
 func itemTitles(body string) []string {
 	var doc struct {
 		Channel struct {
-			Items []struct {
-				Title string `xml:"title"`
-			} `xml:"item"`
+			Items []rssItem `xml:"item"`
 		} `xml:"channel"`
 	}
 	if err := xml.Unmarshal([]byte(body), &doc); err != nil {
@@ -84,6 +118,50 @@ func itemTitles(body string) []string {
 		titles = append(titles, it.Title)
 	}
 	return titles
+}
+
+func rssItems(body string) []rssItem {
+	var doc struct {
+		Channel struct {
+			Items []rssItem `xml:"item"`
+		} `xml:"channel"`
+	}
+	if err := xml.Unmarshal([]byte(body), &doc); err != nil {
+		return nil
+	}
+	return doc.Channel.Items
+}
+
+func itemQualities(t *testing.T, body string) []string {
+	t.Helper()
+	items := rssItems(body)
+	qualities := make([]string, 0, len(items))
+	for _, it := range items {
+		u, err := url.Parse(strings.TrimSpace(it.GUID))
+		if err != nil {
+			t.Fatalf("parse GUID URL %q: %v", it.GUID, err)
+		}
+		info, err := DecodeGUID(u.Query().Get("id"))
+		if err != nil {
+			t.Fatalf("decode GUID %q: %v", it.GUID, err)
+		}
+		qualities = append(qualities, info.Quality)
+	}
+	return qualities
+}
+
+func countQuality(qualities []string, want string) int {
+	count := 0
+	for _, quality := range qualities {
+		if quality == want {
+			count++
+		}
+	}
+	return count
+}
+
+func newSearchPayload(results ...string) string {
+	return `{"new_search":{"results":[` + strings.Join(results, ",") + `]}}`
 }
 
 func TestHandleTVSearchDailyMatchByDate(t *testing.T) {
@@ -225,5 +303,206 @@ func TestHandleTVSearchStandardSEStillWorks(t *testing.T) {
 		if !strings.Contains(title, "S01E03") {
 			t.Errorf("title = %q, want S01E03", title)
 		}
+	}
+}
+
+func TestSearch_ProbedPIDWith1080p_Emits1080p(t *testing.T) {
+	prober := &mockProber{results: map[string][]int{"m002ttg5": {1080, 720, 540}}}
+	h := newHandlerWithBBCProber(t, eastendersOneEpisodePayload, prober)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	qualities := itemQualities(t, w.Body.String())
+	if countQuality(qualities, "1080p") == 0 {
+		t.Fatalf("expected at least one 1080p item, got %v", qualities)
+	}
+}
+
+func TestSearch_ProbedPIDWith720pOnly_OmitsFake1080p(t *testing.T) {
+	prober := &mockProber{results: map[string][]int{"m002ttg5": {720, 540}}}
+	h := newHandlerWithBBCProber(t, eastendersOneEpisodePayload, prober)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	qualities := itemQualities(t, w.Body.String())
+	if countQuality(qualities, "1080p") != 0 {
+		t.Fatalf("expected no 1080p items, got %v", qualities)
+	}
+	if len(qualities) != 2 || countQuality(qualities, "720p") != 1 || countQuality(qualities, "540p") != 1 {
+		t.Fatalf("expected exactly [720p 540p], got %v", qualities)
+	}
+}
+
+func TestSearch_ProbeFailure_Emits720pAnd540pFallback(t *testing.T) {
+	prober := &mockProber{results: map[string][]int{"m002ttg5": nil}}
+	h := newHandlerWithBBCProber(t, eastendersOneEpisodePayload, prober)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	qualities := itemQualities(t, w.Body.String())
+	if len(qualities) != 2 || countQuality(qualities, "720p") != 1 || countQuality(qualities, "540p") != 1 || countQuality(qualities, "1080p") != 0 {
+		t.Fatalf("expected fallback qualities [720p 540p], got %v", qualities)
+	}
+}
+
+func TestSearch_PrefetchOnlyForFilteredResults_NameFilter(t *testing.T) {
+	payload := newSearchPayload(
+		`{"id":"dw1","type":"episode","title":"Doctor Who","subtitle":"Series 1: 1. Rose","release_date":"2005-03-26","parent_position":1}`,
+		`{"id":"dw2","type":"episode","title":"Doctor Who","subtitle":"Series 1: 2. The End of the World","release_date":"2005-04-02","parent_position":2}`,
+		`{"id":"other1","type":"episode","title":"EastEnders","subtitle":"Series 1: 1. One","release_date":"2026-04-01","parent_position":1}`,
+		`{"id":"other2","type":"episode","title":"Newsnight","subtitle":"Series 1: 1. One","release_date":"2026-04-01","parent_position":1}`,
+		`{"id":"other3","type":"episode","title":"Blue Peter","subtitle":"Series 1: 1. One","release_date":"2026-04-01","parent_position":1}`,
+		`{"id":"other4","type":"episode","title":"Panorama","subtitle":"Series 1: 1. One","release_date":"2026-04-01","parent_position":1}`,
+		`{"id":"other5","type":"episode","title":"Question Time","subtitle":"Series 1: 1. One","release_date":"2026-04-01","parent_position":1}`,
+		`{"id":"other6","type":"episode","title":"Casualty","subtitle":"Series 1: 1. One","release_date":"2026-04-01","parent_position":1}`,
+		`{"id":"other7","type":"episode","title":"Silent Witness","subtitle":"Series 1: 1. One","release_date":"2026-04-01","parent_position":1}`,
+		`{"id":"other8","type":"episode","title":"Gardeners' World","subtitle":"Series 1: 1. One","release_date":"2026-04-01","parent_position":1}`,
+	)
+	prober := &mockProber{results: map[string][]int{"dw1": {720, 540}, "dw2": {720, 540}}}
+	h := newHandlerWithBBCProber(t, payload, prober)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=doctor+who", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if len(prober.calls) != 1 {
+		t.Fatalf("expected one prefetch call, got %d", len(prober.calls))
+	}
+	if len(prober.calls[0]) != 2 {
+		t.Fatalf("expected 2 prefetched PIDs, got %d: %+v", len(prober.calls[0]), prober.calls[0])
+	}
+	got := map[string]bool{}
+	for _, item := range prober.calls[0] {
+		got[item.PID] = true
+	}
+	if !got["dw1"] || !got["dw2"] || len(got) != 2 {
+		t.Fatalf("expected prefetched PIDs dw1 and dw2, got %+v", prober.calls[0])
+	}
+}
+
+func TestSearch_PrefetchOnlyForFilteredResults_SeasonEpisode(t *testing.T) {
+	payload := newSearchPayload(
+		`{"id":"p1","type":"episode","title":"Doctor Who","subtitle":"Series 14: 1. One","release_date":"2026-04-01","parent_position":1}`,
+		`{"id":"p2","type":"episode","title":"Doctor Who","subtitle":"Series 14: 2. Two","release_date":"2026-04-08","parent_position":2}`,
+		`{"id":"p3","type":"episode","title":"Doctor Who","subtitle":"Series 14: 3. Three","release_date":"2026-04-15","parent_position":3}`,
+		`{"id":"p4","type":"episode","title":"Doctor Who","subtitle":"Series 14: 4. Four","release_date":"2026-04-22","parent_position":4}`,
+		`{"id":"p5","type":"episode","title":"Doctor Who","subtitle":"Series 14: 5. Five","release_date":"2026-04-29","parent_position":5}`,
+		`{"id":"p6","type":"episode","title":"Doctor Who","subtitle":"Series 14: 6. Six","release_date":"2026-05-06","parent_position":6}`,
+		`{"id":"p7","type":"episode","title":"Doctor Who","subtitle":"Series 14: 7. Seven","release_date":"2026-05-13","parent_position":7}`,
+		`{"id":"p8","type":"episode","title":"Doctor Who","subtitle":"Series 14: 8. Eight","release_date":"2026-05-20","parent_position":8}`,
+		`{"id":"p9","type":"episode","title":"Doctor Who","subtitle":"Series 14: 9. Nine","release_date":"2026-05-27","parent_position":9}`,
+		`{"id":"p10","type":"episode","title":"Doctor Who","subtitle":"Series 14: 10. Ten","release_date":"2026-06-03","parent_position":10}`,
+		`{"id":"p11","type":"episode","title":"Doctor Who","subtitle":"Series 14: 11. Eleven","release_date":"2026-06-10","parent_position":11}`,
+		`{"id":"p12","type":"episode","title":"Doctor Who","subtitle":"Series 14: 12. Twelve","release_date":"2026-06-17","parent_position":12}`,
+	)
+	prober := &mockProber{results: map[string][]int{"p3": {720, 540}}}
+	h := newHandlerWithBBCProber(t, payload, prober)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=doctor+who&season=14&ep=3", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if len(prober.calls) != 1 {
+		t.Fatalf("expected one prefetch call, got %d", len(prober.calls))
+	}
+	if len(prober.calls[0]) != 1 || prober.calls[0][0].PID != "p3" {
+		t.Fatalf("expected exactly pid p3 to be prefetched, got %+v", prober.calls[0])
+	}
+}
+
+func TestSearch_PrefetchOnlyForFilteredResults_DailyDate(t *testing.T) {
+	payload := newSearchPayload(
+		`{"id":"n1","type":"episode","title":"Newsnight","subtitle":"05/04/2026","release_date":"2026-04-05","parent_position":1}`,
+		`{"id":"n2","type":"episode","title":"Newsnight","subtitle":"04/04/2026","release_date":"2026-04-04","parent_position":2}`,
+		`{"id":"n3","type":"episode","title":"Newsnight","subtitle":"03/04/2026","release_date":"2026-04-03","parent_position":3}`,
+		`{"id":"n4","type":"episode","title":"Newsnight","subtitle":"02/04/2026","release_date":"2026-04-02","parent_position":4}`,
+		`{"id":"n5","type":"episode","title":"Newsnight","subtitle":"01/04/2026","release_date":"2026-04-01","parent_position":5}`,
+		`{"id":"n6","type":"episode","title":"Newsnight","subtitle":"06/04/2026","release_date":"2026-04-06","parent_position":6}`,
+		`{"id":"n7","type":"episode","title":"Newsnight","subtitle":"07/04/2026","release_date":"2026-04-07","parent_position":7}`,
+	)
+	prober := &mockProber{results: map[string][]int{"n1": {720, 540}}}
+	h := newHandlerWithBBCProber(t, payload, prober)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=newsnight&season=2026&ep=04%2F05", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if len(prober.calls) != 1 {
+		t.Fatalf("expected one prefetch call, got %d", len(prober.calls))
+	}
+	if len(prober.calls[0]) != 1 || prober.calls[0][0].PID != "n1" {
+		t.Fatalf("expected exactly pid n1 to be prefetched, got %+v", prober.calls[0])
+	}
+}
+
+func TestSearch_NoProberConfigured_OmitsExtraQualities(t *testing.T) {
+	h := newHandlerWithBBC(t, eastendersOneEpisodePayload)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	qualities := itemQualities(t, w.Body.String())
+	if len(qualities) != 2 || countQuality(qualities, "720p") != 1 || countQuality(qualities, "540p") != 1 || countQuality(qualities, "1080p") != 0 {
+		t.Fatalf("expected no-prober fallback qualities [720p 540p], got %v", qualities)
+	}
+}
+
+func TestSearch_DuplicatePIDFromBrandAndEpisode_ProbesOnce(t *testing.T) {
+	payload := newSearchPayload(
+		`{"id":"dup1","type":"episode","title":"Doctor Who","subtitle":"Series 14: 3. Three","release_date":"2026-04-15","parent_position":3}`,
+		`{"id":"dup1","type":"episode","title":"Doctor Who","subtitle":"Series 14: 3. Three","release_date":"2026-04-15","parent_position":3}`,
+	)
+	prober := &mockProber{results: map[string][]int{"dup1": {1080, 720, 540}}}
+	h := newHandlerWithBBCProber(t, payload, prober)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=doctor+who", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if len(prober.calls) != 1 {
+		t.Fatalf("expected one prefetch call, got %d", len(prober.calls))
+	}
+	if len(prober.calls[0]) != 1 || prober.calls[0][0].PID != "dup1" {
+		t.Fatalf("expected duplicate PID to be prefetched once, got %+v", prober.calls[0])
+	}
+
+	items := rssItems(w.Body.String())
+	if len(items) != 3 {
+		t.Fatalf("expected one item per quality for a deduped PID, got %d items", len(items))
+	}
+	seenGUIDs := map[string]struct{}{}
+	for _, item := range items {
+		if _, dup := seenGUIDs[item.GUID]; dup {
+			t.Fatalf("duplicate GUID detected: %q", item.GUID)
+		}
+		seenGUIDs[item.GUID] = struct{}{}
+	}
+}
+
+func TestMatchesSearchFilter_TableDriven(t *testing.T) {
+	cases := []struct {
+		name                   string
+		prog                   *store.Programme
+		wantName, filterDate   string
+		filterSeason, filterEp int
+		want                   bool
+	}{
+		{"no filters, all pass", &store.Programme{Name: "Doctor Who"}, "", "", 0, 0, true},
+		{"name match", &store.Programme{Name: "Doctor Who"}, "doctor who", "", 0, 0, true},
+		{"name mismatch", &store.Programme{Name: "EastEnders"}, "doctor who", "", 0, 0, false},
+		{"season match", &store.Programme{Name: "Doctor Who", Series: 14}, "doctor who", "", 14, 0, true},
+		{"season mismatch", &store.Programme{Name: "Doctor Who", Series: 13}, "doctor who", "", 14, 0, false},
+		{"season+ep match", &store.Programme{Name: "Doctor Who", Series: 14, EpisodeNum: 3}, "doctor who", "", 14, 3, true},
+		{"season+ep mismatch", &store.Programme{Name: "Doctor Who", Series: 14, EpisodeNum: 2}, "doctor who", "", 14, 3, false},
+		{"daily date match", &store.Programme{Name: "Newsnight", AirDate: "2026-04-05"}, "newsnight", "2026-04-05", 0, 0, true},
+		{"daily date mismatch", &store.Programme{Name: "Newsnight", AirDate: "2026-04-04"}, "newsnight", "2026-04-05", 0, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := matchesSearchFilter(tc.prog, tc.wantName, tc.filterDate, tc.filterSeason, tc.filterEp)
+			if got != tc.want {
+				t.Errorf("matchesSearchFilter(%+v, %q, %q, %d, %d) = %v, want %v",
+					tc.prog, tc.wantName, tc.filterDate, tc.filterSeason, tc.filterEp, got, tc.want)
+			}
+		})
 	}
 }

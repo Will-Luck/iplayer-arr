@@ -63,6 +63,9 @@ func main() {
 	ibl := bbc.NewIBL(bbcClient)
 	ms := bbc.NewMediaSelector(bbcClient)
 	playlist := bbc.NewPlaylistResolver(bbcClient)
+	probeConcurrency := envIntDefault("IPLAYER_PROBE_CONCURRENCY", 8)
+	probeTimeout := time.Duration(envIntDefault("IPLAYER_PROBE_TIMEOUT_SEC", 20)) * time.Second
+	prober := bbc.NewQualityProber(playlist, ms, bbcClient, st, probeConcurrency, probeTimeout)
 	hub := api.NewHub()
 	mgr := download.NewManager(st, downloadDir, configuredMaxWorkers(st), bbcClient, playlist, ms, hub)
 
@@ -123,7 +126,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	nzHandler := newznab.NewHandler(ibl, st, ms)
+	nzHandler := newznab.NewHandler(ibl, st, ms, prober)
 	nzHandler.SetOnRequest(apiHandler.RecordIndexerRequest)
 	mux.Handle("/newznab/", nzHandler)
 	mux.Handle("/sabnzbd/", sabnzbd.NewHandler(st, mgr))
@@ -232,6 +235,19 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envIntDefault(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Printf("invalid %s %q, using default %d", key, raw, fallback)
+		return fallback
+	}
+	return value
 }
 
 func configuredMaxWorkers(st *store.Store) int {

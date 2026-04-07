@@ -52,17 +52,33 @@ func parseProgress(line string) (FFmpegProgress, bool) {
 	return p, true
 }
 
+// downloaderFHDProber is the single method resolveHLSVariant needs
+// from bbc.Client. Kept as a local interface so ffmpeg_hls_test.go can
+// inject a fake without importing bbc. *bbc.Client satisfies this
+// automatically via Go's structural typing.
+type downloaderFHDProber interface {
+	ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (fhdURL string, found bool, err error)
+}
+
 type FFmpegJob struct {
 	StreamURL  string
 	OutputPath string
 	OnProgress func(FFmpegProgress)
+	FHDProber  downloaderFHDProber // NEW — satisfied by *bbc.Client
 }
 
-// resolveHLSVariant fetches the master playlist, finds the highest-bandwidth
-// variant, then probes for an unlisted 1080p variant (video=12000000) which
-// BBC hosts but omits from the manifest. Falls back to the highest listed
-// variant if the 1080p probe returns non-200.
-func resolveHLSVariant(masterURL string) string {
+// resolveHLSVariant fetches the master playlist, finds the highest-
+// bandwidth variant, and delegates FHD probing to the shared helper.
+// Falls back to the highest listed variant if the FHD probe returns
+// not-found OR any error. The ctx argument is the RunFFmpeg ctx and
+// is forwarded to the prober so download cancellation propagates.
+//
+// NOTE: this function keeps its own master-playlist fetch and bestBW
+// selection for v1.1.0 rather than delegating the entire pipeline to
+// ProbeHiddenFHD. The duplication is documented in the spec's
+// Non-Goals section as an intentional v1.1.0 trade-off; consolidation
+// is a follow-up refactor for a later release.
+func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterURL string) string {
 	resp, err := http.Get(masterURL)
 	if err != nil {
 		log.Printf("failed to fetch master playlist: %v", err)
@@ -100,36 +116,31 @@ func resolveHLSVariant(masterURL string) string {
 		return masterURL
 	}
 
-	// Resolve relative to master playlist base
-	base := masterURL
-	if idx := strings.LastIndex(base, "/"); idx >= 0 {
-		base = base[:idx+1]
-	}
+	// Resolve relative to master playlist base.
 	if !strings.HasPrefix(bestURL, "http") {
+		base := masterURL
+		if idx := strings.LastIndex(base, "/"); idx >= 0 {
+			base = base[:idx+1]
+		}
 		bestURL = base + bestURL
 	}
 
-	// BBC hosts unlisted 1080p variants at video=12000000 that aren't in
-	// the manifest. Probe for it and use if available.
-	if strings.Contains(bestURL, "video=") {
-		fhdURL := regexp.MustCompile(`video=\d+`).ReplaceAllString(bestURL, "video=12000000")
-		log.Printf("probing unlisted 1080p: %s", fhdURL[:min(len(fhdURL), 120)])
-		probeResp, err := http.Head(fhdURL)
-		if err != nil {
+	// Delegate the FHD probe to the shared helper. The prober may be
+	// nil in tests or in any future caller that constructs a FFmpegJob
+	// without wiring the prober; in that case fall straight through
+	// to bestURL.
+	if prober != nil && strings.Contains(bestURL, "video=") {
+		fhdURL, found, err := prober.ProbeHiddenFHD(ctx, masterURL)
+		switch {
+		case err != nil:
 			log.Printf("1080p probe error: %v", err)
-		} else {
-			probeResp.Body.Close()
-			log.Printf("1080p probe response: %d", probeResp.StatusCode)
-			if probeResp.StatusCode == 200 {
-				log.Printf("HLS 1080p variant found (unlisted)")
-				return fhdURL
-			}
+		case found:
+			log.Printf("HLS 1080p variant found (unlisted): %s", fhdURL[:min(len(fhdURL), 120)])
+			return fhdURL
 		}
-	} else {
-		log.Printf("best URL does not contain video= segment, skipping 1080p probe")
 	}
 
-	log.Printf("HLS variant selected: bandwidth=%d url=%s", bestBW, bestURL[:min(len(bestURL), 100)])
+	log.Printf("HLS variant selected: bandwidth=%d", bestBW)
 	return bestURL
 }
 
@@ -139,7 +150,7 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 	// and probe for unlisted 1080p. DASH manifests are handled by ffmpeg.
 	if strings.Contains(streamURL, ".m3u8") {
 		log.Printf("resolving HLS variant for: %s", streamURL[:min(len(streamURL), 80)])
-		streamURL = resolveHLSVariant(streamURL)
+		streamURL = resolveHLSVariant(ctx, job.FHDProber, streamURL)
 		log.Printf("resolved stream URL: %s", streamURL[:min(len(streamURL), 80)])
 	} else {
 		log.Printf("not HLS, skipping variant resolution: %s", streamURL[:min(len(streamURL), 80)])

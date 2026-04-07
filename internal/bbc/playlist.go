@@ -1,6 +1,7 @@
 package bbc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -34,10 +35,10 @@ type VersionInfo struct {
 	Type string // "original", "audiodescribed", "signed", etc.
 }
 
-func (r *PlaylistResolver) Resolve(pid string) (*PlaylistInfo, error) {
+func (r *PlaylistResolver) ResolveCtx(ctx context.Context, pid string) (*PlaylistInfo, error) {
 	url := fmt.Sprintf("%s/%s/playlist.json", r.BaseURL, pid)
 
-	body, err := r.client.GetWithTimeout(url, 60*time.Second)
+	body, err := r.client.GetCtx(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("fetch playlist: %w", err)
 	}
@@ -100,6 +101,15 @@ func (r *PlaylistResolver) Resolve(pid string) (*PlaylistInfo, error) {
 	}
 
 	return info, nil
+}
+
+func (r *PlaylistResolver) Resolve(pid string) (*PlaylistInfo, error) {
+	// Preserve the live-code 60s per-call cap that the old implementation
+	// had via client.GetWithTimeout(url, 60*time.Second). Existing call
+	// sites that don't pass a context continue to see the same ceiling.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return r.ResolveCtx(ctx, pid)
 }
 
 func normaliseVersionType(raw string) string {

@@ -1,6 +1,7 @@
 package bbc
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -76,7 +77,7 @@ type connectionXML struct {
 
 // Resolve queries BBC mediaselector for the given VPID and returns a StreamSet.
 // It tries v6 "iptv-all" first, then falls back through v5 and the "pc" mediaset.
-func (ms *MediaSelector) Resolve(vpid string) (*StreamSet, error) {
+func (ms *MediaSelector) ResolveCtx(ctx context.Context, vpid string) (*StreamSet, error) {
 	mediasets := []string{"iptv-all", "pc"}
 	versions := []int{6, 5}
 
@@ -86,7 +87,7 @@ func (ms *MediaSelector) Resolve(vpid string) (*StreamSet, error) {
 			reqURL := fmt.Sprintf("%s/%d/select/version/2.0/mediaset/%s/vpid/%s/format/xml?cb=%s",
 				ms.BaseURL, ver, mediaset, vpid, cb)
 
-			body, err := ms.client.Get(reqURL)
+			body, err := ms.client.GetCtx(ctx, reqURL)
 			if err != nil {
 				continue
 			}
@@ -106,6 +107,14 @@ func (ms *MediaSelector) Resolve(vpid string) (*StreamSet, error) {
 	}
 
 	return nil, fmt.Errorf("no streams found for vpid %s", vpid)
+}
+
+func (ms *MediaSelector) Resolve(vpid string) (*StreamSet, error) {
+	// MediaSelector has no per-call timeout in live code today (it relies
+	// on the underlying bbc.Client default). Preserve that behaviour:
+	// pass a background context, not a WithTimeout context. Adding an
+	// arbitrary timeout here would be a silent behaviour change.
+	return ms.ResolveCtx(context.Background(), vpid)
 }
 
 func (ms *MediaSelector) parseResponse(body []byte) (*StreamSet, error) {

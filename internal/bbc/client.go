@@ -34,6 +34,15 @@ func (c *Client) GetWithTimeout(url string, timeout time.Duration) ([]byte, erro
 	return c.doWithRetryCtx(ctx, url, c.maxRetry)
 }
 
+// GetCtx is the context-honouring variant of Get. It bounds the HTTP
+// request + retry loop by ctx rather than by any hardcoded timeout,
+// so callers can set their own deadline via context.WithTimeout and
+// have it actually propagate into the in-flight HTTP call. Used by
+// the search-time quality prober to enforce the per-probe 20s budget.
+func (c *Client) GetCtx(ctx context.Context, url string) ([]byte, error) {
+	return c.doWithRetryCtx(ctx, url, c.maxRetry)
+}
+
 func (c *Client) doWithRetry(url string, maxAttempts int) ([]byte, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {

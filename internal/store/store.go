@@ -7,12 +7,13 @@ import (
 )
 
 var (
-	bucketDownloads  = []byte("downloads")
-	bucketHistory    = []byte("history")
-	bucketProgrammes = []byte("programmes")
-	bucketSeries     = []byte("series")
-	bucketOverrides  = []byte("overrides")
-	bucketConfig     = []byte("config")
+	bucketDownloads    = []byte("downloads")
+	bucketHistory      = []byte("history")
+	bucketProgrammes   = []byte("programmes")
+	bucketSeries       = []byte("series")
+	bucketOverrides    = []byte("overrides")
+	bucketConfig       = []byte("config")
+	bucketQualityCache = []byte("quality_cache")
 )
 
 type Store struct {
@@ -29,6 +30,7 @@ func Open(path string) (*Store, error) {
 		for _, b := range [][]byte{
 			bucketDownloads, bucketHistory, bucketProgrammes,
 			bucketSeries, bucketOverrides, bucketConfig,
+			bucketQualityCache,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return fmt.Errorf("create bucket %s: %w", b, err)

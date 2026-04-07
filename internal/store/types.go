@@ -80,6 +80,26 @@ type ShowOverride struct {
 	CustomName     string `json:"custom_name"`
 }
 
+// QualityCache records the heights BBC actually offers for a single PID.
+// Populated by bbc.QualityProber on first encounter and reused
+// indefinitely (BBC content masters are append-only once published, so
+// cache entries never need TTL-based invalidation). Manual refresh is
+// handled by the DeleteQualityCache / DeleteQualityCacheByShow methods
+// on *store.Store.
+//
+// ShowName is stored in normalised form (lower-cased and trimmed via
+// the existing normaliseShowName helper at overrides.go:10) so that
+// DeleteQualityCacheByShow matches cache entries regardless of how the
+// user typed the show name in the future v1.2 refresh-button UI. The
+// original casing is never needed because the cache is consulted by
+// PID, not by show name.
+type QualityCache struct {
+	PID      string    `json:"pid"`
+	ShowName string    `json:"show_name"` // normalised: lowercase + trimmed
+	Heights  []int     `json:"heights"`   // sorted descending, e.g. [1080, 720, 540, 396]
+	ProbedAt time.Time `json:"probed_at"`
+}
+
 const (
 	StatusPending     = "pending"
 	StatusResolving   = "resolving"

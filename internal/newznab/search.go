@@ -122,49 +122,55 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	var items []string
 	wantName := strings.TrimSpace(filterName)
 
-	for _, res := range results {
-		prog := iblResultToProgramme(res)
+	type filteredItem struct {
+		res  bbc.IBLResult
+		prog *store.Programme
+	}
 
-		// BBC iPlayer's IBL search is relevance-ranked across the whole
-		// catalogue, so a query like "Little Britain" returns ~24 shows
-		// whose titles merely contain "Britain" (Cunk on Britain, Drugs
-		// Map of Britain, A History of Ancient Britain, etc.). Without
-		// this guard every one of those gets expanded into episodes and
-		// matched against Sonarr's S/E filter, flooding the manual search
-		// UI with releases for the wrong show. When the caller knows the
-		// exact show name (from Sonarr's q= or a tvdbid → Skyhook lookup)
-		// we drop any episode whose programme title isn't that show.
-		if wantName != "" && !strings.EqualFold(strings.TrimSpace(prog.Name), wantName) {
+	// Single pass: filter, dedupe by PID, and build the prefetch list
+	// from the exact set of items that will emit. See spec section
+	// "Search-handler integration" for the rationale.
+	var filtered []filteredItem
+	var probeItems []bbc.ProbeItem
+	seen := make(map[string]struct{}, len(results))
+	for _, res := range results {
+		if _, dup := seen[res.PID]; dup {
 			continue
 		}
-
-		if filterDate != "" {
-			// Daily-series filter: match against canonical YYYY-MM-DD
-			// air date instead of integer season/episode. Skips items
-			// that have no air date.
-			if prog.AirDate != filterDate {
-				continue
-			}
-		} else {
-			if filterSeason > 0 && prog.Series != filterSeason {
-				continue
-			}
-			if filterEp > 0 && prog.EpisodeNum != filterEp {
-				continue
-			}
+		prog := iblResultToProgramme(res)
+		if !matchesSearchFilter(prog, wantName, filterDate, filterSeason, filterEp) {
+			continue
 		}
+		seen[res.PID] = struct{}{}
+		filtered = append(filtered, filteredItem{res: res, prog: prog})
+		probeItems = append(probeItems, bbc.ProbeItem{PID: res.PID, ShowName: prog.Name})
+	}
+
+	var probedHeights map[string][]int
+	if h.prober != nil && len(probeItems) > 0 {
+		probedHeights = h.prober.PrefetchPIDs(r.Context(), probeItems)
+	}
+
+	for _, it := range filtered {
+		res, prog := it.res, it.prog
 
 		var override *store.ShowOverride
 		if h.store != nil {
 			override, _ = h.store.GetOverride(prog.Name)
 		}
 
-		qualities := []string{"1080p", "720p", "540p"}
-		if len(prog.Qualities) > 0 {
-			qualities = nil
-			for _, q := range prog.Qualities {
-				qualities = append(qualities, q.Tag)
-			}
+		// Quality decision: probe result > safe fallback.
+		// The previous `if len(prog.Qualities) > 0 { ... }` override branch
+		// is removed because Programme.Qualities was never set anywhere in
+		// the repo. See spec round-1 finding 3 for full explanation.
+		var qualities []string
+		if probedHeights[res.PID] != nil {
+			qualities = heightsToTags(probedHeights[res.PID])
+		} else {
+			// No prober wired, OR probe failed (nil result-map entry). Emit
+			// only what BBC universally delivers. Never advertise a speculative
+			// 1080p — that is the EastEnders bug this whole feature fixes.
+			qualities = []string{"720p", "540p"}
 		}
 
 		for _, qual := range qualities {
@@ -287,4 +293,54 @@ func lookupTVDBTitle(tvdbid string) string {
 	}
 	log.Printf("[tvsearch] resolved TVDB %s -> %q", tvdbid, show.Title)
 	return show.Title
+}
+
+// heightsToTags converts a descending list of heights to Newznab quality
+// tags. Returns nil for an empty slice (not []string{}) so callers can
+// distinguish "no quality info" from "empty list". The mapping matches
+// the existing hardcoded tag set in writeResultsRSS.
+func heightsToTags(heights []int) []string {
+	if len(heights) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(heights))
+	for _, h := range heights {
+		switch {
+		case h >= 2160:
+			out = append(out, "2160p")
+		case h >= 1080:
+			out = append(out, "1080p")
+		case h >= 720:
+			out = append(out, "720p")
+		case h >= 540:
+			out = append(out, "540p")
+		case h >= 396:
+			out = append(out, "396p")
+		}
+	}
+	return out
+}
+
+// matchesSearchFilter applies every filter that the emit loop applies,
+// in the same order. Extracted into a shared helper so the prefetch
+// pass and the emit pass cannot drift out of sync. Returns true if the
+// programme should appear in the RSS response.
+//
+// The Programme type is *store.Programme (the persistence model, see
+// store/types.go:35) — NOT *bbc.Programme, which does not exist.
+// iblResultToProgramme at line ~231 below returns *store.Programme.
+func matchesSearchFilter(prog *store.Programme, wantName, filterDate string, filterSeason, filterEp int) bool {
+	if wantName != "" && !strings.EqualFold(strings.TrimSpace(prog.Name), wantName) {
+		return false
+	}
+	if filterDate != "" {
+		return prog.AirDate == filterDate
+	}
+	if filterSeason > 0 && prog.Series != filterSeason {
+		return false
+	}
+	if filterEp > 0 && prog.EpisodeNum != filterEp {
+		return false
+	}
+	return true
 }
