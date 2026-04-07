@@ -90,7 +90,7 @@ func main() {
 		log.Printf("geo-probe: unexpected status %d", bbcStatus)
 	}
 
-	if err := os.MkdirAll(downloadDir, 0755); err != nil {
+	if err := download.EnsureDownloadDir(downloadDir); err != nil {
 		log.Printf("WARNING: cannot create download dir %s: %v", downloadDir, err)
 	}
 

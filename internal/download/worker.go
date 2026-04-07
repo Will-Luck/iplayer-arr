@@ -118,7 +118,7 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	m.setStatus(dl, store.StatusDownloading, "")
 	dl.StartedAt = time.Now()
 
-	if err := os.MkdirAll(dl.OutputDir, 0o755); err != nil {
+	if err := EnsureDownloadDir(dl.OutputDir); err != nil {
 		m.failDownload(dl, store.FailCodeFFmpeg, fmt.Errorf("create output dir: %w", err))
 		return
 	}
