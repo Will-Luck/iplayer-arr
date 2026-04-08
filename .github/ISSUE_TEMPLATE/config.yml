@@ -1,0 +1,9 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Will-Luck/iplayer-arr/security/advisories/new
+    about: |
+      Please report security vulnerabilities privately via GitHub's security advisories rather than opening a public issue.
+  - name: Documentation & Wiki
+    url: https://github.com/Will-Luck/iplayer-arr/wiki
+    about: Installation, configuration, Sonarr integration, and troubleshooting guides

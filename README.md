@@ -43,6 +43,8 @@ When the auto-resolved numbering still doesn't match TheTVDB (common with specia
 
 ## Quick Start
 
+> **Important**: You must hold a valid UK TV Licence to legally access BBC iPlayer content via iplayer-arr. iplayer-arr does not verify this and assumes you are compliant. See [DISCLAIMER.md](DISCLAIMER.md) for full legal terms.
+
 ```bash
 docker run -d \
   --name iplayer-arr \
@@ -93,6 +95,17 @@ See the [Wiki](https://github.com/Will-Luck/iplayer-arr/wiki) for:
 - [REST API Reference](https://github.com/Will-Luck/iplayer-arr/wiki/REST-API-Reference)
 - [Troubleshooting](https://github.com/Will-Luck/iplayer-arr/wiki/Troubleshooting)
 
+## Legal
+
+iplayer-arr is not affiliated with, endorsed by, or sponsored by the BBC. iPlayer is a trademark of the British Broadcasting Corporation. Users in the UK must hold a valid TV Licence to legally access BBC iPlayer content via this tool.
+
+- [DISCLAIMER.md](DISCLAIMER.md) - full legal terms, TV Licence requirement, personal-use restriction
+- [SECURITY.md](SECURITY.md) - security and abuse reporting via GitHub's Private Vulnerability Reporting
+
 ## Licence
 
 GPL-3.0. See [LICENSE](LICENSE).
+
+---
+
+*iplayer-arr is not affiliated with, endorsed by, or sponsored by the BBC. iPlayer is a trademark of the British Broadcasting Corporation.*
