@@ -246,6 +246,44 @@ func TestHandleTVSearchDailyMatchByDate(t *testing.T) {
 	}
 }
 
+func TestHandleTVSearchTopicalWeeklyFallbackToDate(t *testing.T) {
+	// GitHub #20: Sonarr searches Question Time with standard integer
+	// season/ep (season=48&ep=23) because TVDB numbers the show. BBC
+	// iPlayer reports topical/weekly shows with no series/episode
+	// numbering (Series=0, EpisodeNum=0) but a valid release_date. A
+	// strict integer-S/E filter returned zero items, so Sonarr could
+	// never match it even though the in-app search found the episode.
+	// The handler must fall back to a date-tier release so the user can
+	// set the Sonarr series type to "Daily" and match by air date.
+	payload := `{
+		"new_search": {
+			"results": [
+				{"id": "qt1", "type": "episode", "title": "Question Time", "subtitle": "26/03/2026", "release_date": "2026-03-26", "parent_position": 23}
+			]
+		}
+	}`
+	h := newHandlerWithBBC(t, payload)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=question+time&season=48&ep=23", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d", w.Code)
+	}
+	titles := itemTitles(w.Body.String())
+	if len(titles) == 0 {
+		t.Fatalf("expected at least one item for topical fallback, got empty body:\n%s", w.Body.String())
+	}
+	for _, title := range titles {
+		if !strings.Contains(title, "Question.Time.2026.03.26") {
+			t.Errorf("title = %q, want it to contain %q", title, "Question.Time.2026.03.26")
+		}
+		if strings.Contains(title, "S48E23") {
+			t.Errorf("title = %q must not claim S/E numbering iPlayer did not provide", title)
+		}
+	}
+}
+
 func TestHandleTVSearchDailyMismatchByDate(t *testing.T) {
 	// Wrong date should return zero items.
 	h := newHandlerWithBBC(t, eastendersOneEpisodePayload)
@@ -549,6 +587,16 @@ func TestMatchesSearchFilter_TableDriven(t *testing.T) {
 		{"season+ep mismatch", &store.Programme{Name: "Doctor Who", Series: 14, EpisodeNum: 2}, "doctor who", "", 14, 3, false},
 		{"daily date match", &store.Programme{Name: "Newsnight", AirDate: "2026-04-05"}, "newsnight", "2026-04-05", 0, 0, true},
 		{"daily date mismatch", &store.Programme{Name: "Newsnight", AirDate: "2026-04-04"}, "newsnight", "2026-04-05", 0, 0, false},
+		// Topical/weekly fallback: programme has no S/E numbering but a
+		// valid AirDate. Sonarr sends integer season/ep (from TVDB) but
+		// iPlayer never numbered the show. Must pass so the emit loop
+		// produces a date-tier title. GitHub #20.
+		{"topical weekly no numbering passes integer filter",
+			&store.Programme{Name: "Question Time", AirDate: "2026-03-26"},
+			"question time", "", 48, 23, true},
+		{"topical without air date still rejected",
+			&store.Programme{Name: "Question Time"},
+			"question time", "", 48, 23, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -407,6 +407,17 @@ func matchesSearchFilter(prog *store.Programme, wantName, filterDate string, fil
 	if filterDate != "" {
 		return prog.AirDate == filterDate
 	}
+	// Topical/weekly escape hatch. Shows like Question Time or Newsnight
+	// arrive from iPlayer with no series/episode numbering (Series=0,
+	// EpisodeNum=0) but a valid AirDate. A strict integer-S/E filter
+	// would reject every such release, which is why Sonarr's interactive
+	// search returns nothing even though the in-app search finds the
+	// episode. Accept them so GenerateTitle can emit a date-tier title;
+	// the user must set the series type to "Daily" in Sonarr for it to
+	// match by air date. See GitHub issue #20.
+	if prog.Series == 0 && prog.EpisodeNum == 0 && prog.AirDate != "" {
+		return true
+	}
 	if filterSeason > 0 && prog.Series != filterSeason {
 		return false
 	}

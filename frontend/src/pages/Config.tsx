@@ -4,6 +4,7 @@ import { QUALITY_OPTIONS } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
 import { getSonarrSetup } from "../lib/sonarr-setup";
+import { copyToClipboard } from "../lib/clipboard";
 
 export default function Config() {
   const workerOptions = ["1", "2", "3", "5", "10", "15", "20"];
@@ -16,8 +17,9 @@ export default function Config() {
     setConfig(await api.getConfig());
   });
 
-  function copyField(value: string, key: string) {
-    navigator.clipboard.writeText(value);
+  async function copyField(value: string, key: string) {
+    const ok = await copyToClipboard(value);
+    if (!ok) return;
     setCopiedField(key);
     setTimeout(() => setCopiedField(null), 2000);
   }

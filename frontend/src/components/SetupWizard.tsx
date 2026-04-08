@@ -1,6 +1,7 @@
 import { createSignal, onMount, Show } from "solid-js";
 import { api } from "../api";
 import { getSonarrSetup } from "../lib/sonarr-setup";
+import { copyToClipboard } from "../lib/clipboard";
 import type { ConfigResponse } from "../types";
 
 export default function SetupWizard(props: { show: boolean; onComplete: () => void }) {
@@ -39,11 +40,11 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
     }
   }
 
-  function copyField(text: string, key: string) {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedField(key);
-      setTimeout(() => setCopiedField(null), 2000);
-    });
+  async function copyField(text: string, key: string) {
+    const ok = await copyToClipboard(text);
+    if (!ok) return;
+    setCopiedField(key);
+    setTimeout(() => setCopiedField(null), 2000);
   }
 
   function stepClass(n: number) {
