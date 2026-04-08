@@ -37,10 +37,10 @@ func (h *Handler) handleListHistory(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	f := store.HistoryFilter{
-		Status:  q.Get("status"),
-		Since:   q.Get("since"),
-		Sort:    q.Get("sort"),
-		Order:   q.Get("order"),
+		Status: q.Get("status"),
+		Since:  q.Get("since"),
+		Sort:   q.Get("sort"),
+		Order:  q.Get("order"),
 	}
 
 	if v := q.Get("page"); v != "" {

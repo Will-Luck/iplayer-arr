@@ -93,4 +93,3 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, filtered)
 }
-

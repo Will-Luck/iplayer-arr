@@ -26,8 +26,9 @@ import (
 )
 
 // defaultPort is the TCP port iplayer-arr listens on when the PORT
-// environment variable is not set. Chosen to avoid FlareSolverr's
-// default of 8191. See docs/superpowers/specs/2026-04-08-iplayer-arr-v1.1.1-design.md.
+// environment variable is not set. Chosen to avoid collision with
+// FlareSolverr's default port. See
+// docs/superpowers/specs/2026-04-08-iplayer-arr-v1.1.1-design.md.
 const defaultPort = "62001"
 
 // resolvePort returns the port main() should bind to, applying
