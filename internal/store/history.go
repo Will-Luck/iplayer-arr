@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -134,6 +135,13 @@ func (s *Store) ListHistory() ([]*Download, error) {
 	return history, err
 }
 
+// ListHistoryOutputDirs returns the set of cleaned OutputDir values from
+// every history entry. The paths are normalised with filepath.Clean so a
+// caller computing `filepath.Join(downloadDir, entry.Name())` (which also
+// cleans) can do a direct map lookup without worrying about trailing
+// slashes or other stylistic differences between how the path was written
+// and how it is read back. See GitHub issue #21 for the Delete button
+// symptom that motivated the normalisation.
 func (s *Store) ListHistoryOutputDirs() (map[string]bool, error) {
 	dirs := make(map[string]bool)
 	err := s.db.View(func(tx *bolt.Tx) error {
@@ -143,7 +151,7 @@ func (s *Store) ListHistoryOutputDirs() (map[string]bool, error) {
 				return err
 			}
 			if dl.OutputDir != "" {
-				dirs[dl.OutputDir] = true
+				dirs[filepath.Clean(dl.OutputDir)] = true
 			}
 			return nil
 		})

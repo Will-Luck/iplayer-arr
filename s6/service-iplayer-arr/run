@@ -1,2 +1,2 @@
-#!/usr/bin/env bash
+#!/command/with-contenv bash
 exec s6-setuidgid hotio /app/iplayer-arr
