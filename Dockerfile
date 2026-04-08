@@ -32,7 +32,7 @@ COPY --from=go-build /iplayer-arr /app/iplayer-arr
 COPY ./s6/ /etc/s6-overlay/s6-rc.d/
 
 ENV TZ=Europe/London
-ENV WEBUI_PORTS="8191/tcp"
+ENV WEBUI_PORTS="62001/tcp"
 
-EXPOSE 8191
+EXPOSE 62001
 VOLUME ["/config", "/downloads"]

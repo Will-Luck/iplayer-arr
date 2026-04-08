@@ -25,10 +25,21 @@ import (
 	"github.com/Will-Luck/iplayer-arr/internal/web"
 )
 
+// defaultPort is the TCP port iplayer-arr listens on when the PORT
+// environment variable is not set. Chosen to avoid FlareSolverr's
+// default of 8191. See docs/superpowers/specs/2026-04-08-iplayer-arr-v1.1.1-design.md.
+const defaultPort = "62001"
+
+// resolvePort returns the port main() should bind to, applying
+// PORT env-var override with fallback to defaultPort.
+func resolvePort() string {
+	return envOr("PORT", defaultPort)
+}
+
 func main() {
 	configDir := envOr("CONFIG_DIR", "/config")
 	downloadDir := envOr("DOWNLOAD_DIR", "/downloads")
-	port := envOr("PORT", "8191")
+	port := resolvePort()
 
 	dbPath := filepath.Join(configDir, "iplayer-arr.db")
 	st, err := store.Open(dbPath)

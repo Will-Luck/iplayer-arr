@@ -36,3 +36,20 @@ func TestConfiguredMaxWorkersUsesStoredValue(t *testing.T) {
 		t.Fatalf("configuredMaxWorkers() = %d, want 15", got)
 	}
 }
+
+func TestResolvePort_DefaultWhenUnset(t *testing.T) {
+	t.Setenv("PORT", "")
+	if got := resolvePort(); got != defaultPort {
+		t.Errorf("resolvePort() with PORT='' = %q, want %q", got, defaultPort)
+	}
+	if defaultPort != "62001" {
+		t.Errorf("defaultPort = %q, want 62001 (FlareSolverr collision fix)", defaultPort)
+	}
+}
+
+func TestResolvePort_EnvOverride(t *testing.T) {
+	t.Setenv("PORT", "9999")
+	if got := resolvePort(); got != "9999" {
+		t.Errorf("resolvePort() with PORT=9999 = %q, want 9999", got)
+	}
+}
