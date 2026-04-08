@@ -67,6 +67,7 @@ type QualityOption struct {
 type SeriesMapping struct {
 	TVDBId    string    `json:"tvdb_id"`
 	ShowName  string    `json:"show_name"`
+	Year      int       `json:"year"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 

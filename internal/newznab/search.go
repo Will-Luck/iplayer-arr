@@ -32,7 +32,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeResultsRSS(w, r, results, 0, 0, "", filterName)
+	h.writeResultsRSS(w, r, results, 0, 0, "", filterName, 0)
 }
 
 func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
@@ -43,19 +43,34 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[tvsearch] q=%q tvdbid=%q season=%q ep=%q", q, tvdbid, seasonStr, epStr)
 
+	var filterYear int
 	if q == "" && tvdbid != "" {
-		// Try stored mapping first
+		// Try stored mapping first - but only use the warm cache if it
+		// has a year (Year > 0). Old v1.0.2/v1.1.0 records have no year
+		// field in the JSON and deserialise to Year=0 - those need to
+		// be backfilled by re-hitting Skyhook on first use after the
+		// upgrade. See issue #18 and the Phase 4 design doc.
 		if h.store != nil {
-			mapping, _ := h.store.GetSeriesMapping(tvdbid)
-			if mapping != nil {
-				q = mapping.ShowName
+			cached, _ := h.store.GetSeriesMapping(tvdbid)
+			if cached != nil && cached.Year > 0 {
+				q = cached.ShowName
+				filterYear = cached.Year
 			}
 		}
-		// Fall back to Skyhook (Sonarr's TVDB lookup service)
+		// Fall back to Skyhook when there's no warm cache OR when the
+		// warm cache has Year == 0 (backfill case).
 		if q == "" {
-			q = lookupTVDBTitle(tvdbid)
-			if q != "" && h.store != nil {
-				h.store.PutSeriesMapping(&store.SeriesMapping{TVDBId: tvdbid, ShowName: q})
+			title, year, err := lookupTVDBShow(tvdbid)
+			if err == nil && title != "" {
+				q = title
+				filterYear = year
+				if h.store != nil {
+					h.store.PutSeriesMapping(&store.SeriesMapping{
+						TVDBId:   tvdbid,
+						ShowName: title,
+						Year:     year,
+					})
+				}
 			}
 		}
 	}
@@ -89,7 +104,7 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	// so detect the daily shape and filter by air date instead.
 	filterDate := parseDailySearchDate(seasonStr, epStr)
 
-	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName)
+	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName, filterYear)
 }
 
 // parseDailySearchDate returns YYYY-MM-DD when season looks like a 4-digit
@@ -118,7 +133,7 @@ func parseDailySearchDate(seasonStr, epStr string) string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, mm, dd)
 }
 
-func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string) {
+func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string, filterYear int) {
 	var items []string
 	wantName := strings.TrimSpace(filterName)
 
@@ -144,6 +159,44 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		seen[res.PID] = struct{}{}
 		filtered = append(filtered, filteredItem{res: res, prog: prog})
 		probeItems = append(probeItems, bbc.ProbeItem{PID: res.PID, ShowName: prog.Name})
+	}
+
+	// Phase 4 disambiguation: when a TVDB lookup gave us a year hint,
+	// drop candidates whose year-suffixed brand title doesn't cover the
+	// hint year. This routes Sonarr searches for shows with duplicate
+	// BBC brand names (classic Doctor Who vs modern Doctor Who) to the
+	// correct era. See issue #18.
+	if filterYear > 0 {
+		var progsByPID = make(map[string]*store.Programme, len(filtered))
+		var orderedProgs []*store.Programme
+		for _, it := range filtered {
+			if _, ok := progsByPID[it.res.PID]; !ok {
+				progsByPID[it.res.PID] = it.prog
+				orderedProgs = append(orderedProgs, it.prog)
+			}
+		}
+		kept := disambiguateByYear(orderedProgs, filterYear)
+		keptPIDs := make(map[string]bool, len(kept))
+		for _, p := range kept {
+			for pid, prog := range progsByPID {
+				if prog == p {
+					keptPIDs[pid] = true
+				}
+			}
+		}
+		// Rebuild filtered and probeItems to include only kept PIDs
+		var newFiltered []filteredItem
+		var newProbeItems []bbc.ProbeItem
+		for i, it := range filtered {
+			if keptPIDs[it.res.PID] {
+				newFiltered = append(newFiltered, it)
+				if i < len(probeItems) {
+					newProbeItems = append(newProbeItems, probeItems[i])
+				}
+			}
+		}
+		filtered = newFiltered
+		probeItems = newProbeItems
 	}
 
 	var probedHeights map[string][]int
@@ -275,24 +328,42 @@ func baseURL(r *http.Request) string {
 	return fmt.Sprintf("%s://%s", scheme, r.Host)
 }
 
-func lookupTVDBTitle(tvdbid string) string {
-	resp, err := http.Get("https://skyhook.sonarr.tv/v1/tvdb/shows/en/" + tvdbid)
-	if err != nil || resp.StatusCode != 200 {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return ""
+// skyhookBaseURL is the base URL for TheTVDB-to-BBC title resolution
+// via the Sonarr Skyhook service. Overridable in tests to point at
+// httptest.NewServer without touching global HTTP transport.
+var skyhookBaseURL = "https://skyhook.sonarr.tv"
+
+// lookupTVDBShow resolves a TVDB ID to (showName, firstAiredYear) via
+// the Skyhook service. Returns ("", 0, err) on any failure - callers
+// fall back to bare-name behaviour with no year disambiguation.
+//
+// Replaces the v1.1.0 lookupTVDBTitle which only returned the show
+// name. The year is needed for Phase 4 disambiguation of shows with
+// duplicate BBC brand names (classic Doctor Who vs modern Doctor Who).
+func lookupTVDBShow(tvdbid string) (title string, year int, err error) {
+	resp, err := http.Get(skyhookBaseURL + "/v1/tvdb/shows/en/" + tvdbid)
+	if err != nil {
+		return "", 0, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, fmt.Errorf("skyhook returned status %d", resp.StatusCode)
+	}
 
 	var show struct {
-		Title string `json:"title"`
+		Title      string `json:"title"`
+		FirstAired string `json:"firstAired"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&show); err != nil {
-		return ""
+		return "", 0, err
 	}
-	log.Printf("[tvsearch] resolved TVDB %s -> %q", tvdbid, show.Title)
-	return show.Title
+
+	title = show.Title
+	if len(show.FirstAired) >= 4 {
+		year, _ = strconv.Atoi(show.FirstAired[:4])
+	}
+	log.Printf("[tvsearch] resolved TVDB %s -> %q (year %d)", tvdbid, title, year)
+	return title, year, nil
 }
 
 // heightsToTags converts a descending list of heights to Newznab quality
@@ -330,7 +401,7 @@ func heightsToTags(heights []int) []string {
 // store/types.go:35) — NOT *bbc.Programme, which does not exist.
 // iblResultToProgramme at line ~231 below returns *store.Programme.
 func matchesSearchFilter(prog *store.Programme, wantName, filterDate string, filterSeason, filterEp int) bool {
-	if wantName != "" && !strings.EqualFold(strings.TrimSpace(prog.Name), wantName) {
+	if wantName != "" && !strings.EqualFold(strings.TrimSpace(bareName(prog.Name)), bareName(wantName)) {
 		return false
 	}
 	if filterDate != "" {

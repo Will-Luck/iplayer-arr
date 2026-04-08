@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
@@ -25,6 +27,39 @@ func fakeBBCSearchServer(t *testing.T, payload string) *httptest.Server {
 	return srv
 }
 
+// fakeSkyhookServer returns an httptest.Server that responds to any
+// path with the supplied JSON payload, simulating Skyhook's
+// /v1/tvdb/shows/en/<tvdbid> endpoint. Used by tests that need to
+// exercise the lookupTVDBShow path (cold-cache lookup).
+func fakeSkyhookServer(t *testing.T, payload string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// doctorWhoThreeBrandsPayload is a synthetic IBL search response with
+// three episode-type results, one per Doctor Who brand. Episode-type
+// results bypass ListEpisodes brand expansion (which the existing
+// fakeBBCSearchServer cannot mock), so the disambiguation logic
+// receives the three programmes directly via iblResultToProgramme.
+//
+// Subtitles use "Series 1: Episode 2" so parseSubtitleNumbers can
+// extract Series=1, Episode=2 (the colon-and-space split is required
+// per internal/bbc/ibl.go).
+const doctorWhoThreeBrandsPayload = `{
+    "new_search": {
+        "results": [
+            {"id": "ep_modern", "type": "episode", "title": "Doctor Who", "subtitle": "Series 1: Episode 2", "release_date": "2024-05-18", "parent_position": 2},
+            {"id": "ep_classic", "type": "episode", "title": "Doctor Who (1963-1996)", "subtitle": "Series 1: Episode 2", "release_date": "1963-11-30", "parent_position": 2},
+            {"id": "ep_legacy", "type": "episode", "title": "Doctor Who (2005-2022)", "subtitle": "Series 1: Episode 2", "release_date": "2005-04-02", "parent_position": 2}
+        ]
+    }
+}`
+
 // newHandlerWithBBC builds a Handler whose IBL is pointed at a fake BBC
 // server. Used by handleTVSearch tests.
 func newHandlerWithBBC(t *testing.T, payload string) *Handler {
@@ -37,6 +72,25 @@ func newHandlerWithBBCProber(t *testing.T, payload string, prober qualityProber)
 	ibl := bbc.NewIBL(bbc.NewClient())
 	ibl.BaseURL = srv.URL
 	return NewHandler(ibl, nil, nil, prober)
+}
+
+// newHandlerWithBBCAndStore is a variant of newHandlerWithBBC that
+// also wires a real BoltDB store so tests can pre-populate
+// SeriesMapping records for cache-warm-path assertions. Used by the
+// Phase 4 warm-cache regression test.
+func newHandlerWithBBCAndStore(t *testing.T, payload string) (*Handler, *store.Store) {
+	t.Helper()
+	srv := fakeBBCSearchServer(t, payload)
+	ibl := bbc.NewIBL(bbc.NewClient())
+	ibl.BaseURL = srv.URL
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "newznab-test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	return NewHandler(ibl, st, nil, nil), st
 }
 
 // mockProber is a test double for the quality prefetcher. It returns a
@@ -504,5 +558,130 @@ func TestMatchesSearchFilter_TableDriven(t *testing.T) {
 					tc.prog, tc.wantName, tc.filterDate, tc.filterSeason, tc.filterEp, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSearch_DoctorWhoClassicTVDB_OnlyMatchesClassicBrand(t *testing.T) {
+	// Cold cache: Skyhook returns ("Doctor Who", 1963) for TVDB 76107.
+	// IBL returns all three Doctor Who brands. Only the classic-era
+	// brand should appear in the RSS.
+
+	skyhook := fakeSkyhookServer(t, `{"title":"Doctor Who","firstAired":"1963-11-23"}`)
+	oldBase := skyhookBaseURL
+	skyhookBaseURL = skyhook.URL
+	t.Cleanup(func() { skyhookBaseURL = oldBase })
+
+	h, _ := newHandlerWithBBCAndStore(t, doctorWhoThreeBrandsPayload)
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=76107&season=1&ep=2", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "Doctor.Who.1963-1996") {
+		t.Errorf("expected classic brand in RSS, got:\n%s", body)
+	}
+	if strings.Contains(body, "2005-2022") {
+		t.Errorf("unexpected 2005-2022 brand leaked through, got:\n%s", body)
+	}
+}
+
+func TestSearch_DoctorWhoModernTVDB_OnlyMatchesModernBrand(t *testing.T) {
+	// Cold cache: Skyhook returns ("Doctor Who (2005)", 2005) for TVDB 78804.
+	// IBL returns all three Doctor Who brands. Only the 2005-2022 brand
+	// should appear in the RSS - the year 2005 falls within [2005, 2022]
+	// but not within [1963, 1996].
+
+	skyhook := fakeSkyhookServer(t, `{"title":"Doctor Who (2005)","firstAired":"2005-03-26"}`)
+	oldBase := skyhookBaseURL
+	skyhookBaseURL = skyhook.URL
+	t.Cleanup(func() { skyhookBaseURL = oldBase })
+
+	h, _ := newHandlerWithBBCAndStore(t, doctorWhoThreeBrandsPayload)
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=78804&season=1&ep=2", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "2005-2022") {
+		t.Errorf("expected 2005-2022 brand in RSS, got:\n%s", body)
+	}
+	if strings.Contains(body, "1963-1996") {
+		t.Errorf("unexpected classic brand leaked through, got:\n%s", body)
+	}
+}
+
+func TestSearch_DoctorWhoClassicTVDB_WarmCacheRetainsYear(t *testing.T) {
+	// Scenario: TVDB 76107 has been looked up previously and the
+	// mapping was cached with Year=1963. A new Sonarr search with
+	// tvdbid=76107 must reuse the cached name AND the cached year, so
+	// disambiguateByYear still routes to the classic brand WITHOUT
+	// calling Skyhook.
+	//
+	// This test guards two distinct invariants:
+	//   1. The disambiguation correctly routes to the classic brand
+	//   2. Skyhook is NOT called - the cache is genuinely consulted
+	//
+	// (1) alone would also pass for an implementation that ignores
+	// the cache and falls through to Skyhook (because Skyhook would
+	// return the same data). The fail-fast Skyhook server makes (2)
+	// observable.
+
+	// Fail-fast Skyhook: any HTTP hit on this server is a test
+	// failure. Tracks hits via atomic counter for an explicit final
+	// assertion in case t.Errorf inside the goroutine doesn't fire
+	// before the test finishes.
+	var skyhookHits int32
+	failSkyhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&skyhookHits, 1)
+		t.Errorf("warm-cache test: Skyhook must not be called, but got %s %s", r.Method, r.URL.Path)
+		http.Error(w, "warm-cache test: Skyhook unexpected", http.StatusServiceUnavailable)
+	}))
+	defer failSkyhook.Close()
+
+	oldSkyhookBase := skyhookBaseURL
+	skyhookBaseURL = failSkyhook.URL
+	t.Cleanup(func() { skyhookBaseURL = oldSkyhookBase })
+
+	h, st := newHandlerWithBBCAndStore(t, doctorWhoThreeBrandsPayload)
+
+	// Pre-populate the cache as if a previous Skyhook lookup had run
+	if err := st.PutSeriesMapping(&store.SeriesMapping{
+		TVDBId:   "76107",
+		ShowName: "Doctor Who",
+		Year:     1963,
+	}); err != nil {
+		t.Fatalf("PutSeriesMapping: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=76107&season=1&ep=2", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+
+	// Disambiguation correctness: classic brand emitted, modern brand not
+	if !strings.Contains(body, "Doctor.Who.1963-1996") {
+		t.Errorf("warm-cache test: expected classic brand name in RSS, got:\n%s", body)
+	}
+	if strings.Contains(body, "2005-2022") {
+		t.Errorf("warm-cache test: unexpected 2005-2022 brand leaked through, got:\n%s", body)
+	}
+
+	// Cache-was-used invariant: Skyhook must not have been called
+	if hits := atomic.LoadInt32(&skyhookHits); hits != 0 {
+		t.Errorf("warm-cache test: expected 0 Skyhook hits, got %d", hits)
 	}
 }
