@@ -5,6 +5,21 @@ All notable changes to iplayer-arr will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-04-09
+
+### Fixed
+
+- **#20 Topical shows not matched by Sonarr searches**: weekly topical shows like Question Time and Newsnight that BBC iPlayer reports with no series/episode numbering (Series=0, EpisodeNum=0) were silently dropped from Sonarr integer-S/E searches because the newznab filter rejected them outright. The filter now accepts zero-numbered programmes that have a valid air date, so the existing date-tier release generator emits a `Show.Name.YYYY.MM.DD` title. **Sonarr configuration note:** set the series type to "Daily" for topical shows, Sonarr only accepts date-based releases for series flagged Daily. This is the same mechanism the BBC daily soaps (EastEnders, Casualty, Doctors) already rely on.
+- **#21 Copy buttons silently fail on plain HTTP origins**: `navigator.clipboard.writeText()` only works in a secure context, so every Copy button on the Config page and Setup wizard silently rejected when iplayer-arr was reached at `http://<lan-ip>:<port>` (non-secure context). Added `frontend/src/lib/clipboard.ts` with a hidden-textarea `execCommand('copy')` fallback. All 8 copy buttons verified in a real Chromium browser over plain HTTP.
+- **#21 Manual download Delete button inert**: the s6 service run script used `#!/usr/bin/env bash`, launching the binary outside the hotio base image's `with-contenv` envdir. None of `CONFIG_DIR`, `DOWNLOAD_DIR`, `PORT`, or `TZ` reached the process when set in docker-compose, so the writer path used hardcoded fallbacks while the Downloads page scanner read its own source of truth, and the Delete button rendered disabled because the ownership map never matched. Switched the run script to `#!/command/with-contenv bash`, persisted the resolved DOWNLOAD_DIR to the config store on startup so writers and readers share a single source of truth, and added `filepath.Clean` normalisation in `ListHistoryOutputDirs` as belt-and-braces safety for legacy entries. Verified end-to-end: real manual download to `/data/tv`, Delete click in a real Chromium, folder removed from both the directory listing and the filesystem. Side-benefit: log timestamps now honour TZ.
+
+### Tests
+
+- `TestHandleTVSearchTopicalWeeklyFallbackToDate` covers the full newznab handler path with a Question Time payload.
+- Two new cases in the `matchesSearchFilter` table test cover the topical fallback with and without an air date.
+- `TestListHistoryOutputDirsCleansPaths` regression-tests the ownership map normalisation for trailing slash, dot segment, clean path, and empty OutputDir variants.
+- 216 Go tests pass across 8 packages. Frontend vitest suite passes.
+
 ## [1.1.1] - 2026-04-08
 
 ### Breaking changes

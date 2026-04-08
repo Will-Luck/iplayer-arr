@@ -221,6 +221,65 @@ func TestListHistoryFilteredSortByTitle(t *testing.T) {
 	}
 }
 
+// TestListHistoryOutputDirsCleansPaths regression-tests GitHub #21: the
+// Downloads page ownership check does a map lookup of the cleaned folder
+// path against ListHistoryOutputDirs. If history persists an OutputDir
+// with a trailing slash, a dot segment, or any stylistic difference from
+// what the directory scanner computes with filepath.Join, the lookup
+// misses and the Delete button renders disabled ("does nothing" on
+// click). The store-layer normalisation here makes the map resilient.
+func TestListHistoryOutputDirsCleansPaths(t *testing.T) {
+	s := testStore(t)
+
+	entries := []struct {
+		id        string
+		outputDir string
+	}{
+		{"dirty_trailing_slash", "/downloads/Newsround/"},
+		{"dirty_dot_segment", "/downloads/./Question.Time"},
+		{"clean", "/downloads/Doctor.Who"},
+		{"empty_output_dir", ""},
+	}
+	for _, e := range entries {
+		dl := &Download{
+			ID: e.id, PID: "pid_" + e.id, Title: e.id,
+			Status: StatusCompleted, OutputDir: e.outputDir,
+		}
+		if err := s.PutHistory(dl); err != nil {
+			t.Fatalf("PutHistory %q: %v", e.id, err)
+		}
+	}
+
+	dirs, err := s.ListHistoryOutputDirs()
+	if err != nil {
+		t.Fatalf("ListHistoryOutputDirs: %v", err)
+	}
+
+	// Every expected cleaned path must be present.
+	for _, want := range []string{
+		"/downloads/Newsround",
+		"/downloads/Question.Time",
+		"/downloads/Doctor.Who",
+	} {
+		if !dirs[want] {
+			t.Errorf("cleaned path %q missing from ownership map %+v", want, dirs)
+		}
+	}
+
+	// The empty-output-dir entry must not leak an empty-string key.
+	if dirs[""] {
+		t.Errorf("empty OutputDir should not produce a map entry")
+	}
+
+	// The raw dirty paths must NOT be present as keys, because the
+	// scanner will never compute them.
+	for _, bad := range []string{"/downloads/Newsround/", "/downloads/./Question.Time"} {
+		if dirs[bad] {
+			t.Errorf("uncleaned path %q must not appear in the ownership map", bad)
+		}
+	}
+}
+
 func TestClearHistory(t *testing.T) {
 	s := testStore(t)
 

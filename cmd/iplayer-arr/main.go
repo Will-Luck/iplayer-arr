@@ -58,6 +58,15 @@ func main() {
 		st.SetConfig("api_key", apiKey)
 	}
 
+	// Persist the resolved DOWNLOAD_DIR to the config store on every start.
+	// The writer side (download.Manager) uses this value injected directly;
+	// the reader side (api/directory.go and sabnzbd/handler.go) reads it
+	// back from the store. Without this line the store stays empty and
+	// those readers fall back to the hardcoded "/downloads", which diverges
+	// from the actual runtime path and breaks the Downloads-page ownership
+	// check (Delete button appears inert). See GitHub issue #21.
+	st.SetConfig("download_dir", filepath.Clean(downloadDir))
+
 	// purge stale programme cache
 	st.PurgeStaleProgrammes(4 * time.Hour)
 
