@@ -18,12 +18,26 @@ var (
 	// form, used by BBC daily soaps where the iPlayer subtitle is just the
 	// air date and there is no real series/episode numbering.
 	reDateSubtitle = regexp.MustCompile(`^\s*\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}\s*$`)
+
+	// reCompositeDateSubtitle matches subtitles where a non-colon prefix is
+	// followed by a date, e.g. "2025/26: 22/03/2026" (BBC Match of the Day
+	// format). Anchored so it does not false-positive on episode titles
+	// that merely contain a date substring.
+	reCompositeDateSubtitle = regexp.MustCompile(`^[^:]+:\s*\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}\s*$`)
 )
 
 // isDateSubtitle reports whether s looks like a bare date (the only thing in
 // the subtitle field), as opposed to a normal episode title.
 func isDateSubtitle(s string) bool {
 	return reDateSubtitle.MatchString(s)
+}
+
+// isDateLikeSubtitle reports whether a subtitle is either a bare date
+// (DD/MM/YYYY) or a composite prefix-and-date format. Returns true for
+// cases where the subtitle carries no episode information worth
+// preserving in the output filename.
+func isDateLikeSubtitle(s string) bool {
+	return reDateSubtitle.MatchString(s) || reCompositeDateSubtitle.MatchString(s)
 }
 
 // GenerateTitle builds a Sonarr-compatible release title for the given
@@ -115,6 +129,9 @@ func buildSxxExxTitle(name, episode string, series, ep int, quality string) stri
 }
 
 func buildDateTitle(name, episode, airDate, quality string) string {
+	if isDateLikeSubtitle(episode) {
+		episode = ""
+	}
 	sn := sanitiseForTitle(name)
 	se := sanitiseForTitle(episode)
 	date := strings.ReplaceAll(airDate, "-", ".")

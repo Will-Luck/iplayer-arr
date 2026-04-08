@@ -44,6 +44,13 @@ var (
 	// shows like Little Britain end up with EpisodeNum=0 and get filtered
 	// out of Sonarr's tvsearch results. See issue #13.
 	reEpisodeNum = regexp.MustCompile(`(?i)(?:^|(?:Episode|Pennod)\s+)(\d+)`)
+
+	// reDateEpPart matches an epPart (the string after splitting the
+	// subtitle on ": ") that is itself a bare date like "22/03/2026".
+	// When the composite split yields a date as the trailing part, the
+	// leading digits are day-of-month, not an episode number, and must
+	// not be extracted. See issue #15.
+	reDateEpPart = regexp.MustCompile(`^\s*\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}\s*$`)
 )
 
 func (ibl *IBL) Search(query string, page int) ([]IBLResult, error) {
@@ -314,6 +321,11 @@ func parseSubtitleNumbers(subtitle string) (series, episode int) {
 	parts := strings.SplitN(subtitle, ": ", 3)
 	if len(parts) >= 2 {
 		epPart := parts[len(parts)-1]
+		if reDateEpPart.MatchString(epPart) {
+			// epPart is itself a date; the leading digits are day-of-month,
+			// not episode number. Leave episode = 0. See issue #15.
+			return series, 0
+		}
 		if m := reEpisodeNum.FindStringSubmatch(epPart); len(m) > 1 {
 			episode, _ = strconv.Atoi(m[1])
 		}

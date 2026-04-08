@@ -1,6 +1,7 @@
 package newznab
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Will-Luck/iplayer-arr/internal/store"
@@ -229,5 +230,79 @@ func TestSanitiseTitle(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("sanitise(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestGenerateTitle_SportsDateSubtitle(t *testing.T) {
+	// BBC Match of the Day composite subtitle format. Without the fix,
+	// the title contains the air date three times: 2026.03.22 + 202526
+	// + 22032026. With the fix, the episode segment is dropped because
+	// the subtitle is a composite-date pattern.
+	prog := &store.Programme{
+		Name:       "Match of the Day",
+		Episode:    "2025/26: 22/03/2026",
+		Series:     0,
+		EpisodeNum: 0,
+		AirDate:    "2026-03-22",
+	}
+	title, tier := GenerateTitle(prog, "1080p", nil)
+	if tier != store.TierDate {
+		t.Errorf("tier = %q, want store.TierDate", tier)
+	}
+	want := "Match.of.the.Day.2026.03.22.1080p.WEB-DL.AAC.H264-iParr"
+	if title != want {
+		t.Errorf("title = %q, want %q", title, want)
+	}
+	if strings.Contains(title, "202526") || strings.Contains(title, "22032026") {
+		t.Errorf("title contains garbled date tail: %q", title)
+	}
+}
+
+func TestGenerateTitle_SeriesEpisodeTitle_NotMatched(t *testing.T) {
+	// "Series 1: 2. The Cave of Skulls" is the BBC numbered-list episode
+	// title format. The composite-date guard must NOT match this - the
+	// "2. The Cave of Skulls" tail is a real episode title, not a date.
+	prog := &store.Programme{
+		Name:       "Doctor Who",
+		Episode:    "Series 1: 2. The Cave of Skulls",
+		Series:     1,
+		EpisodeNum: 2,
+		AirDate:    "1963-11-30",
+	}
+	title, _ := GenerateTitle(prog, "1080p", nil)
+	if !strings.Contains(title, "Cave") {
+		t.Errorf("expected episode title 'Cave of Skulls' preserved, got %q", title)
+	}
+}
+
+func TestGenerateTitle_DateInParens_NotMatched(t *testing.T) {
+	// "Episode 3 (aired 22/03/2026)" contains a date but is not anchored
+	// as a composite-date pattern. The guard must not strip it.
+	prog := &store.Programme{
+		Name:       "Horizon",
+		Episode:    "Episode 3 (aired 22/03/2026)",
+		Series:     1,
+		EpisodeNum: 3,
+		AirDate:    "2026-03-22",
+	}
+	title, _ := GenerateTitle(prog, "1080p", nil)
+	if !strings.Contains(title, "Episode.3") {
+		t.Errorf("expected 'Episode.3' preserved, got %q", title)
+	}
+}
+
+func TestGenerateTitle_PlainSubtitle_NotMatched(t *testing.T) {
+	// Plain text subtitle with no date component. Must pass through
+	// unchanged via whichever tier the title generator chooses.
+	prog := &store.Programme{
+		Name:       "Newsnight",
+		Episode:    "Climate Change Special",
+		Series:     1,
+		EpisodeNum: 42,
+		AirDate:    "2026-04-08",
+	}
+	title, _ := GenerateTitle(prog, "1080p", nil)
+	if !strings.Contains(title, "Climate.Change.Special") {
+		t.Errorf("expected 'Climate.Change.Special' preserved, got %q", title)
 	}
 }

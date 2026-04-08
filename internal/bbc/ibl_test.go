@@ -199,3 +199,25 @@ func TestListEpisodesPagination(t *testing.T) {
 		t.Errorf("unexpected PIDs: %s, %s", results[0].PID, results[1].PID)
 	}
 }
+
+func TestParseSubtitleNumbers_CompositeDateDoesNotExtractEpisode(t *testing.T) {
+	// "2025/26: 22/03/2026" is BBC's Match of the Day composite format.
+	// Without the guard, the "22" at the start of "22/03/2026" is
+	// extracted as EpisodeNum. With the guard, it is correctly skipped
+	// and EpisodeNum stays 0. See issue #15.
+	series, episode := parseSubtitleNumbers("2025/26: 22/03/2026")
+	if series != 0 || episode != 0 {
+		t.Errorf("parseSubtitleNumbers(\"2025/26: 22/03/2026\") = (%d, %d), want (0, 0)", series, episode)
+	}
+}
+
+func TestParseSubtitleNumbers_BareDateReturnsZero(t *testing.T) {
+	// Bare dates have no ": " so the existing split-on-colon logic
+	// already skips episode extraction. This regression test locks in
+	// that pre-existing behaviour so the new guard does not accidentally
+	// regress it.
+	series, episode := parseSubtitleNumbers("22/03/2026")
+	if series != 0 || episode != 0 {
+		t.Errorf("parseSubtitleNumbers(\"22/03/2026\") = (%d, %d), want (0, 0)", series, episode)
+	}
+}
