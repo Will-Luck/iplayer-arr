@@ -154,6 +154,25 @@ func (h *Handler) authenticate(r *http.Request) bool {
 	return false
 }
 
+// ResolveDownloadDir returns the active download directory path,
+// honouring precedence: env-var > store > default.
+//
+// The env-derived value (h.DownloadDir, set at startup from DOWNLOAD_DIR)
+// always wins. Falls back to the BoltDB-persisted value, then to the
+// hardcoded "/downloads" default. Used by handleGetConfig, the
+// directory listing handlers, and the SABnzbd compat handler so that
+// the download directory shown in the UI and in API responses
+// consistently reflects the runtime value.
+func (h *Handler) ResolveDownloadDir() string {
+	if h.DownloadDir != "" {
+		return h.DownloadDir
+	}
+	if stored, err := h.store.GetConfig("download_dir"); err == nil && stored != "" {
+		return stored
+	}
+	return configDefaults["download_dir"]
+}
+
 // writeJSON encodes v as JSON and writes it to the response with the given
 // status code.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

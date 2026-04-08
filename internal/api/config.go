@@ -24,6 +24,9 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg[key] = val
 	}
+	// Override download_dir with the env-derived value if set.
+	// See ResolveDownloadDir for the precedence rule.
+	cfg["download_dir"] = h.ResolveDownloadDir()
 	writeJSON(w, http.StatusOK, cfg)
 }
 

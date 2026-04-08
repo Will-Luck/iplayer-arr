@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -256,5 +257,23 @@ func TestSABnzbdLogSanitisesAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(logOutput, "apikey=***") {
 		t.Errorf("log output should contain redacted apikey=***:\n%s", logOutput)
+	}
+}
+
+func TestSabnzbdGetConfig_UsesEnvDownloadDir(t *testing.T) {
+	h, _ := testHandler(t)
+	h.DownloadDir = "/data"
+
+	req := httptest.NewRequest("GET", "/sabnzbd/api?mode=get_config&apikey=test-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "/data") {
+		t.Errorf("expected response to contain /data, got: %s", body)
 	}
 }

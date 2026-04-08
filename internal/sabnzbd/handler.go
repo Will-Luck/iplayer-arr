@@ -21,8 +21,9 @@ type DownloadStarter interface {
 }
 
 type Handler struct {
-	store   *store.Store
-	starter DownloadStarter
+	store       *store.Store
+	starter     DownloadStarter
+	DownloadDir string // env-derived; if empty, falls back to store
 }
 
 func NewHandler(st *store.Store, starter DownloadStarter) *Handler {
@@ -60,10 +61,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{"categories": []string{"sonarr", "tv", "manual"}})
 		return
 	case "get_config":
-		downloadDir, _ := h.store.GetConfig("download_dir")
-		if downloadDir == "" {
-			downloadDir = "/downloads"
-		}
+		downloadDir := h.ResolveDownloadDir()
 		writeJSON(w, map[string]interface{}{
 			"config": map[string]interface{}{
 				"misc": map[string]interface{}{
@@ -78,10 +76,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	case "fullstatus":
-		downloadDir, _ := h.store.GetConfig("download_dir")
-		if downloadDir == "" {
-			downloadDir = "/downloads"
-		}
+		downloadDir := h.ResolveDownloadDir()
 		writeJSON(w, map[string]interface{}{
 			"status": map[string]interface{}{
 				"completedir": downloadDir,
@@ -361,4 +356,18 @@ func parseNZBURL(nzbURL string) (pid, quality string, err error) {
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// ResolveDownloadDir returns the active download directory path,
+// honouring precedence: env-var > store > default. Mirrors the helper
+// on the api.Handler so the SABnzbd compat endpoint reports the same
+// directory the rest of the app uses.
+func (h *Handler) ResolveDownloadDir() string {
+	if h.DownloadDir != "" {
+		return h.DownloadDir
+	}
+	if stored, err := h.store.GetConfig("download_dir"); err == nil && stored != "" {
+		return stored
+	}
+	return "/downloads"
 }

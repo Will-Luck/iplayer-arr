@@ -140,7 +140,9 @@ func main() {
 	nzHandler := newznab.NewHandler(ibl, st, ms, prober)
 	nzHandler.SetOnRequest(apiHandler.RecordIndexerRequest)
 	mux.Handle("/newznab/", nzHandler)
-	mux.Handle("/sabnzbd/", sabnzbd.NewHandler(st, mgr))
+	sabHandler := sabnzbd.NewHandler(st, mgr)
+	sabHandler.DownloadDir = downloadDir
+	mux.Handle("/sabnzbd/", sabHandler)
 	mux.Handle("/api/", apiHandler)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

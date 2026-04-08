@@ -22,10 +22,7 @@ type directoryEntry struct {
 }
 
 func (h *Handler) handleListDirectory(w http.ResponseWriter, r *http.Request) {
-	downloadDir, _ := h.store.GetConfig("download_dir")
-	if downloadDir == "" {
-		downloadDir = "/downloads"
-	}
+	downloadDir := h.ResolveDownloadDir()
 
 	entries, err := os.ReadDir(downloadDir)
 	if err != nil {
@@ -91,10 +88,7 @@ func (h *Handler) handleDeleteDirectory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	downloadDir, _ := h.store.GetConfig("download_dir")
-	if downloadDir == "" {
-		downloadDir = "/downloads"
-	}
+	downloadDir := h.ResolveDownloadDir()
 
 	fullPath := filepath.Join(downloadDir, folder)
 	if !strings.HasPrefix(fullPath, downloadDir+string(os.PathSeparator)) {
