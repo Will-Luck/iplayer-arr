@@ -318,9 +318,9 @@ func parseSubtitleNumbers(subtitle string) (series, episode int) {
 		series, _ = strconv.Atoi(m[1])
 	}
 
-	parts := strings.SplitN(subtitle, ": ", 3)
+	parts := strings.SplitN(subtitle, ": ", 2)
 	if len(parts) >= 2 {
-		epPart := parts[len(parts)-1]
+		epPart := parts[1]
 		if reDateEpPart.MatchString(epPart) {
 			// epPart is itself a date; the leading digits are day-of-month,
 			// not episode number. Leave episode = 0. See issue #15.

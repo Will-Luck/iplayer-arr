@@ -32,7 +32,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeResultsRSS(w, r, results, 0, 0, "", filterName, 0)
+	h.writeResultsRSS(w, r, results, 0, 0, "", filterName, 0, "")
 }
 
 func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +104,7 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	// so detect the daily shape and filter by air date instead.
 	filterDate := parseDailySearchDate(seasonStr, epStr)
 
-	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName, filterYear)
+	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName, filterYear, tvdbid)
 }
 
 // parseDailySearchDate returns YYYY-MM-DD when season looks like a 4-digit
@@ -133,7 +133,7 @@ func parseDailySearchDate(seasonStr, epStr string) string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, mm, dd)
 }
 
-func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string, filterYear int) {
+func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid string) {
 	var items []string
 	wantName := strings.TrimSpace(filterName)
 
@@ -263,6 +263,10 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
       <newznab:attr name="language" value="en" />`,
 				html.EscapeString(title), baseURL(r), guid, baseURL(r), guid, pubDate,
 				baseURL(r), guid, size, cat, size)
+
+			if tvdbid != "" {
+				item += fmt.Sprintf("\n      <newznab:attr name=\"tvdbid\" value=\"%s\" />", tvdbid)
+			}
 
 			if tier == store.TierManual {
 				item += `
