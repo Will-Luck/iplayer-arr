@@ -359,3 +359,153 @@ func TestPrefetch_DeduplicatesAndSortsHeights(t *testing.T) {
 		t.Errorf("expected descending sort, got %v", heights)
 	}
 }
+
+// --- show-group dedup tests ---
+
+func TestPrefetch_ShowGroupDedup_ProbesOncePerShow(t *testing.T) {
+	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
+	ms := &fakeMediaSelector{byVPID: map[string]*StreamSet{}}
+	fhd := &fakeFHDProber{}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 8, time.Second)
+
+	// 3 shows, 5 PIDs each = 15 items total.
+	var items []ProbeItem
+	for _, show := range []string{"eastenders", "holby city", "casualty"} {
+		for i := 0; i < 5; i++ {
+			items = append(items, ProbeItem{
+				PID:      show[:2] + "_p" + string(rune('0'+i)),
+				ShowName: show,
+			})
+		}
+	}
+
+	out := p.PrefetchPIDs(context.Background(), items)
+
+	if len(out) != 15 {
+		t.Fatalf("expected 15 results, got %d", len(out))
+	}
+	for _, item := range items {
+		if out[item.PID] == nil {
+			t.Errorf("missing result for PID %s", item.PID)
+		}
+	}
+
+	// Only 3 playlist calls (one per show), not 15.
+	if pl.calls != 3 {
+		t.Errorf("expected 3 playlist calls (one per show), got %d", pl.calls)
+	}
+	if ms.calls != 3 {
+		t.Errorf("expected 3 mediaselector calls (one per show), got %d", ms.calls)
+	}
+
+	// All 15 PIDs should be in the cache.
+	if len(st.data) != 15 {
+		t.Errorf("expected 15 cache entries, got %d", len(st.data))
+	}
+}
+
+func TestPrefetch_ShowGroupDedup_FirstFails_FallsBackToIndividual(t *testing.T) {
+	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
+	// p0's VPID resolves to empty streams, so probeOne returns nil for it.
+	ms := &fakeMediaSelector{byVPID: map[string]*StreamSet{
+		"vpid-p0": {Video: []VideoStream{}},
+	}}
+	fhd := &fakeFHDProber{}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 8, time.Second)
+
+	items := []ProbeItem{
+		{PID: "p0", ShowName: "show"},
+		{PID: "p1", ShowName: "show"},
+		{PID: "p2", ShowName: "show"},
+	}
+
+	out := p.PrefetchPIDs(context.Background(), items)
+
+	// Leader p0 failed, but fallback probed p1/p2 individually.
+	// The group gets the first successful sibling's heights (all
+	// episodes of a show share the same qualities).
+	if out["p1"] == nil {
+		t.Fatal("expected p1 to have heights after fallback probe")
+	}
+	if out["p2"] == nil {
+		t.Fatal("expected p2 to have heights after fallback probe")
+	}
+	// p0 gets the same group result -- the show's qualities are valid
+	// even though p0's individual probe failed.
+	if out["p0"] == nil {
+		t.Error("expected p0 to inherit sibling heights")
+	}
+}
+
+func TestPrefetch_ShowGroupDedup_AllFail_ReturnsNil(t *testing.T) {
+	// When every PID in a show group fails, the group result is nil.
+	pl := &fakePlaylistResolver{err: errors.New("playlist down")}
+	ms := &fakeMediaSelector{byVPID: map[string]*StreamSet{}}
+	fhd := &fakeFHDProber{}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 8, time.Second)
+
+	items := []ProbeItem{
+		{PID: "p0", ShowName: "show"},
+		{PID: "p1", ShowName: "show"},
+	}
+
+	out := p.PrefetchPIDs(context.Background(), items)
+
+	for _, pid := range []string{"p0", "p1"} {
+		if out[pid] != nil {
+			t.Errorf("expected nil for %s when all probes fail, got %v", pid, out[pid])
+		}
+	}
+}
+
+func TestPrefetch_ShowGroupDedup_CacheHitCoversGroup(t *testing.T) {
+	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
+	ms := &fakeMediaSelector{byVPID: map[string]*StreamSet{}}
+	fhd := &fakeFHDProber{}
+	st := newFakeCacheStore()
+
+	// Pre-populate cache for p0.
+	st.data["p0"] = &store.QualityCache{
+		PID:      "p0",
+		ShowName: "show",
+		Heights:  []int{720, 540},
+		ProbedAt: time.Now(),
+	}
+
+	p := NewQualityProber(pl, ms, fhd, st, 8, time.Second)
+
+	items := []ProbeItem{
+		{PID: "p0", ShowName: "show"},
+		{PID: "p1", ShowName: "show"},
+		{PID: "p2", ShowName: "show"},
+	}
+
+	out := p.PrefetchPIDs(context.Background(), items)
+
+	// Zero HTTP calls -- cache hit for p0 covers the whole group.
+	if pl.calls != 0 {
+		t.Errorf("expected 0 playlist calls (cache hit covers group), got %d", pl.calls)
+	}
+	if ms.calls != 0 {
+		t.Errorf("expected 0 mediaselector calls, got %d", ms.calls)
+	}
+
+	// All 3 should have [720, 540].
+	for _, pid := range []string{"p0", "p1", "p2"} {
+		h := out[pid]
+		if len(h) != 2 || h[0] != 720 || h[1] != 540 {
+			t.Errorf("PID %s: expected [720, 540], got %v", pid, h)
+		}
+	}
+
+	// All 3 should be in the cache.
+	if len(st.data) != 3 {
+		t.Errorf("expected 3 cache entries, got %d", len(st.data))
+	}
+}

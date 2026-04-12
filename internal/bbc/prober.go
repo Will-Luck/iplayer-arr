@@ -87,24 +87,94 @@ func (p *QualityProber) PrefetchPIDs(ctx context.Context, items []ProbeItem) map
 	result := make(map[string][]int, len(items))
 	var mu sync.Mutex
 
+	// Group items by ShowName so we can probe one PID per show and
+	// reuse the result for all siblings. Within a BBC show, all
+	// episodes share the same available qualities.
+	groups := make(map[string][]ProbeItem, len(items))
+	var order []string
+	for _, item := range items {
+		if _, exists := groups[item.ShowName]; !exists {
+			order = append(order, item.ShowName)
+		}
+		groups[item.ShowName] = append(groups[item.ShowName], item)
+	}
+
 	sem := make(chan struct{}, p.concurrency)
 	var wg sync.WaitGroup
-	for _, item := range items {
-		item := item
+	for _, showName := range order {
+		group := groups[showName]
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			heights := p.probeOne(ctx, item)
+			heights := p.probeShowGroup(ctx, group)
 			mu.Lock()
-			result[item.PID] = heights
+			for _, item := range group {
+				result[item.PID] = heights
+			}
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
 	return result
+}
+
+// probeShowGroup probes a group of PIDs that share a ShowName. It
+// checks for a cache hit first, then probes the first PID via
+// probeOne and reuses its result for the rest. If the first PID
+// fails, falls back to probing remaining items individually.
+func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) []int {
+	// 1. Check if any PID in the group is already cached.
+	for _, item := range group {
+		if cached, err := p.store.GetQualityCache(item.PID); err == nil && cached != nil {
+			for _, sibling := range group {
+				if sibling.PID == item.PID {
+					continue
+				}
+				_ = p.store.PutQualityCache(&store.QualityCache{
+					PID:      sibling.PID,
+					ShowName: sibling.ShowName,
+					Heights:  cached.Heights,
+					ProbedAt: cached.ProbedAt,
+				})
+			}
+			log.Printf("show-group cache hit: show=%q leader=%s heights=%v siblings=%d",
+				item.ShowName, item.PID, cached.Heights, len(group)-1)
+			return cached.Heights
+		}
+	}
+
+	// 2. Probe the first PID as the representative for the group.
+	heights := p.probeOne(ctx, group[0])
+
+	if heights != nil {
+		now := time.Now()
+		for _, sibling := range group[1:] {
+			_ = p.store.PutQualityCache(&store.QualityCache{
+				PID:      sibling.PID,
+				ShowName: sibling.ShowName,
+				Heights:  heights,
+				ProbedAt: now,
+			})
+		}
+		log.Printf("show-group probed: show=%q leader=%s heights=%v siblings=%d",
+			group[0].ShowName, group[0].PID, heights, len(group)-1)
+		return heights
+	}
+
+	// 3. First PID failed -- fall back to individual probing.
+	log.Printf("show-group leader failed: show=%q pid=%s, probing %d siblings individually",
+		group[0].ShowName, group[0].PID, len(group)-1)
+	var fallbackHeights []int
+	for _, sibling := range group[1:] {
+		h := p.probeOne(ctx, sibling)
+		if h != nil && fallbackHeights == nil {
+			fallbackHeights = h
+		}
+	}
+	return fallbackHeights
 }
 
 // probeOne runs the full probe for a single item. Returns the heights
