@@ -207,22 +207,26 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	for _, it := range filtered {
 		res, prog := it.res, it.prog
 
+		// When the BBC title has a subtitle that the Sonarr query
+		// doesn't (e.g. "Talking Tom Heroes: Suddenly Super" vs
+		// "Talking Tom Heroes"), use the Sonarr-provided name for
+		// title generation so Sonarr can match it back to TVDB.
+		if wantName != "" && !strings.EqualFold(
+			strings.TrimSpace(bareName(prog.Name)),
+			strings.TrimSpace(bareName(wantName))) {
+			prog.Name = wantName
+		}
+
 		var override *store.ShowOverride
 		if h.store != nil {
 			override, _ = h.store.GetOverride(prog.Name)
 		}
 
-		// Quality decision: probe result > safe fallback.
-		// The previous `if len(prog.Qualities) > 0 { ... }` override branch
-		// is removed because Programme.Qualities was never set anywhere in
-		// the repo. See spec round-1 finding 3 for full explanation.
 		var qualities []string
 		if probedHeights[res.PID] != nil {
 			qualities = heightsToTags(probedHeights[res.PID])
 		} else {
-			// No prober wired, OR probe failed (nil result-map entry). Emit
-			// only what BBC universally delivers. Never advertise a speculative
-			// 1080p — that is the EastEnders bug this whole feature fixes.
+			// Safe fallback: only what BBC universally delivers.
 			qualities = []string{"720p", "540p"}
 		}
 
@@ -255,7 +259,8 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
       <pubDate>%s</pubDate>
       <enclosure url="%s/newznab/api?t=get&amp;id=%s" length="%d" type="application/x-nzb" />
       <newznab:attr name="category" value="%s" />
-      <newznab:attr name="size" value="%d" />`,
+      <newznab:attr name="size" value="%d" />
+      <newznab:attr name="language" value="en" />`,
 				html.EscapeString(title), baseURL(r), guid, baseURL(r), guid, pubDate,
 				baseURL(r), guid, size, cat, size)
 
@@ -392,16 +397,28 @@ func heightsToTags(heights []int) []string {
 	return out
 }
 
+// nameMatches reports whether progName matches wantName after stripping
+// year suffixes. Also accepts a BBC subtitle extension ("Show: Subtitle"
+// matches a query for "Show"). GitHub #21.
+func nameMatches(progName, wantName string) bool {
+	bare := strings.TrimSpace(bareName(progName))
+	want := strings.TrimSpace(bareName(wantName))
+	if strings.EqualFold(bare, want) {
+		return true
+	}
+	if len(bare) > len(want)+2 &&
+		strings.EqualFold(bare[:len(want)], want) &&
+		bare[len(want):len(want)+2] == ": " {
+		return true
+	}
+	return false
+}
+
 // matchesSearchFilter applies every filter that the emit loop applies,
-// in the same order. Extracted into a shared helper so the prefetch
-// pass and the emit pass cannot drift out of sync. Returns true if the
-// programme should appear in the RSS response.
-//
-// The Programme type is *store.Programme (the persistence model, see
-// store/types.go:35) — NOT *bbc.Programme, which does not exist.
-// iblResultToProgramme at line ~231 below returns *store.Programme.
+// in the same order. Shared between the prefetch and emit passes so
+// they cannot drift out of sync.
 func matchesSearchFilter(prog *store.Programme, wantName, filterDate string, filterSeason, filterEp int) bool {
-	if wantName != "" && !strings.EqualFold(strings.TrimSpace(bareName(prog.Name)), bareName(wantName)) {
+	if wantName != "" && !nameMatches(prog.Name, wantName) {
 		return false
 	}
 	if filterDate != "" {

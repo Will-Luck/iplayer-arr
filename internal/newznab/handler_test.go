@@ -597,6 +597,20 @@ func TestMatchesSearchFilter_TableDriven(t *testing.T) {
 		{"topical without air date still rejected",
 			&store.Programme{Name: "Question Time"},
 			"question time", "", 48, 23, false},
+		// Subtitle prefix: BBC brands a show with ": Subtitle" but Sonarr
+		// searches the bare name. GitHub #21.
+		{"subtitle prefix match",
+			&store.Programme{Name: "Talking Tom Heroes: Suddenly Super", Series: 1, EpisodeNum: 40},
+			"Talking Tom Heroes", "", 1, 40, true},
+		{"subtitle prefix case insensitive",
+			&store.Programme{Name: "talking tom heroes: suddenly super", Series: 1, EpisodeNum: 1},
+			"Talking Tom Heroes", "", 1, 1, true},
+		{"partial word before colon is not a match",
+			&store.Programme{Name: "Tom Jones: Live"},
+			"Tom", "", 0, 0, false},
+		{"full colon title exact match",
+			&store.Programme{Name: "Talking Tom Heroes: Suddenly Super", Series: 1, EpisodeNum: 1},
+			"Talking Tom Heroes: Suddenly Super", "", 1, 1, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
