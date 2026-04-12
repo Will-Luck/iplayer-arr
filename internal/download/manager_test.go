@@ -144,6 +144,15 @@ func TestFailDownloadRetryability(t *testing.T) {
 	if dl3.RetryCount != 1 {
 		t.Errorf("retry count = %d, want 1", dl3.RetryCount)
 	}
+
+	// Truncated is not retryable (deterministic failure from FHD probe
+	// false positive or genuinely missing content)
+	dl4 := &store.Download{ID: "test4", PID: "p4", Status: store.StatusPending}
+	st.PutDownload(dl4)
+	m.failDownload(dl4, store.FailCodeTruncated, fmt.Errorf("truncated"))
+	if dl4.Retryable {
+		t.Error("truncated should not be retryable")
+	}
 }
 
 func TestSanitiseFilename(t *testing.T) {

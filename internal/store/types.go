@@ -113,6 +113,7 @@ const (
 	FailCodeExpired     = "expired"
 	FailCodeUnavailable = "stream_unavailable"
 	FailCodeFFmpeg      = "ffmpeg_error"
+	FailCodeTruncated   = "truncated"
 	FailCodeTimeout     = "timeout"
 	FailCodeUnknown     = "unknown"
 

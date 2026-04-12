@@ -3,6 +3,7 @@ package bbc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -321,5 +322,114 @@ func TestProbeHiddenFHD_RelativeVariantURL_ResolvedAgainstBase(t *testing.T) {
 	}
 	if !strings.HasPrefix(fhdURL, srv.URL+"/subdir/") {
 		t.Errorf("expected fhdURL to start with server base, got %q", fhdURL)
+	}
+}
+
+// fakeMasterPlaylistWithRes builds a playlist with RESOLUTION tags, used
+// by the SD-only guard tests.
+func fakeMasterPlaylistWithRes(variants ...struct {
+	BW  int
+	Res string
+	URL string
+}) string {
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n#EXT-X-VERSION:2\n")
+	for _, v := range variants {
+		fmt.Fprintf(&b, "#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%s\n%s\n", v.BW, v.Res, v.URL)
+	}
+	return b.String()
+}
+
+func TestMaxPlaylistHeight(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"no RESOLUTION tags", "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2700000\nfoo.m3u8\n", 0},
+		{"single 396p", "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1800000,RESOLUTION=704x396\nfoo.m3u8\n", 396},
+		{"mixed 396p and 720p", "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1800000,RESOLUTION=704x396\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=3500000,RESOLUTION=1280x720\nb.m3u8\n", 720},
+		{"1080p present", "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\nfoo.m3u8\n", 1080},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := maxPlaylistHeight([]byte(tt.body))
+			if got != tt.want {
+				t.Errorf("maxPlaylistHeight() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProbeHiddenFHD_SDOnlyPlaylist_ReturnsDefinitiveAbsence(t *testing.T) {
+	headCalled := false
+	masterBody := fakeMasterPlaylistWithRes(
+		struct {
+			BW  int
+			Res string
+			URL string
+		}{BW: 1013000, Res: "704x396", URL: "stream-audio=128000-video=827000.m3u8"},
+		struct {
+			BW  int
+			Res string
+			URL string
+		}{BW: 1800000, Res: "704x396", URL: "stream-audio=128000-video=1570000.m3u8"},
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Write([]byte(masterBody))
+		case http.MethodHead:
+			headCalled = true
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient()
+	fhdURL, found, err := c.ProbeHiddenFHD(context.Background(), srv.URL+"/master.m3u8")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if found {
+		t.Errorf("expected found=false for SD-only playlist, got found=true url=%q", fhdURL)
+	}
+	if headCalled {
+		t.Error("HEAD probe should not have been called for SD-only playlist")
+	}
+}
+
+func TestProbeHiddenFHD_720pPlaylist_StillProbes(t *testing.T) {
+	masterBody := fakeMasterPlaylistWithRes(
+		struct {
+			BW  int
+			Res string
+			URL string
+		}{BW: 3500000, Res: "1280x720", URL: "stream-audio=128000-video=2700000.m3u8"},
+	)
+
+	headCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Write([]byte(masterBody))
+		case http.MethodHead:
+			headCalled = true
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient()
+	_, found, err := c.ProbeHiddenFHD(context.Background(), srv.URL+"/master.m3u8")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if found {
+		t.Error("expected found=false (HEAD 404)")
+	}
+	if !headCalled {
+		t.Error("HEAD probe should have been called for 720p playlist")
 	}
 }

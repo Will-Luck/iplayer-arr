@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -14,6 +15,23 @@ import (
 // swap it for video=12000000 (BBC's unlisted 1080p path). Compiled
 // once to avoid paying the regex compile cost per call.
 var fhdVariantRewrite = regexp.MustCompile(`video=\d+`)
+
+// resHeightRe extracts the height from RESOLUTION=WxH in #EXT-X-STREAM-INF.
+var resHeightRe = regexp.MustCompile(`RESOLUTION=\d+x(\d+)`)
+
+// maxPlaylistHeight scans an HLS master playlist body for RESOLUTION
+// tags and returns the largest height value found. Returns 0 if no
+// RESOLUTION tags are present (older playlists or test fixtures may
+// omit them), which callers should treat as "unknown, skip the guard".
+func maxPlaylistHeight(body []byte) int {
+	maxH := 0
+	for _, m := range resHeightRe.FindAllSubmatch(body, -1) {
+		if h, err := strconv.Atoi(string(m[1])); err == nil && h > maxH {
+			maxH = h
+		}
+	}
+	return maxH
+}
 
 // ProbeHiddenFHD reports whether BBC hosts an unlisted video=12000000
 // 1080p variant for the given HLS master playlist URL. Fetches the
@@ -50,6 +68,18 @@ func (c *Client) ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (fhdUR
 	}
 	if !strings.Contains(bestURL, "video=") {
 		// Structural absence: the rewrite cannot apply. Cacheable.
+		return "", false, nil
+	}
+
+	// SD-only guard: if every variant in the master playlist is below
+	// 720p, this is genuinely SD-only content (e.g. pre-2010 BBC
+	// programmes). BBC only hides 1080p on content that already has
+	// 720p+ in the manifest. USP will return HTTP 200 for the
+	// rewritten URL but serve audio-only, causing a truncated file.
+	// maxPlaylistHeight returns 0 if no RESOLUTION tags are present,
+	// in which case we skip the guard and proceed with the probe.
+	if maxH := maxPlaylistHeight(body); maxH > 0 && maxH < 720 {
+		log.Printf("FHD probe skipped: max playlist resolution %dp (below 720p threshold)", maxH)
 		return "", false, nil
 	}
 

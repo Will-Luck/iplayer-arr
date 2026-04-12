@@ -168,12 +168,36 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		return
 	}
 
-	// 5. Download subtitles (best-effort)
+	// 5. Truncation gate: verify the output file is a reasonable size.
+	// estimateSize is rough (fixed bitrate assumptions), so use a
+	// generous 30% threshold. This catches audio-only downloads
+	// (~27MB vs ~900MB expected) and CDN-truncated files.
+	if dl.Size > 0 {
+		info, statErr := os.Stat(outputFile)
+		if statErr != nil {
+			m.failDownload(dl, store.FailCodeFFmpeg, fmt.Errorf("stat output: %w", statErr))
+			return
+		}
+		actualSize := info.Size()
+		threshold := dl.Size * 30 / 100
+		if actualSize < threshold {
+			log.Printf("download %s truncated: %d bytes actual, %d estimated, threshold %d",
+				dl.ID, actualSize, dl.Size, threshold)
+			m.failDownload(dl, store.FailCodeTruncated, fmt.Errorf(
+				"output file truncated: %d bytes, expected at least %d (30%% of %d estimated)",
+				actualSize, threshold, dl.Size,
+			))
+			os.Remove(outputFile)
+			return
+		}
+	}
+
+	// 6. Download subtitles (best-effort)
 	if streams.SubtitleURL != "" {
 		m.downloadSubtitles(streams.SubtitleURL, dl.OutputDir, dl.Title)
 	}
 
-	// 6. Complete -- move straight to history. The SABnzbd history endpoint
+	// 7. Complete -- move straight to history. The SABnzbd history endpoint
 	// returns these as Completed so Sonarr can see them and trigger import.
 	// Previously we slept 90s in the downloads bucket, but Sonarr's delete
 	// request would race and wipe the record before MoveToHistory ran.
@@ -211,7 +235,7 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.RetryCount++
 
 	switch code {
-	case store.FailCodeGeoBlocked, store.FailCodeExpired:
+	case store.FailCodeGeoBlocked, store.FailCodeExpired, store.FailCodeTruncated:
 		dl.Retryable = false
 	default:
 		dl.Retryable = dl.RetryCount < maxRetries
