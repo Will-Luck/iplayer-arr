@@ -12,10 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BBC subtitle name mismatch breaks Sonarr searches**: shows where BBC iPlayer appends a subtitle to the brand name (e.g. "Talking Tom Heroes: Suddenly Super" vs TVDB's "Talking Tom Heroes") returned zero results because the newznab name filter required an exact match after year-suffix stripping. Added `nameMatches` with a subtitle-prefix path: if the BBC name starts with the search query followed by `: `, it counts as a match. 52 episodes of Talking Tom Heroes now surface correctly.
 - **"Unknown episode or series" red marker on iplayer-arr results**: the generated release title included the full BBC name with subtitle (`Talking.Tom.Heroes.Suddenly.Super.S01E38...`), which Sonarr's title parser couldn't map back to its TVDB entry. When the search matched via subtitle prefix, the title now uses the Sonarr-provided name (`Talking.Tom.Heroes.S01E38...`) so TVDB mapping succeeds.
 - **Language shown as "Unknown" in Sonarr manual search**: RSS items had no language attribute, so Sonarr defaulted to Unknown. Added `<newznab:attr name="language" value="en" />` to every RSS item. All BBC iPlayer content is English.
+- **Batch downloads overwhelm BBC CDN**: grabbing a full series caused all 10 workers to hit the CDN simultaneously through a single VPN, triggering rate-limiting (ffmpeg exit 187, master playlist EOF, truncated files). Three changes:
+  - Default worker count reduced from 10 to 4.
+  - Retryable failures now use exponential backoff (30s, 90s, 270s) instead of immediate retry. Downloads stay as "Queued" in Sonarr during backoff rather than being marked "Failed".
+  - Truncated downloads are now retryable (they were previously permanent failures, but truncation is usually caused by rate-limiting, not missing content).
 
 ### Tests
 
 - 4 new cases in the `matchesSearchFilter` table test: subtitle prefix match, case-insensitive subtitle match, partial-word rejection ("Tom" must not match "Tom Jones: Live"), and full colon-title exact match.
+- Updated default worker count test and truncated retryability test.
 - 231 Go tests pass across 8 packages.
 
 ## [1.1.3] - 2026-04-12

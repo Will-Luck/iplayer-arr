@@ -10,7 +10,7 @@ var configKeys = []string{"api_key", "quality", "max_workers", "download_dir", "
 
 var configDefaults = map[string]string{
 	"quality":      "720p",
-	"max_workers":  "10",
+	"max_workers":  "4",
 	"download_dir": "/downloads",
 	"auto_cleanup": "false",
 }

@@ -274,7 +274,7 @@ func envIntDefault(key string, fallback int) int {
 }
 
 func configuredMaxWorkers(st *store.Store) int {
-	const defaultMaxWorkers = 10
+	const defaultMaxWorkers = 4
 
 	if st == nil {
 		return defaultMaxWorkers

@@ -18,11 +18,11 @@ func testStore(t *testing.T) *store.Store {
 	return st
 }
 
-func TestConfiguredMaxWorkersDefaultsToTen(t *testing.T) {
+func TestConfiguredMaxWorkersDefault(t *testing.T) {
 	st := testStore(t)
 
-	if got := configuredMaxWorkers(st); got != 10 {
-		t.Fatalf("configuredMaxWorkers() = %d, want 10", got)
+	if got := configuredMaxWorkers(st); got != 4 {
+		t.Fatalf("configuredMaxWorkers() = %d, want 4", got)
 	}
 }
 

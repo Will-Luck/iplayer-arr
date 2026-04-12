@@ -145,13 +145,16 @@ func TestFailDownloadRetryability(t *testing.T) {
 		t.Errorf("retry count = %d, want 1", dl3.RetryCount)
 	}
 
-	// Truncated is not retryable (deterministic failure from FHD probe
-	// false positive or genuinely missing content)
+	// Truncated is retryable (often caused by CDN rate-limiting, not
+	// permanently missing content)
 	dl4 := &store.Download{ID: "test4", PID: "p4", Status: store.StatusPending}
 	st.PutDownload(dl4)
 	m.failDownload(dl4, store.FailCodeTruncated, fmt.Errorf("truncated"))
-	if dl4.Retryable {
-		t.Error("truncated should not be retryable")
+	if !dl4.Retryable {
+		t.Error("truncated on first attempt should be retryable")
+	}
+	if dl4.RetryAfter.IsZero() {
+		t.Error("retryable failure should have a non-zero RetryAfter")
 	}
 }
 

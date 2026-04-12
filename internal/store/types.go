@@ -26,6 +26,7 @@ type Download struct {
 	FailureCode  string    `json:"failure_code"`
 	Retryable    bool      `json:"retryable"`
 	RetryCount   int       `json:"retry_count"`
+	RetryAfter   time.Time `json:"retry_after"`
 	CreatedAt    time.Time `json:"created_at"`
 	StartedAt    time.Time `json:"started_at"`
 	CompletedAt  time.Time `json:"completed_at"`

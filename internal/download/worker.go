@@ -45,7 +45,8 @@ func (m *Manager) processNext(ctx context.Context, workerID int) {
 
 	for _, dl := range downloads {
 		claimable := dl.Status == store.StatusPending ||
-			(dl.Status == store.StatusFailed && dl.Retryable && dl.RetryCount < maxRetries)
+			(dl.Status == store.StatusFailed && dl.Retryable && dl.RetryCount < maxRetries &&
+				(dl.RetryAfter.IsZero() || time.Now().After(dl.RetryAfter)))
 		if !claimable {
 			continue
 		}
@@ -227,7 +228,8 @@ func (m *Manager) setStatus(dl *store.Download, status, errMsg string) {
 }
 
 // failDownload marks a download as failed with the given failure code.
-// GeoBlocked and Expired are not retryable; others are retryable up to maxRetries.
+// GeoBlocked and Expired are permanent; everything else retries with
+// exponential backoff (30s, 90s, 270s) to avoid hammering the BBC CDN.
 func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.Status = store.StatusFailed
 	dl.FailureCode = code
@@ -235,17 +237,24 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.RetryCount++
 
 	switch code {
-	case store.FailCodeGeoBlocked, store.FailCodeExpired, store.FailCodeTruncated:
+	case store.FailCodeGeoBlocked, store.FailCodeExpired:
 		dl.Retryable = false
 	default:
 		dl.Retryable = dl.RetryCount < maxRetries
+	}
+
+	if dl.Retryable {
+		backoff := 30 * time.Second
+		for i := 1; i < dl.RetryCount; i++ {
+			backoff *= 3
+		}
+		dl.RetryAfter = time.Now().Add(backoff)
 	}
 
 	if storeErr := m.store.PutDownload(dl); storeErr != nil {
 		log.Printf("store failDownload: %v", storeErr)
 	}
 
-	// Non-retryable failures move to history so the frontend can display them
 	if !dl.Retryable {
 		dl.CompletedAt = time.Now()
 		m.store.PutDownload(dl)
@@ -253,7 +262,11 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	}
 
 	m.broadcast("download:failed", dl)
-	log.Printf("download %s failed (%s): %v [retry=%v count=%d]", dl.ID, code, err, dl.Retryable, dl.RetryCount)
+	if dl.Retryable {
+		log.Printf("download %s failed (%s): %v [retry %d/%d, backoff %v]", dl.ID, code, err, dl.RetryCount, maxRetries, time.Until(dl.RetryAfter).Round(time.Second))
+	} else {
+		log.Printf("download %s failed (%s): %v [permanent, count=%d]", dl.ID, code, err, dl.RetryCount)
+	}
 }
 
 // downloadSubtitles fetches TTML subtitles from the BBC and converts to SRT.
