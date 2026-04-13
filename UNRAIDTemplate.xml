@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>iplayer-arr</Name>
+  <Repository>ghcr.io/will-luck/iplayer-arr:latest</Repository>
+  <Registry>https://github.com/Will-Luck/iplayer-arr</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Will-Luck/iplayer-arr/wiki</Support>
+  <Project>https://github.com/Will-Luck/iplayer-arr</Project>
+  <ReadMe>https://github.com/Will-Luck/iplayer-arr/blob/main/README.md</ReadMe>
+  <Overview>BBC iPlayer download manager that plugs into Sonarr as both an indexer and download client.</Overview>
+  <Category/>
+  <WebUI>http://[IP]:[PORT:62001]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/Will-Luck/iplayer-arr/refs/heads/main/UNRAIDTemplate.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/will-luck/iplayer-arr/refs/heads/main/docs/logo-icon-only.png</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset></CPUset>
+  <DateInstalled></DateInstalled>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Path: Config" Target="/config" Default="" Mode="rw" Description="Path to iplayer-arr's appdata folder for BoltDB database and application settings." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/iplayer-arr</Config>
+  <Config Name="Path: Downloads" Target="/downloads" Default="" Mode="rw" Description="Download output directory." Type="Path" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="Port: WebUI" Target="62001" Default="" Mode="tcp" Description="" Type="Port" Display="always" Required="false" Mask="false">62001</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <TailscaleStateDir/>
+</Container>
