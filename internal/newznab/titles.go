@@ -24,6 +24,11 @@ var (
 	// format). Anchored so it does not false-positive on episode titles
 	// that merely contain a date substring.
 	reCompositeDateSubtitle = regexp.MustCompile(`^[^:]+:\s*\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}\s*$`)
+
+	// reSeriesPrefix strips "Series N: M. " from the start of a subtitle.
+	// This is redundant with the SxxExx numbering and confuses Sonarr's
+	// title parser (e.g. "S02E01.Series.2.1.Apex.Predator" fails to match).
+	reSeriesPrefix = regexp.MustCompile(`^Series\s+\d+:\s*\d+\.\s*`)
 )
 
 // isDateSubtitle reports whether s looks like a bare date (the only thing in
@@ -120,7 +125,7 @@ func GenerateTitle(p *store.Programme, quality string, override *store.ShowOverr
 
 func buildSxxExxTitle(name, episode string, series, ep int, quality string) string {
 	sn := sanitiseForTitle(name)
-	se := sanitiseForTitle(episode)
+	se := sanitiseForTitle(reSeriesPrefix.ReplaceAllString(episode, ""))
 	seNum := fmt.Sprintf("S%02dE%02d", series, ep)
 	if se != "" {
 		return fmt.Sprintf("%s.%s.%s.%s.WEB-DL.AAC.H264-%s", sn, seNum, se, quality, releaseGroup)

@@ -136,6 +136,21 @@ export default function Dashboard() {
   }
 
   function updateDownload(data: Download) {
+    if (data.status === "pending") {
+      // New or still-pending download belongs in the queue
+      setQueue((prev) => {
+        const idx = prev.findIndex((d) => d.id === data.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = data;
+          return next;
+        }
+        return [...prev, data];
+      });
+      setActive((prev) => prev.filter((d) => d.id !== data.id));
+      return;
+    }
+    // Non-pending: move to active, remove from queue
     setActive((prev) => {
       const idx = prev.findIndex((d) => d.id === data.id);
       if (idx >= 0) {
@@ -143,10 +158,8 @@ export default function Dashboard() {
         next[idx] = data;
         return next;
       }
-      // Might be moving from queue to active
       return [...prev, data];
     });
-    // Remove from queue if present
     setQueue((prev) => prev.filter((d) => d.id !== data.id));
   }
 
@@ -343,7 +356,7 @@ export default function Dashboard() {
       {/* Active downloads */}
       <div class="card">
         <div class="card-header">Active Downloads</div>
-        <div class="card-body">
+        <div class="card-body scroll-thin" style={{ "max-height": "400px" }}>
           <Show when={active().length > 0} fallback={<div class="card-empty">No active downloads</div>}>
             <For each={active()}>
               {(dl) => (
@@ -398,7 +411,7 @@ export default function Dashboard() {
       <Show when={queue().length > 0}>
         <div class="card">
           <div class="card-header">Queue ({queue().length})</div>
-          <div class="card-body">
+          <div class="card-body scroll-thin" style={{ "max-height": "300px" }}>
             <For each={queue()}>
               {(dl) => (
                 <div class="dl-item">
@@ -482,11 +495,12 @@ export default function Dashboard() {
                         : "▼"
                       : ""}
                   </th>
-                  <th scope="col" class="text-center">Quality</th>
-                  <th scope="col" class="text-center">Status</th>
+                  <th scope="col" class="text-center" style={{ width: "60px" }}>Quality</th>
+                  <th scope="col" class="text-center" style={{ width: "80px" }}>Status</th>
                   <th
                     scope="col"
                     data-sortable
+                    style={{ width: "100px" }}
                     onClick={() => toggleSort("completed_at")}
                   >
                     Completed{" "}
@@ -496,8 +510,8 @@ export default function Dashboard() {
                         : "▼"
                       : ""}
                   </th>
-                  <th scope="col" class="text-center">Size</th>
-                  <th scope="col"></th>
+                  <th scope="col" class="text-center" style={{ width: "55px" }}>Size</th>
+                  <th scope="col" style={{ width: "55px" }}></th>
                 </tr>
               </thead>
               <tbody>

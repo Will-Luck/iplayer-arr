@@ -5,6 +5,19 @@ All notable changes to iplayer-arr will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.1.5] - 2026-04-14
+
+### Fixed
+
+- **TVDB ID echoed in RSS responses**: iplayer-arr now includes `<newznab:attr name="tvdbid" />` in search results, giving Sonarr a definitive series match. Previously, Sonarr relied on title parsing which failed for ambiguous names like "Return to Paradise" vs "Paradise".
+- **Redundant `Series.N.M` in release titles confuses Sonarr**: the episode subtitle (e.g. `Series 2: 1. Apex Predator`) was included verbatim after the `SxxExx` tag, producing titles like `S02E01.Series.2.1.Apex.Predator` that Sonarr misparses. The `Series N: M.` prefix is now stripped since the numbering is already in `SxxExx`.
+- **Episode titles containing colons break subtitle parser**: subtitles like `Series 2: 5. Chapter One: Murder` were split at all `": "` delimiters (limit 3), causing the episode number to be lost. Changed to split at the first colon only so episode titles with colons are handled correctly.
+- **Dashboard overflow**: active downloads and queue sections now cap at 400px/300px with thin internal scrollbars. Removed `overflow-x: hidden` from `.main` which was preventing natural page scroll.
+- **Queue section not appearing dynamically**: SSE events for new pending downloads were routed to the active list instead of the queue, so the Queue card never appeared without a page refresh.
+- **Long titles in dashboard**: download titles and history table now truncate with ellipsis instead of wrapping across multiple lines.
+
 ## [1.1.4] - 2026-04-12
 
 ### Fixed

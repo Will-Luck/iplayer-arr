@@ -24,7 +24,7 @@
 }
 
 html, body, #root {
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
@@ -47,9 +47,18 @@ body {
   margin-left: var(--nav-width);
   padding: 24px 32px;
   max-width: 1200px;
-  overflow-x: hidden;
   transition: margin-left 0.2s;
 }
+
+/* Thin scrollbar for scrollable card sections */
+.scroll-thin {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.scroll-thin::-webkit-scrollbar { width: 4px; }
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+.scroll-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 /* Navigation */
 .nav {
@@ -277,6 +286,10 @@ body {
 .dl-title {
   font-size: 14px;
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .dl-meta {
@@ -292,6 +305,13 @@ body {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  table-layout: fixed;
+}
+
+.table td:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .table th {
