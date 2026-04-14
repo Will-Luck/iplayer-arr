@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.5] - 2026-04-14
+
 ### Fixed
 
 - **TVDB ID echoed in RSS responses**: iplayer-arr now includes `<newznab:attr name="tvdbid" />` in search results, giving Sonarr a definitive series match. Previously, Sonarr relied on title parsing which failed for ambiguous names like "Return to Paradise" vs "Paradise".
