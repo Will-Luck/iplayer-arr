@@ -78,6 +78,8 @@ volumes:
 ```
 
 > iPlayer requires a UK IP address. Enable the built-in VPN or run behind an existing UK VPN/proxy. See the [VPN Configuration](https://github.com/Will-Luck/iplayer-arr/wiki/VPN-Configuration) wiki page.
+>
+> **If you set `VPN_ENABLED=true`, the examples above are not sufficient.** You must also pass `--cap-add=NET_ADMIN` and `--sysctl net.ipv4.conf.all.src_valid_mark=1` (or the Compose equivalent) or the container will crash-loop at startup with `[VPN] Not the right capabilities`. Full example: [VPN Configuration → Docker Capabilities](https://github.com/Will-Luck/iplayer-arr/wiki/VPN-Configuration#docker-capabilities).
 
 Open `http://localhost:62001` and the setup wizard will guide you through connecting Sonarr.
 
