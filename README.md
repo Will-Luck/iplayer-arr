@@ -45,6 +45,8 @@ When the auto-resolved numbering still doesn't match TheTVDB (common with specia
 
 > **Important**: You must hold a valid UK TV Licence to legally access BBC iPlayer content via iplayer-arr. iplayer-arr does not verify this and assumes you are compliant. See [DISCLAIMER.md](DISCLAIMER.md) for full legal terms.
 
+> **Running Unraid?** Install the Community Applications template from [Will-Luck/unraid-templates](https://github.com/Will-Luck/unraid-templates) rather than the `docker run` command below. The template pre-configures the VPN variables and the `NET_ADMIN` capabilities required when `VPN_ENABLED=true`.
+
 ```bash
 docker run -d \
   --name iplayer-arr \
