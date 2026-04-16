@@ -45,6 +45,8 @@ When the auto-resolved numbering still doesn't match TheTVDB (common with specia
 
 > **Important**: You must hold a valid UK TV Licence to legally access BBC iPlayer content via iplayer-arr. iplayer-arr does not verify this and assumes you are compliant. See [DISCLAIMER.md](DISCLAIMER.md) for full legal terms.
 
+> **Running Unraid?** Install the Community Applications template from [Will-Luck/unraid-templates](https://github.com/Will-Luck/unraid-templates) rather than the `docker run` command below. The template pre-configures the VPN variables and the `NET_ADMIN` capabilities required when `VPN_ENABLED=true`.
+
 ```bash
 docker run -d \
   --name iplayer-arr \
@@ -78,6 +80,8 @@ volumes:
 ```
 
 > iPlayer requires a UK IP address. Enable the built-in VPN or run behind an existing UK VPN/proxy. See the [VPN Configuration](https://github.com/Will-Luck/iplayer-arr/wiki/VPN-Configuration) wiki page.
+>
+> **If you set `VPN_ENABLED=true`, the examples above are not sufficient.** You must also pass `--cap-add=NET_ADMIN` and `--sysctl net.ipv4.conf.all.src_valid_mark=1` (or the Compose equivalent) or the container will crash-loop at startup with `[VPN] Not the right capabilities`. Full example: [VPN Configuration → Docker Capabilities](https://github.com/Will-Luck/iplayer-arr/wiki/VPN-Configuration#docker-capabilities).
 
 Open `http://localhost:62001` and the setup wizard will guide you through connecting Sonarr.
 
