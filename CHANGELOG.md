@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-04-16
+
 ### Fixed
 
 - **Sonarr follow-up episode searches now carry `tvdbid` attribute (#31)**: When Sonarr sends a tvsearch with `q=ShowName` and an empty `tvdbid` (the shape it uses for episode-level follow-ups after an initial tvdbid-only lookup), iplayer-arr now reverse-looks-up the tvdbid in its series mapping store so the `<newznab:attr name="tvdbid">` echo keeps firing on every item. Previously Sonarr could not match these items back to the correct series for shows with duplicate BBC brand names or where the `q` string alone was ambiguous.
