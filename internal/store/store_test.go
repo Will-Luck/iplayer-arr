@@ -204,6 +204,94 @@ func TestSeriesMapping(t *testing.T) {
 	}
 }
 
+func TestGetSeriesMappingByName_Found(t *testing.T) {
+	s := testStore(t)
+	m := &SeriesMapping{TVDBId: "71756", ShowName: "Casualty", Year: 1986}
+	if err := s.PutSeriesMapping(m); err != nil {
+		t.Fatalf("PutSeriesMapping: %v", err)
+	}
+
+	got, err := s.GetSeriesMappingByName("Casualty")
+	if err != nil {
+		t.Fatalf("GetSeriesMappingByName: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetSeriesMappingByName returned nil, want mapping")
+	}
+	if got.TVDBId != "71756" {
+		t.Errorf("TVDBId = %q, want %q", got.TVDBId, "71756")
+	}
+	if got.Year != 1986 {
+		t.Errorf("Year = %d, want 1986", got.Year)
+	}
+}
+
+func TestGetSeriesMappingByName_CaseInsensitive(t *testing.T) {
+	s := testStore(t)
+	if err := s.PutSeriesMapping(&SeriesMapping{TVDBId: "81797", ShowName: "One Piece", Year: 1999}); err != nil {
+		t.Fatalf("PutSeriesMapping: %v", err)
+	}
+
+	got, err := s.GetSeriesMappingByName("one piece")
+	if err != nil {
+		t.Fatalf("GetSeriesMappingByName: %v", err)
+	}
+	if got == nil || got.TVDBId != "81797" {
+		t.Errorf("lowercase lookup failed: got %+v, want TVDBId=81797", got)
+	}
+
+	got2, _ := s.GetSeriesMappingByName("ONE PIECE")
+	if got2 == nil || got2.TVDBId != "81797" {
+		t.Errorf("uppercase lookup failed: got %+v, want TVDBId=81797", got2)
+	}
+}
+
+func TestGetSeriesMappingByName_NotFound(t *testing.T) {
+	s := testStore(t)
+	got, err := s.GetSeriesMappingByName("Nothing Here")
+	if err != nil {
+		t.Fatalf("GetSeriesMappingByName: %v", err)
+	}
+	if got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+func TestGetSeriesMappingByName_EmptyInput(t *testing.T) {
+	s := testStore(t)
+	s.PutSeriesMapping(&SeriesMapping{TVDBId: "71756", ShowName: "Casualty"})
+
+	got, err := s.GetSeriesMappingByName("")
+	if err != nil {
+		t.Fatalf("GetSeriesMappingByName(empty): %v", err)
+	}
+	if got != nil {
+		t.Errorf("empty input returned %+v, want nil", got)
+	}
+}
+
+func TestGetSeriesMappingByName_MultipleEntries(t *testing.T) {
+	s := testStore(t)
+	entries := []*SeriesMapping{
+		{TVDBId: "71756", ShowName: "Casualty", Year: 1986},
+		{TVDBId: "81797", ShowName: "One Piece", Year: 1999},
+		{TVDBId: "78804", ShowName: "Doctor Who", Year: 1963},
+	}
+	for _, m := range entries {
+		if err := s.PutSeriesMapping(m); err != nil {
+			t.Fatalf("PutSeriesMapping(%s): %v", m.ShowName, err)
+		}
+	}
+
+	got, err := s.GetSeriesMappingByName("Doctor Who")
+	if err != nil {
+		t.Fatalf("GetSeriesMappingByName: %v", err)
+	}
+	if got == nil || got.TVDBId != "78804" {
+		t.Errorf("got %+v, want TVDBId=78804", got)
+	}
+}
+
 func TestOverrides(t *testing.T) {
 	s := testStore(t)
 
