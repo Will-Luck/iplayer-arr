@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Registry pages now carry README and OCI metadata.** Added `org.opencontainers.image.*` labels to the Dockerfile (title, description, source, url, documentation, licenses) so GHCR auto-links back to the repository. The release workflow now syncs `README.md` to Docker Hub's description field via `peter-evans/dockerhub-description@v4` on every `v*` tag push. Docker Hub's short description is set to "BBC iPlayer Newznab indexer and SABnzbd download client for Sonarr".
+
 ## [1.1.6] - 2026-04-16
 
 ### Fixed

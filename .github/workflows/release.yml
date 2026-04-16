@@ -55,3 +55,12 @@ jobs:
             BUILD_DATE=${{ steps.build-date.outputs.value }}
           cache-from: type=gha,scope=release
           cache-to: type=gha,scope=release,mode=max
+
+      - name: Sync README to Docker Hub
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: willluck/iplayer-arr
+          short-description: BBC iPlayer Newznab indexer and SABnzbd download client for Sonarr
+          readme-filepath: ./README.md

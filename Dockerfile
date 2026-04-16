@@ -26,6 +26,13 @@ RUN [ -z "$VERSION" ] && VERSION=$(git describe --tags --always 2>/dev/null || e
 # Stage 3: Runtime (hotio base with optional VPN)
 FROM ghcr.io/hotio/base:alpinevpn
 
+LABEL org.opencontainers.image.title="iplayer-arr"
+LABEL org.opencontainers.image.description="BBC iPlayer Newznab indexer and SABnzbd download client for Sonarr"
+LABEL org.opencontainers.image.source="https://github.com/Will-Luck/iplayer-arr"
+LABEL org.opencontainers.image.url="https://github.com/Will-Luck/iplayer-arr"
+LABEL org.opencontainers.image.documentation="https://github.com/Will-Luck/iplayer-arr#readme"
+LABEL org.opencontainers.image.licenses="GPL-3.0"
+
 RUN apk add --no-cache ffmpeg
 
 COPY --from=go-build /iplayer-arr /app/iplayer-arr
