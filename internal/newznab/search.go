@@ -43,7 +43,24 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[tvsearch] q=%q tvdbid=%q season=%q ep=%q", q, tvdbid, seasonStr, epStr)
 
+	// Issue #31: Sonarr sends q=ShowName with an empty tvdbid on
+	// episode-level follow-up queries (after the initial tvdbid-only
+	// lookup warmed the store). Recover the tvdbid from the store so
+	// the <newznab:attr name="tvdbid"> echo in writeResultsRSS still
+	// fires on these follow-ups. The request's own tvdbid parameter
+	// always wins -- we only rehydrate when tvdbid == "".
 	var filterYear int
+	if q != "" && tvdbid == "" && h.store != nil {
+		cached, _ := h.store.GetSeriesMappingByName(q)
+		if cached != nil {
+			tvdbid = cached.TVDBId
+			if cached.Year > 0 {
+				filterYear = cached.Year
+			}
+			log.Printf("[tvsearch] rehydrated tvdbid=%q for q=%q from store",
+				tvdbid, q)
+		}
+	}
 	if q == "" && tvdbid != "" {
 		// Try stored mapping first - but only use the warm cache if it
 		// has a year (Year > 0). Old v1.0.2/v1.1.0 records have no year

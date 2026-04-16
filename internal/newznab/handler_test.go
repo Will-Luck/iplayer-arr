@@ -747,3 +747,122 @@ func TestSearch_DoctorWhoClassicTVDB_WarmCacheRetainsYear(t *testing.T) {
 		t.Errorf("warm-cache test: expected 0 Skyhook hits, got %d", hits)
 	}
 }
+
+// TestHandleTVSearch_TVDBIDRehydratedFromStore covers GitHub issue #31:
+// Sonarr sends q=ShowName with an empty tvdbid on episode-level follow-up
+// queries. Before the fix, the resulting RSS items had no tvdbid attr and
+// Sonarr could not match them back to the series. After the fix, the
+// handler does a reverse store lookup and threads the tvdbid through to
+// writeResultsRSS.
+func TestHandleTVSearch_TVDBIDRehydratedFromStore(t *testing.T) {
+	payload := `{
+		"new_search": {
+			"results": [
+				{"id": "b039d07m", "type": "episode", "title": "Doctor Who", "subtitle": "Series 14: 3. Boom", "release_date": "2024-05-18", "parent_position": 3}
+			]
+		}
+	}`
+	h, _ := newHandlerWithBBCAndStore(t, payload)
+
+	// Seed the store as if an earlier tvdbid=78804 request had resolved.
+	if err := h.store.PutSeriesMapping(&store.SeriesMapping{
+		TVDBId: "78804", ShowName: "Doctor Who", Year: 2005,
+	}); err != nil {
+		t.Fatalf("seed PutSeriesMapping: %v", err)
+	}
+
+	// Sonarr's follow-up request: q filled in, tvdbid empty.
+	req := httptest.NewRequest("GET",
+		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=&season=14&ep=3", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `<newznab:attr name="tvdbid" value="78804"`) {
+		t.Errorf("RSS missing rehydrated tvdbid attr.\nbody:\n%s", body)
+	}
+}
+
+// TestHandleTVSearch_TVDBIDRehydrationCaseInsensitive covers the
+// case-insensitive path of the reverse lookup.
+func TestHandleTVSearch_TVDBIDRehydrationCaseInsensitive(t *testing.T) {
+	payload := `{
+		"new_search": {
+			"results": [
+				{"id": "m002pwlf", "type": "episode", "title": "Casualty", "subtitle": "Series 1: 1. Learning Curve", "release_date": "1986-09-06", "parent_position": 1}
+			]
+		}
+	}`
+	h, _ := newHandlerWithBBCAndStore(t, payload)
+	h.store.PutSeriesMapping(&store.SeriesMapping{
+		TVDBId: "71756", ShowName: "Casualty", Year: 1986,
+	})
+
+	// Note lower-case q in the request -- mapping is stored with title-case.
+	req := httptest.NewRequest("GET",
+		"/newznab/api?t=tvsearch&q=casualty&tvdbid=&season=1&ep=1", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if !strings.Contains(w.Body.String(),
+		`<newznab:attr name="tvdbid" value="71756"`) {
+		t.Errorf("case-insensitive rehydration missed.\nbody:\n%s", w.Body.String())
+	}
+}
+
+// TestHandleTVSearch_TVDBIDNoRehydrationWhenUnknown verifies we do not
+// invent a tvdbid when the store has no mapping for the requested show.
+func TestHandleTVSearch_TVDBIDNoRehydrationWhenUnknown(t *testing.T) {
+	payload := `{
+		"new_search": {
+			"results": [
+				{"id": "b039d07m", "type": "episode", "title": "Doctor Who", "subtitle": "Series 14: 3. Boom", "release_date": "2024-05-18", "parent_position": 3}
+			]
+		}
+	}`
+	h, _ := newHandlerWithBBCAndStore(t, payload)
+	// deliberately no PutSeriesMapping
+
+	req := httptest.NewRequest("GET",
+		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=&season=14&ep=3", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if strings.Contains(w.Body.String(), `<newznab:attr name="tvdbid"`) {
+		t.Errorf("tvdbid attr emitted without a store mapping.\nbody:\n%s",
+			w.Body.String())
+	}
+}
+
+// TestHandleTVSearch_TVDBIDRequestParamWinsOverStore covers the shape
+// where Sonarr sends a tvdbid explicitly -- the store lookup must not
+// override it, even if the store happens to have a different entry
+// for the same show name.
+func TestHandleTVSearch_TVDBIDRequestParamWinsOverStore(t *testing.T) {
+	payload := `{
+		"new_search": {
+			"results": [
+				{"id": "b039d07m", "type": "episode", "title": "Doctor Who", "subtitle": "Series 14: 3. Boom", "release_date": "2024-05-18", "parent_position": 3}
+			]
+		}
+	}`
+	h, _ := newHandlerWithBBCAndStore(t, payload)
+	// Store has a STALE mapping (wrong tvdbid for this name).
+	h.store.PutSeriesMapping(&store.SeriesMapping{
+		TVDBId: "99999", ShowName: "Doctor Who", Year: 2005,
+	})
+
+	// Request supplies the correct tvdbid.
+	req := httptest.NewRequest("GET",
+		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=78804&season=14&ep=3", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `<newznab:attr name="tvdbid" value="78804"`) {
+		t.Errorf("expected request tvdbid=78804 to win, body:\n%s", body)
+	}
+	if strings.Contains(body, `value="99999"`) {
+		t.Errorf("store tvdbid=99999 leaked over request tvdbid=78804, body:\n%s", body)
+	}
+}
