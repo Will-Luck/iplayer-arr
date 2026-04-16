@@ -292,6 +292,45 @@ func TestGetSeriesMappingByName_MultipleEntries(t *testing.T) {
 	}
 }
 
+// TestGetSeriesMappingByName_YearSuffix covers the issue #31 mismatch:
+// Skyhook stores "Doctor Who (2005)" but Sonarr queries with "Doctor Who".
+// GetSeriesMappingByName must match the bare title against the year-suffixed
+// stored name.
+func TestGetSeriesMappingByName_YearSuffix(t *testing.T) {
+	s := testStore(t)
+	// Store the Skyhook-style title with year disambiguation suffix.
+	if err := s.PutSeriesMapping(&SeriesMapping{TVDBId: "78804", ShowName: "Doctor Who (2005)", Year: 2005}); err != nil {
+		t.Fatalf("PutSeriesMapping: %v", err)
+	}
+
+	// Lookup with the bare title that Sonarr sends on follow-up queries.
+	got, err := s.GetSeriesMappingByName("Doctor Who")
+	if err != nil {
+		t.Fatalf("GetSeriesMappingByName: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetSeriesMappingByName returned nil; want match on year-suffix stored name")
+	}
+	if got.TVDBId != "78804" {
+		t.Errorf("TVDBId = %q, want %q", got.TVDBId, "78804")
+	}
+
+	// Case-insensitive variant.
+	got2, err := s.GetSeriesMappingByName("doctor who")
+	if err != nil {
+		t.Fatalf("GetSeriesMappingByName (lower): %v", err)
+	}
+	if got2 == nil || got2.TVDBId != "78804" {
+		t.Errorf("lowercase year-suffix lookup: got %+v, want TVDBId=78804", got2)
+	}
+
+	// Must NOT match a name that is merely a prefix but lacks the pattern.
+	got3, _ := s.GetSeriesMappingByName("Doctor")
+	if got3 != nil {
+		t.Errorf("partial prefix matched unexpectedly: %+v", got3)
+	}
+}
+
 func TestOverrides(t *testing.T) {
 	s := testStore(t)
 
