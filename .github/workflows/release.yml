@@ -5,7 +5,7 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Generate build date
         id: build-date
@@ -64,3 +66,25 @@ jobs:
           repository: willluck/iplayer-arr
           short-description: BBC iPlayer Newznab indexer and SABnzbd download client for Sonarr
           readme-filepath: ./README.md
+
+      # Use the tag's annotation as the release body. Lightweight tags fall
+      # back to the tagged commit's subject. fetch-depth: 0 above is required
+      # so the tag object is available on the runner.
+      - name: Extract release notes from tag annotation
+        id: notes
+        run: |
+          set -euo pipefail
+          body=$(git for-each-ref --format='%(contents)' "refs/tags/${GITHUB_REF_NAME}")
+          if [ -z "$body" ]; then
+            body=$(git log -1 --pretty=%B "${GITHUB_REF_NAME}")
+          fi
+          printf '%s' "$body" > release-notes.md
+          echo "Wrote $(wc -c < release-notes.md) bytes to release-notes.md"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          make_latest: true
