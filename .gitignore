@@ -8,3 +8,14 @@
 .DS_Store
 
 .worktrees/
+
+# Local tooling — not shipped
+/CLAUDE.md
+/AGENTS.md
+/GEMINI.md
+/.cursorrules
+/.cursor/
+/.claude/
+/.superpowers/
+/.codex
+/docs/superpowers/
