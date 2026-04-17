@@ -64,7 +64,19 @@ frontend/                     Solid.js SPA (Vite + TypeScript)
 - **SSE:** Real-time download progress via `/api/events`
 - **Config:** Environment variables. See `cmd/iplayer-arr/main.go` for flag definitions.
 - **Module:** `github.com/Will-Luck/iplayer-arr`
-- **CI:** `.github/workflows/ci.yml` (lint + test), `release.yml` (GHCR image on tag), `.gitea/workflows/ci.yml` (local Gitea runner)
+- **CI:** `.github/workflows/ci.yml` (lint + test), `release.yml` (GHCR image + GitHub Release on tag), `.gitea/workflows/ci.yml` (local Gitea runner)
 - **Runtime deps:** ffmpeg required for HLS download + subtitle muxing
 - **Base image:** `ghcr.io/hotio/base:alpinevpn` (s6-overlay, optional VPN support)
 - **Sonarr integration:** Presents as both a Newznab indexer and SABnzbd client to Sonarr
+
+## Release workflow
+
+Gitea is the squash authority. All merges happen via Gitea PRs. Never squash-merge on GitHub — it creates duplicate-SHA drift against Gitea's squash and the next PR will conflict on `CHANGELOG.md`.
+
+1. Open the PR on Gitea, get CI green, merge (squash).
+2. Smoke-test the merged `main` in an isolated Docker container on `.57` (high port, tmpfs for state, no shared network). Hit the actual affected endpoint and check the response shape.
+3. Fast-forward GitHub: `git push origin gitea/main:main`. No GitHub PR needed.
+4. Cut the release tag: move `[Unreleased]` → `[X.Y.Z] - YYYY-MM-DD` in `CHANGELOG.md`, commit on `main`, `git tag -a vX.Y.Z -m "..."`, push both. The `release.yml` workflow then builds the GHCR image, syncs Docker Hub description, and publishes the GitHub Release using the tag annotation as the body.
+5. Post-deploy: promote the production container on `.57` to the new tag and run `/lucknet-ops:post-deploy` to cascade `docker-run-commands.md`, `state.md`, `networklayout.md`, `changes.md`.
+
+External GitHub contributor? Pull their branch, push to Gitea, open a Gitea PR, squash there, fast-forward GitHub. Their GitHub PR auto-closes as "merged".
