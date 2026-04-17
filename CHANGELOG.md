@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-04-17
+
 ### Fixed
 
 - **Position-based episode identity now survives Sonarr's tvsearch filter (#32)**: BBC long-runners with no "Series N" subtitle prefix (Casualty, One Piece 1999) parsed to `Series=0, EpisodeNum=N` and were rejected by `matchesSearchFilter` because Sonarr always queries `season=1` for these shows. `iblResultToProgramme` now promotes `Series=1` whenever the subtitle gives a real episode number without a series prefix. Position alone does not trigger promotion (one-offs and specials also carry `Position>0`), so topical shows and genuine specials keep their existing date-tier and manual-tier handling.
