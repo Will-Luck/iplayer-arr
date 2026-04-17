@@ -6,3 +6,5 @@
 *.db
 *.partial.mp4
 .DS_Store
+
+.worktrees/

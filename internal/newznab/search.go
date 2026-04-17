@@ -314,11 +314,23 @@ func writeEmptyRSS(w http.ResponseWriter) {
 }
 
 func iblResultToProgramme(r bbc.IBLResult) *store.Programme {
+	// Position-based identity promotion. BBC long-runners like Casualty
+	// and One Piece 1999 carry subtitles such as "Learning Curve Episode 3"
+	// that parseSubtitleNumbers reads as Series=0, EpisodeNum=3. Sonarr
+	// sends season=1 for these shows (their TVDB record has a single
+	// series), so matchesSearchFilter's Series==filterSeason gate rejects
+	// every item. Promote Series=1 whenever we have a real episode number
+	// but no series prefix. Position alone is not enough -- one-offs and
+	// specials also carry Position>0. GitHub #32.
+	series := r.Series
+	if series == 0 && r.EpisodeNum > 0 {
+		series = 1
+	}
 	return &store.Programme{
 		PID:        r.PID,
 		Name:       r.Title,
 		Episode:    r.Subtitle,
-		Series:     r.Series,
+		Series:     series,
 		EpisodeNum: r.EpisodeNum,
 		Position:   r.Position,
 		AirDate:    r.AirDate,

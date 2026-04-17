@@ -866,3 +866,68 @@ func TestHandleTVSearch_TVDBIDRequestParamWinsOverStore(t *testing.T) {
 		t.Errorf("store tvdbid=99999 leaked over request tvdbid=78804, body:\n%s", body)
 	}
 }
+
+// GitHub #32. BBC long-runners with no "Series N" prefix in the subtitle
+// (Casualty: "Learning Curve Episode 3", One Piece 1999: "Episode 47 - ...")
+// parse to Series=0 + EpisodeNum=N via parseSubtitleNumbers. Sonarr sends
+// integer season/ep filters from the TVDB record; matchesSearchFilter then
+// rejects every item because prog.Series=0 != filterSeason=1.
+//
+// Fix: promote Series=1 at the identity-resolution boundary
+// (iblResultToProgramme) when Series=0 but EpisodeNum>0. Position alone
+// must NOT trigger promotion -- one-offs and specials have Position>0 but
+// no real episode numbering.
+func TestIblResultToProgramme_PromotesSeriesOneForPositionBasedShows(t *testing.T) {
+	cases := []struct {
+		name       string
+		in         bbc.IBLResult
+		wantSeries int
+		wantEpNum  int
+	}{
+		{"parsed episode, no series -> promote to series 1",
+			bbc.IBLResult{PID: "m001", Series: 0, EpisodeNum: 3}, 1, 3},
+		{"large parsed episode, no series -> still series 1",
+			bbc.IBLResult{PID: "m002", Series: 0, EpisodeNum: 147}, 1, 147},
+		{"explicit series, parsed episode -> leave series alone",
+			bbc.IBLResult{PID: "m003", Series: 2, EpisodeNum: 3}, 2, 3},
+		{"topical (no series, no episode, has airdate) -> leave at 0",
+			bbc.IBLResult{PID: "m004", Series: 0, EpisodeNum: 0, AirDate: "2026-04-01"}, 0, 0},
+		{"position-only, no parsed episode -> do NOT promote on Position alone",
+			bbc.IBLResult{PID: "m005", Series: 0, EpisodeNum: 0, Position: 5}, 0, 0},
+		{"series present but no episode -> leave as-is",
+			bbc.IBLResult{PID: "m006", Series: 3, EpisodeNum: 0}, 3, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := iblResultToProgramme(tc.in)
+			if got.Series != tc.wantSeries {
+				t.Errorf("Series = %d, want %d (input %+v)", got.Series, tc.wantSeries, tc.in)
+			}
+			if got.EpisodeNum != tc.wantEpNum {
+				t.Errorf("EpisodeNum = %d, want %d (input %+v)", got.EpisodeNum, tc.wantEpNum, tc.in)
+			}
+		})
+	}
+}
+
+// Regression for GitHub #32. Full path: a Casualty-shaped item (Series=0
+// from subtitle parsing, EpisodeNum=3 from "Episode 3") must survive
+// matchesSearchFilter when Sonarr queries season=1&ep=3.
+func TestMatchesSearchFilter_CasualtyPositionBasedAcceptsSeasonOne(t *testing.T) {
+	r := bbc.IBLResult{
+		PID:        "casualty-s01e03",
+		Title:      "Casualty",
+		Subtitle:   "Learning Curve Episode 3",
+		Series:     0,
+		EpisodeNum: 3,
+		AirDate:    "1986-09-20",
+	}
+	prog := iblResultToProgramme(r)
+	if !matchesSearchFilter(prog, "Casualty", "", 1, 3) {
+		t.Errorf("matchesSearchFilter rejected Casualty position-based item; prog=%+v", prog)
+	}
+	// And a mismatching episode should still be rejected.
+	if matchesSearchFilter(prog, "Casualty", "", 1, 4) {
+		t.Errorf("matchesSearchFilter wrongly accepted ep=4 for Casualty E3 item; prog=%+v", prog)
+	}
+}

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Position-based episode identity now survives Sonarr's tvsearch filter (#32)**: BBC long-runners with no "Series N" subtitle prefix (Casualty, One Piece 1999) parsed to `Series=0, EpisodeNum=N` and were rejected by `matchesSearchFilter` because Sonarr always queries `season=1` for these shows. `iblResultToProgramme` now promotes `Series=1` whenever the subtitle gives a real episode number without a series prefix. Position alone does not trigger promotion (one-offs and specials also carry `Position>0`), so topical shows and genuine specials keep their existing date-tier and manual-tier handling.
+
 ### Changed
 
 - **Registry pages now carry README and OCI metadata.** Added `org.opencontainers.image.*` labels to the Dockerfile (title, description, source, url, documentation, licenses) so GHCR auto-links back to the repository. The release workflow now syncs `README.md` to Docker Hub's description field via `peter-evans/dockerhub-description@v4` on every `v*` tag push. Docker Hub's short description is set to "BBC iPlayer Newznab indexer and SABnzbd download client for Sonarr".
