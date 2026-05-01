@@ -387,15 +387,11 @@ export default function Dashboard() {
                         return speed ? <span class="text-muted">{speed}</span> : null;
                       })()}
                     </Show>
-                    <Show when={dl.size > 0}>
-                      <span>
-                        {formatBytes(dl.downloaded)} / {formatBytes(dl.size)}
-                      </span>
-                    </Show>
+                    <span>{formatBytes(dl.downloaded)}</span>
                     <Show when={dl.duration > 0}>
                       <span>{formatDuration(dl.duration)}</span>
                     </Show>
-                    <span class="text-muted">{dl.quality}</span>
+                    <span class="text-muted">Determining quality…</span>
                     <Show when={dl.error}>
                       <span class="text-danger">{dl.error}</span>
                     </Show>
@@ -519,7 +515,7 @@ export default function Dashboard() {
                   {(dl) => (
                     <tr>
                       <td>{dl.title || dl.pid}</td>
-                      <td class="text-muted text-center">{dl.quality}</td>
+                      <td class="text-muted text-center">{dl.actual_quality || dl.quality}</td>
                       <td class="text-center">
                         <span class={statusBadgeClass(dl.status === "completed" && dl.file_exists === false ? "imported" : dl.status)}>
                           {dl.status === "completed" && dl.file_exists === false ? "imported" : dl.status}

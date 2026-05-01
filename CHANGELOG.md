@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-05-01
+
+### Fixed
+
+- **Active Downloads no longer advertises a fake size estimate.** During download the dashboard previously showed `formatBytes(downloaded) / formatBytes(estimate)`, where the estimate came from a fixed-bitrate calculation against the *requested* quality. For shows where BBC silently delivers a lower quality than the prober advertised (Catherine Tate Show was the reporter's example: ~1GB estimate vs ~350MB on disk), this denominator was a lie. The active row now shows bytes-downloaded only and a literal `Determining quality…` muted span; the truthful values land in the History row once the download completes.
+- **Filenames and history rows now reflect the actual encoded quality.** When BBC delivers a lower quality than the prober advertised, the worker now runs `ffprobe` against the completed file, atomically relocates the file and its containing directory to a name carrying the actual quality tag (e.g. `…540p.WEB-DL…` instead of `…1080p.WEB-DL…`), and exposes the truth to the frontend and to the SABnzbd-compatible history endpoint Sonarr polls. The truncation gate now uses the *actual*-quality threshold instead of the requested-quality one, fixing a class of false positives where 540p downloads at the lower end of BBC's bitrate ladder were rejected for "looking too small for 1080p". Symmetric upgrades (e.g. FHD-prober promoting a 720p pick to a hidden 1080p variant) are also captured.
+
+### Added
+
+- **`actual_quality` field on download records.** New `ActualQuality string `json:"actual_quality,omitempty"`` field on `store.Download` (and matching optional `actual_quality?: string` on the frontend's `Download` type). Populated post-`ffprobe` for v1.1.8+ downloads; remains empty for v1.1.7-and-earlier records, where the frontend's `actual_quality || quality` fallback keeps the display correct without a backfill.
+- **`relocateNoReplace` helper using `unix.Renameat2(... RENAME_NOREPLACE)`** for kernel-atomic no-overwrite rename on supported filesystems, with a best-effort `os.Stat + os.Rename` fallback when the underlying filesystem returns `EINVAL`/`ENOSYS`. The fallback emits a distinguishing log line on entry so operators on filesystems outside the man page's explicit support list (notably NFS and overlayfs) can detect the degraded mode via log monitoring. Pre-release smoke on a Linux 6.17 host writing to a QNAP NFSv4.0 export confirmed: NFS does not expose the kernel-atomic flag and transparently uses the `Stat + Rename` fallback (functional behaviour identical, one log line per reconciliation). Local btrfs, ext4, and xfs (kernel ≥ 3.15) take the kernel-atomic path with no log line.
+
 ## [1.1.7] - 2026-04-17
 
 ### Fixed

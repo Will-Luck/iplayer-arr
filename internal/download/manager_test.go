@@ -103,6 +103,31 @@ func TestQualityToHeight(t *testing.T) {
 	}
 }
 
+func TestHeightToQualityTag(t *testing.T) {
+	tests := []struct {
+		h    int
+		want string
+	}{
+		{0, ""},
+		{395, ""},
+		{396, "396p"},
+		{480, "396p"}, // codebase taxonomy has no literal 480p tier; height 480 falls in the >=396 bucket
+		{539, "396p"},
+		{540, "540p"},
+		{720, "720p"},
+		{1080, "1080p"},
+		{2160, "2160p"},
+		{9999, "2160p"},
+	}
+
+	for _, tt := range tests {
+		got := heightToQualityTag(tt.h)
+		if got != tt.want {
+			t.Errorf("heightToQualityTag(%d) = %q, want %q", tt.h, got, tt.want)
+		}
+	}
+}
+
 func TestEstimateSize(t *testing.T) {
 	// 60 minutes at 720p: ~2.5Mbps * 3600s / 8 = ~1.125 GB
 	size := estimateSize(3600, "720p")
@@ -299,5 +324,150 @@ func TestCancelDownloadNoRezombie(t *testing.T) {
 
 	if m.IsCancelled(id) != true {
 		t.Error("expected IsCancelled to return true for a cancelled download")
+	}
+}
+
+func TestReconcileTitle(t *testing.T) {
+	tests := []struct {
+		name  string
+		title string
+		oldQ  string
+		newQ  string
+		want  string
+	}{
+		{
+			name:  "1080p downgrade to 540p (Catherine Tate baseline)",
+			title: "Catherine.Tate.Show.S01E01.1080p.WEB-DL.AAC.H264-iParr",
+			oldQ:  "1080p",
+			newQ:  "540p",
+			want:  "Catherine.Tate.Show.S01E01.540p.WEB-DL.AAC.H264-iParr",
+		},
+		{
+			name:  "720p upgrade to 1080p (FHD prober case)",
+			title: "Some.Show.S03E04.720p.WEB-DL.AAC.H264-iParr",
+			oldQ:  "720p",
+			newQ:  "1080p",
+			want:  "Some.Show.S03E04.1080p.WEB-DL.AAC.H264-iParr",
+		},
+		{
+			name:  "title without .WEB-DL. is unchanged",
+			title: "Custom.Manual.Title",
+			oldQ:  "1080p",
+			newQ:  "540p",
+			want:  "Custom.Manual.Title",
+		},
+		{
+			name:  "duplicate quality token: only the WEB-DL one is replaced",
+			title: "1080p.Show.S01E01.1080p.WEB-DL.AAC.H264-iParr",
+			oldQ:  "1080p",
+			newQ:  "540p",
+			want:  "1080p.Show.S01E01.540p.WEB-DL.AAC.H264-iParr",
+		},
+		{
+			name:  "empty oldQ is a no-op",
+			title: "Catherine.Tate.Show.S01E01.1080p.WEB-DL.AAC.H264-iParr",
+			oldQ:  "",
+			newQ:  "540p",
+			want:  "Catherine.Tate.Show.S01E01.1080p.WEB-DL.AAC.H264-iParr",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := reconcileTitle(tt.title, tt.oldQ, tt.newQ)
+			if got != tt.want {
+				t.Errorf("reconcileTitle(%q, %q, %q) = %q, want %q", tt.title, tt.oldQ, tt.newQ, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnqueueDedupSurvivesActualQualityUpdate_HistoryPath(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+
+	m := NewManager(st, filepath.Join(dir, "downloads"), 2, nil, nil, nil, nil)
+
+	// First enqueue, simulate worker reconciling actual=540p, then move to history.
+	id1, err := m.Enqueue("p0123ab", "1080p", "Show.S01E01.1080p.WEB-DL.AAC.H264-iParr", "sonarr")
+	if err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	dl, err := st.GetDownload(id1)
+	if err != nil {
+		t.Fatalf("get download: %v", err)
+	}
+	dl.ActualQuality = "540p"
+	dl.Status = store.StatusCompleted
+	if err := st.PutDownload(dl); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := st.MoveToHistory(id1); err != nil {
+		t.Fatalf("move to history: %v", err)
+	}
+
+	// Sonarr re-grabs at the same requested quality. Dedup must hit
+	// the history row keyed on the immutable Quality, not the
+	// post-reconciliation ActualQuality.
+	id2, err := m.Enqueue("p0123ab", "1080p", "Show.S01E01.1080p.WEB-DL.AAC.H264-iParr", "sonarr")
+	if err != nil {
+		t.Fatalf("second enqueue: %v", err)
+	}
+	if id1 != id2 {
+		t.Errorf("history dedup broke: id1=%q, id2=%q", id1, id2)
+	}
+
+	// Independent assertion that FindHistoryByPIDQuality matches on
+	// the requested-quality key.
+	hit, err := st.FindHistoryByPIDQuality("p0123ab", "1080p")
+	if err != nil {
+		t.Fatalf("FindHistoryByPIDQuality: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("FindHistoryByPIDQuality returned nil despite ActualQuality=540p")
+	}
+	if hit.ID != id1 {
+		t.Errorf("history row ID mismatch: got %q, want %q", hit.ID, id1)
+	}
+}
+
+func TestEnqueueDedupSurvivesActualQualityUpdate_ActivePath(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+
+	m := NewManager(st, filepath.Join(dir, "downloads"), 2, nil, nil, nil, nil)
+
+	id1, err := m.Enqueue("p0987zy", "1080p", "Show.S02E03.1080p.WEB-DL.AAC.H264-iParr", "sonarr")
+	if err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	dl, err := st.GetDownload(id1)
+	if err != nil {
+		t.Fatalf("get download: %v", err)
+	}
+	dl.ActualQuality = "540p" // mid-flight, before the worker calls MoveToHistory
+	if err := st.PutDownload(dl); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	id2, err := m.Enqueue("p0987zy", "1080p", "Show.S02E03.1080p.WEB-DL.AAC.H264-iParr", "sonarr")
+	if err != nil {
+		t.Fatalf("second enqueue: %v", err)
+	}
+	if id1 != id2 {
+		t.Errorf("active dedup broke: id1=%q, id2=%q", id1, id2)
+	}
+
+	hit, err := st.FindDownloadByPIDQuality("p0987zy", "1080p")
+	if err != nil {
+		t.Fatalf("FindDownloadByPIDQuality: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("FindDownloadByPIDQuality returned nil despite ActualQuality=540p")
+	}
+	if hit.ID != id1 {
+		t.Errorf("active row ID mismatch: got %q, want %q", hit.ID, id1)
 	}
 }

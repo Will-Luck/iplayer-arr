@@ -9,6 +9,7 @@ export interface Download {
   air_date: string;
   identity_tier: string;
   quality: string;
+  actual_quality?: string;
   status: string;
   category: string;
   stream_url: string;

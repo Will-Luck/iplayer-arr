@@ -2,6 +2,7 @@ package download
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
+	"golang.org/x/sys/unix"
 )
 
 const maxRetries = 3
@@ -169,39 +171,60 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		return
 	}
 
-	// 5. Truncation gate: verify the output file is a reasonable size.
-	// estimateSize is rough (fixed bitrate assumptions), so use a
-	// generous 30% threshold. This catches audio-only downloads
-	// (~27MB vs ~900MB expected) and CDN-truncated files.
-	if dl.Size > 0 {
-		info, statErr := os.Stat(outputFile)
-		if statErr != nil {
-			m.failDownload(dl, store.FailCodeFFmpeg, fmt.Errorf("stat output: %w", statErr))
-			return
-		}
-		actualSize := info.Size()
-		threshold := dl.Size * 30 / 100
-		if actualSize < threshold {
-			log.Printf("download %s truncated: %d bytes actual, %d estimated, threshold %d",
-				dl.ID, actualSize, dl.Size, threshold)
-			m.failDownload(dl, store.FailCodeTruncated, fmt.Errorf(
-				"output file truncated: %d bytes, expected at least %d (30%% of %d estimated)",
-				actualSize, threshold, dl.Size,
-			))
-			os.Remove(outputFile)
-			return
-		}
+	// 5. Stat the output file once; both the truncation gate and
+	// the post-completion size update consume actualSize.
+	statInfo, statErr := os.Stat(outputFile)
+	if statErr != nil {
+		m.failDownload(dl, store.FailCodeFFmpeg, fmt.Errorf("stat output: %w", statErr))
+		return
+	}
+	actualSize := statInfo.Size()
+
+	// 6. Probe the actual encoded height. Failure is non-fatal; the
+	// truncation gate will fall back to the requested-quality
+	// estimate, preserving v1.1.7 behaviour (including its
+	// false-positive risk on quality downgrades).
+	actualHeight, probeErr := probeActualHeight(ctx, outputFile)
+	actualQual := ""
+	if probeErr != nil {
+		log.Printf("download %s: ffprobe failed: %v (truncation gate will use requested quality)", dl.ID, probeErr)
+	} else {
+		actualQual = heightToQualityTag(actualHeight)
 	}
 
-	// 6. Download subtitles (best-effort)
+	// 7. Truncation gate using the actual-quality threshold (or
+	// requested-quality fallback when actualQual is empty).
+	if threshold := truncationThreshold(dl.Duration, dl.Quality, actualQual); threshold > 0 && actualSize < threshold {
+		thresholdQ := actualQual
+		if thresholdQ == "" {
+			thresholdQ = dl.Quality
+		}
+		log.Printf("download %s truncated: %d bytes actual, threshold %d (%s)",
+			dl.ID, actualSize, threshold, thresholdQ)
+		m.failDownload(dl, store.FailCodeTruncated, fmt.Errorf(
+			"output file truncated: %d bytes, expected at least %d (30%% of estimate at %s)",
+			actualSize, threshold, thresholdQ,
+		))
+		os.Remove(outputFile)
+		return
+	}
+
+	// 8. Reconciliation block: when ffprobe disagrees with the
+	// requested quality, atomically relocate the file/dir to a
+	// truthful name and update dl.ActualQuality. On any failure,
+	// dl.ActualQuality is still set so the frontend shows truth.
+	m.reconcileDownload(dl, actualQual)
+
+	// 9. Download subtitles (best-effort)
 	if streams.SubtitleURL != "" {
 		m.downloadSubtitles(streams.SubtitleURL, dl.OutputDir, dl.Title)
 	}
 
-	// 7. Complete -- move straight to history. The SABnzbd history endpoint
+	// 10. Complete -- move straight to history. The SABnzbd history endpoint
 	// returns these as Completed so Sonarr can see them and trigger import.
 	// Previously we slept 90s in the downloads bucket, but Sonarr's delete
 	// request would race and wipe the record before MoveToHistory ran.
+	dl.Size = actualSize
 	dl.Status = store.StatusCompleted
 	dl.Progress = 100
 	dl.CompletedAt = time.Now()
@@ -364,6 +387,64 @@ func qualityToHeight(q string) int {
 	return h
 }
 
+// heightToQualityTag converts an encoded video height to one of the
+// project's Newznab quality tags using the same cutoff ladder as
+// internal/newznab/search.go::heightsToTags. Returns "" for heights
+// below the lowest tier (396), so callers can distinguish "no tag" from
+// any real bucket. The 480 -> 396p mapping is intentional: the
+// codebase taxonomy is ["1080p", "720p", "540p", "396p"] with no
+// literal 480p tier.
+func heightToQualityTag(h int) string {
+	switch {
+	case h >= 2160:
+		return "2160p"
+	case h >= 1080:
+		return "1080p"
+	case h >= 720:
+		return "720p"
+	case h >= 540:
+		return "540p"
+	case h >= 396:
+		return "396p"
+	default:
+		return ""
+	}
+}
+
+// reconcileTitle swaps the requested-quality tag for the actual-quality
+// tag in a release-style title. Anchored on the ".WEB-DL." marker so
+// stray occurrences of the old quality string elsewhere in the title
+// (e.g. as part of the show name) are left alone. Empty oldQ or a
+// title without ".WEB-DL." returns the input unchanged so the caller
+// can use the result == input check as a "no rename needed" signal.
+func reconcileTitle(title, oldQ, newQ string) string {
+	if oldQ == "" || newQ == "" || oldQ == newQ {
+		return title
+	}
+	oldToken := "." + oldQ + ".WEB-DL."
+	newToken := "." + newQ + ".WEB-DL."
+	if !strings.Contains(title, oldToken) {
+		return title
+	}
+	return strings.Replace(title, oldToken, newToken, 1)
+}
+
+// truncationThreshold returns the bytes-on-disk threshold below which
+// a download is considered truncated. Prefers actualQuality (post-
+// ffprobe truth) and falls back to requestedQuality when actualQuality
+// is empty (ffprobe failed). Uses the existing 30% slack.
+func truncationThreshold(durationSecs int, requestedQuality, actualQuality string) int64 {
+	q := actualQuality
+	if q == "" {
+		q = requestedQuality
+	}
+	expected := estimateSize(durationSecs, q)
+	if expected <= 0 {
+		return 0
+	}
+	return expected * 30 / 100
+}
+
 // estimateSize estimates the download size in bytes based on duration and quality.
 // Uses rough bitrate estimates: 1080p ~5Mbps, 720p ~2.5Mbps, 480p ~1.2Mbps.
 func estimateSize(durationSecs int, quality string) int64 {
@@ -382,6 +463,130 @@ func estimateSize(durationSecs int, quality string) int64 {
 	}
 
 	return (bitsPerSecond * int64(durationSecs)) / 8
+}
+
+// reconcileDownload mutates dl in place to reflect post-ffprobe truth.
+// When actualQual disagrees with dl.Quality and the title contains a
+// reconcilable WEB-DL token, it atomically relocates the file into a
+// correctly-named sibling directory using relocateNoReplace. On any
+// rename failure (including a pre-existing target) it logs and leaves
+// the file in place; dl.ActualQuality is set unconditionally so the
+// frontend shows truth even when the rename was skipped.
+func (m *Manager) reconcileDownload(dl *store.Download, actualQual string) {
+	if actualQual == "" {
+		return // ffprobe failed earlier; nothing to reconcile
+	}
+	if actualQual == dl.Quality {
+		dl.ActualQuality = actualQual // record truth for uniform frontend display
+		return
+	}
+	dl.ActualQuality = actualQual
+
+	newTitle := reconcileTitle(dl.Title, dl.Quality, actualQual)
+	if newTitle == dl.Title {
+		log.Printf("download %s: title %q does not contain reconcilable WEB-DL token; ActualQuality=%s, file kept in place",
+			dl.ID, dl.Title, actualQual)
+		return
+	}
+
+	newDirBase := sanitiseFilename(newTitle)
+	newDir := filepath.Join(filepath.Dir(dl.OutputDir), newDirBase)
+	newFilePath := filepath.Join(newDir, newDirBase+".mp4")
+
+	createdNewDir := false
+	if _, err := os.Stat(newDir); os.IsNotExist(err) {
+		if mkErr := EnsureDownloadDir(newDir); mkErr != nil {
+			log.Printf("download %s: EnsureDownloadDir %s failed: %v (skipping rename)", dl.ID, newDir, mkErr)
+			return
+		}
+		createdNewDir = true
+	} else if err != nil {
+		log.Printf("download %s: cannot stat target dir %s: %v (skipping rename)", dl.ID, newDir, err)
+		return
+	}
+
+	err := relocateNoReplace(dl.OutputFile, newFilePath)
+	switch {
+	case err == nil:
+		_ = os.Remove(dl.OutputDir) // best-effort cleanup of now-empty old dir
+		log.Printf("download %s reconciled: requested %s, actual %s, relocated to %s",
+			dl.ID, dl.Quality, actualQual, newDir)
+		dl.Title = newTitle
+		dl.OutputDir = newDir
+		dl.OutputFile = newFilePath
+	case errors.Is(err, unix.EEXIST):
+		log.Printf("download %s: cannot relocate, %s already exists (skipping rename)", dl.ID, newFilePath)
+		if createdNewDir {
+			_ = os.Remove(newDir)
+		}
+	default:
+		log.Printf("download %s: relocate to %s failed: %v", dl.ID, newFilePath, err)
+		if createdNewDir {
+			_ = os.Remove(newDir)
+		}
+	}
+}
+
+// relocateDeps bundles the syscall-and-side-effect primitives used by
+// relocateNoReplaceWith so tests can inject mocks for each branch.
+// Production callers use unix.Renameat2 / os.Stat / os.Rename / log.Printf
+// via the relocateNoReplace wrapper.
+type relocateDeps struct {
+	renameat2 func(srcDirFD int, src string, dstDirFD int, dst string, flags uint) error
+	stat      func(string) (os.FileInfo, error)
+	rename    func(src, dst string) error
+	logf      func(format string, args ...any)
+}
+
+// relocateNoReplaceWith attempts an atomic move that fails (EEXIST) if
+// dst already exists. Tries unix.Renameat2(RENAME_NOREPLACE) first;
+// falls back to os.Stat + os.Rename when the underlying filesystem
+// doesn't support RENAME_NOREPLACE (the kernel returns EINVAL on
+// unsupported filesystems, ENOSYS on kernels < 3.15).
+//
+// The fast path is kernel-atomic and race-free against concurrent
+// racers. The fallback is best-effort: it offers "no overwrite under
+// happy-path Stat observation" but has a residual Stat -> Rename TOCTOU
+// window during which a concurrent racer could create dst. We accept
+// this because (a) the only realistic racer in iplayer-arr is another
+// worker thread reconciling the same (PID, actualQual) to the same
+// dst, where the racing files are byte-equivalent (benign-overwrite-
+// equivalence), and (b) the fallback path emits a distinguishing log
+// line so operators on exotic filesystems can detect the degraded
+// mode via log monitoring.
+//
+// The Linux man page (renameat2(2), current as of 2026-05) explicitly
+// lists ext4 (>=3.15), btrfs/tmpfs/cifs (>=3.17), xfs (>=4.0), and
+// "many other filesystems" added in 4.9 (ext2, minix, reiserfs, jfs,
+// vfat, bpf). NFS and overlayfs are NOT in the explicit list - support
+// there is empirically determined per kernel/server combination and
+// must be confirmed by smoke-test, not assumed.
+func relocateNoReplaceWith(deps relocateDeps, src, dst string) error {
+	err := deps.renameat2(unix.AT_FDCWD, src, unix.AT_FDCWD, dst, unix.RENAME_NOREPLACE)
+	if err == nil || errors.Is(err, unix.EEXIST) {
+		return err
+	}
+	if !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ENOSYS) {
+		return err
+	}
+	deps.logf("relocateNoReplace: Renameat2 returned %v, falling back to Stat+Rename for %s", err, dst)
+	if _, statErr := deps.stat(dst); statErr == nil {
+		return unix.EEXIST
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	return deps.rename(src, dst)
+}
+
+// relocateNoReplace is the production wrapper: binds unix.Renameat2 /
+// os.Stat / os.Rename / log.Printf into relocateNoReplaceWith.
+func relocateNoReplace(src, dst string) error {
+	return relocateNoReplaceWith(relocateDeps{
+		renameat2: unix.Renameat2,
+		stat:      os.Stat,
+		rename:    os.Rename,
+		logf:      log.Printf,
+	}, src, dst)
 }
 
 // sanitiseFilename replaces characters that are unsafe in filenames.
