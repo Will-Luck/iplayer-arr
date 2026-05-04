@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-05-04
+
 ### Added
 
 - **Shared `<ConfirmDialog>` component** with `role=alertdialog`, `aria-modal`, focus trap, Esc-to-cancel, and backdrop-click-to-cancel. Replaces three native `confirm()` sites: `Dashboard.clearAllHistory`, `Downloads.deleteFolder`, `Overrides.remove`. Promise-based API: `confirmDialog({ title, message, confirmLabel, danger })`.
