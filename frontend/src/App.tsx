@@ -2,6 +2,7 @@ import { Router, Route } from "@solidjs/router";
 import { createSignal, onMount, onCleanup } from "solid-js";
 import Nav from "./components/Nav";
 import ToastContainer from "./components/Toast";
+import ConfirmDialog from "./components/ConfirmDialog";
 import SetupWizard from "./components/SetupWizard";
 import Dashboard from "./pages/Dashboard";
 import Downloads from "./pages/Downloads";
@@ -33,6 +34,7 @@ function Layout(props: { children?: any }) {
       <Nav />
       <main class="main">{props.children}</main>
       <ToastContainer />
+      <ConfirmDialog />
       <SetupWizard show={showWizard()} onComplete={() => setShowWizard(false)} />
     </div>
   );

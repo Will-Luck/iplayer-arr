@@ -2,6 +2,7 @@ import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
 import type { DirectoryEntry } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
+import { confirmDialog } from "../confirm";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -27,7 +28,13 @@ export default function Downloads() {
   }
 
   async function deleteFolder(name: string) {
-    if (!confirm(`Delete folder "${name}" and all its contents?`)) return;
+    const ok = await confirmDialog({
+      title: "Delete folder?",
+      message: `Delete folder "${name}" and all its contents?`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteDirectoryFolder(name);
       addToast("success", `Deleted ${name}`);

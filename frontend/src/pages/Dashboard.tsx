@@ -2,6 +2,7 @@ import { createSignal, createEffect, onMount, onCleanup, For, Show } from "solid
 import type { Download, StatusResponse, SystemInfo, HistoryStats } from "../types";
 import { api } from "../api";
 import { connectSSE } from "../sse";
+import { confirmDialog } from "../confirm";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -197,7 +198,13 @@ export default function Dashboard() {
   }
 
   async function clearAllHistory() {
-    if (!confirm("Delete all history entries? This cannot be undone.")) return;
+    const ok = await confirmDialog({
+      title: "Clear all history?",
+      message: "Delete all history entries? This cannot be undone.",
+      confirmLabel: "Delete all",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.clearAllHistory();
     } catch {

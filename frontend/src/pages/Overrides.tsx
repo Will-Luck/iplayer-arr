@@ -2,6 +2,7 @@ import { createSignal, onMount, For, Show } from "solid-js";
 import type { ShowOverride } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
+import { confirmDialog } from "../confirm";
 
 const emptyOverride = (): ShowOverride => ({
   show_name: "", force_date_based: false, force_series_num: 0,
@@ -36,7 +37,13 @@ export default function Overrides() {
   }
 
   async function remove(show: string) {
-    if (!confirm(`Delete override for "${show}"?`)) return;
+    const ok = await confirmDialog({
+      title: "Delete override?",
+      message: `Delete override for "${show}"?`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteOverride(show);
       setOverrides(await api.listOverrides());
