@@ -1,4 +1,4 @@
-import { createSignal, onMount, Show } from "solid-js";
+import { createSignal, onMount, onCleanup, Show } from "solid-js";
 import { api } from "../api";
 import { getSonarrSetup } from "../lib/sonarr-setup";
 import { copyToClipboard } from "../lib/clipboard";
@@ -11,7 +11,11 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
   const [geoChecking, setGeoChecking] = createSignal(false);
   const [config, setConfig] = createSignal<ConfigResponse | null>(null);
   const [copiedField, setCopiedField] = createSignal<string | null>(null);
+  const [keyRevealed, setKeyRevealed] = createSignal(false);
   const sonarrSetup = () => getSonarrSetup(window.location);
+
+  const maskKey = (k: string) => k.length > 8 ? k.slice(0, 4) + "•".repeat(8) + k.slice(-4) : k;
+  const displayKey = (k: string) => keyRevealed() ? k : maskKey(k);
 
   onMount(async () => {
     try {
@@ -26,6 +30,15 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
     } catch {
       // ignore
     }
+
+    const onKey = (e: KeyboardEvent) => {
+      if (props.show && e.key === "Escape") {
+        e.preventDefault();
+        props.onComplete();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
   });
 
   async function runGeoCheck() {
@@ -71,8 +84,22 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
 
   return (
     <Show when={props.show}>
-      <div class="wizard-overlay" role="dialog" aria-modal="true" aria-label="Setup wizard">
-        <div class="wizard-modal">
+      <div
+        class="wizard-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Setup wizard"
+        onClick={() => props.onComplete()}
+      >
+        <div class="wizard-modal" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            class="wizard-close"
+            aria-label="Close setup wizard"
+            onClick={() => props.onComplete()}
+          >
+            ×
+          </button>
           <div class="wizard-progress" aria-label="Setup progress">
             <div class={stepClass(1)} />
             <div class={stepClass(2)} />
@@ -151,9 +178,17 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
                 </div>
                 <div class="system-row">
                   <span class="system-label">API Key</span>
-                  <span style="display:flex;align-items:center;gap:8px">
-                    <code style="font-size:12px">{config()?.api_key ?? "—"}</code>
+                  <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <code style="font-size:12px">{config()?.api_key ? displayKey(config()!.api_key) : "—"}</code>
                     <Show when={config()?.api_key}>
+                      <button
+                        class="btn btn-sm"
+                        type="button"
+                        onClick={() => setKeyRevealed(!keyRevealed())}
+                        aria-pressed={keyRevealed()}
+                      >
+                        {keyRevealed() ? "Hide" : "Reveal"}
+                      </button>
                       <button
                         class="copy-btn"
                         onClick={() => copyField(config()!.api_key, "indexer-key")}
@@ -190,9 +225,17 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
                 ))}
                 <div class="system-row">
                   <span class="system-label">API Key</span>
-                  <span style="display:flex;align-items:center;gap:8px">
-                    <code style="font-size:12px">{config()?.api_key ?? "—"}</code>
+                  <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <code style="font-size:12px">{config()?.api_key ? displayKey(config()!.api_key) : "—"}</code>
                     <Show when={config()?.api_key}>
+                      <button
+                        class="btn btn-sm"
+                        type="button"
+                        onClick={() => setKeyRevealed(!keyRevealed())}
+                        aria-pressed={keyRevealed()}
+                      >
+                        {keyRevealed() ? "Hide" : "Reveal"}
+                      </button>
                       <button
                         class="copy-btn"
                         onClick={() => copyField(config()!.api_key, "sab-key")}
