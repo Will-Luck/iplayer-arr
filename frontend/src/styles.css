@@ -44,6 +44,7 @@ body {
 
 .main {
   flex: 1;
+  min-width: 0;
   margin-left: var(--nav-width);
   padding: 24px 32px;
   max-width: 1200px;
@@ -896,6 +897,9 @@ select.input {
   /* Wizard padding tightens on mobile so the Done button stays in view */
   .wizard-modal { padding: 20px; }
   .wizard-close { min-height: 44px; min-width: 44px; }
+
+  /* Long URLs / API keys in <code> wrap instead of forcing horizontal overflow */
+  code { overflow-wrap: anywhere; word-break: break-word; }
 }
 
 /* Logs page */
