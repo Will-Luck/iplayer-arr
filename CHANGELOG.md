@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-04
+
+### Added
+
+- **Tailwind v4 + Kobalte design system.** Token block lives in `frontend/src/styles.css` under `@theme` (page, surface, elevated, raised, accent, success, warning, danger, info, text-primary/secondary/tertiary, border, border-subtle). Vite plugin: `@tailwindcss/vite`. Legacy `:root` aliases continue to point to the new tokens so any unmigrated CSS keeps rendering.
+- **12 shared UI primitives in `frontend/src/ui/`:** `Card` (Header / Body / Toolbar / Footer), `Table` (THead / TBody / TR / TH / TD with sortable headers and `collapse=card` mobile mode), `Badge` (completed / imported / failed / pending / neutral), `Button` (primary / secondary / ghost / danger / warning / link, sm / md, loading state), `IconButton` (default / danger / primary tone), `Progress` (default / paused / failed variants), `EmptyState`, `Pagination`, `Select` (Kobalte), `Dialog` + `Dialog.Confirm` (Kobalte), `ToastViewport`, plus `icons.tsx` with 15 Lucide-style SVG renderers.
+
+### Changed
+
+- **Dashboard rebuilt on the new primitives.** History card now uses the `Table` primitive's per-column `width` prop, Trash becomes a `tone=danger` `IconButton`, Completed becomes a `Badge`, and dates render via a UK-locale formatter, fixing the cramped Completed column and the off-centre date wrap from v1.1.x. Active downloads gain the new `Progress` bar; Queue and History each switch to mobile-friendly `collapse=card` table mode.
+- **Search** results become horizontal cards with a semantic tier `Badge` (S/E green, Position blue, AirDate yellow, Manual grey), Channel pill, and an action row (`Select` quality + `Button` download) that aligns right at `>=sm`. Empty state is now an iconographic `EmptyState`.
+- **Downloads** moves Refresh into the Card header actions, swaps Delete for a `tone=danger` `IconButton`, replaces the owner column text with a `Badge`, and shows unique file extensions under the file count. Empty directory uses `EmptyState` with the archive icon.
+- **Logs** pulls the controls into a `Card.Toolbar`, applies per-level colour classes to a mono-font panel on the page-bg surface, switches Pause to the `warning` button variant when paused, and pins a Jump-to-bottom button to the bottom-right when the viewer scrolls away from the tail.
+- **Config** API-key card collapses to a single flex row with reveal/hide and a copy button that swaps to a check icon on success. Settings card moves to a 2-column grid that collapses on mobile. Newznab and SABnzbd sections share an inline `CopyRow` helper which displays a masked API key but copies the real value via a `copyValue` override.
+- **Overrides** uses `collapse=card` so each override turns into a labelled stack on mobile, replaces Edit and Delete buttons with `IconButton`s (settings + trash), and renders Date-Based as a coloured `Badge` instead of plain text.
+- **System** rebuilds the six diagnostic cards into a responsive 1/2/3-column grid. Geo check status is a `Badge` (UK OK / Blocked) and the disk usage gauge swaps the custom progress bar for the shared `Progress` primitive with `default` / `paused` / `failed` variants at 80% and 90% thresholds.
+- **NotFound** swaps the bare card for an iconographic `EmptyState` with a Return-to-dashboard action.
+- **Setup Wizard** body migrates to `Card`, `Button`, and `Badge` while keeping the `wizard-overlay`/`wizard-modal`/`wizard-progress` scaffolding intact for its bespoke layout. Status indicators move from status-dot + text to coloured Badges.
+- **App shell** swaps the legacy `components/Toast.tsx` and `components/ConfirmDialog.tsx` for the shared `ToastViewport` and a `ConfirmHost` that bridges the existing pending/resolvePending signal to Kobalte's `Dialog.Confirm`. `ErrorBoundary` fallback also moves to `Card` + `Button`.
+
+### Removed
+
+- **`frontend/src/components/Toast.tsx`** and **`frontend/src/components/ConfirmDialog.tsx`** (replaced by `ui/Toast.tsx` and `ui/Dialog.tsx`).
+
 ## [1.1.9] - 2026-05-04
 
 ### Added

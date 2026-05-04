@@ -1,18 +1,58 @@
+@import "tailwindcss";
+
+@theme {
+  /* Surface ladder. */
+  --color-page: #0f1117;
+  --color-surface: #161921;
+  --color-elevated: #1e2230;
+  --color-raised: #262b3d;
+
+  /* Brand and accent. */
+  --color-accent: #c73e64;
+  --color-accent-hover: #d4516f;
+  --color-accent-muted: rgba(199, 62, 100, 0.15);
+
+  /* Status. */
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-info: #3b82f6;
+
+  /* Text. */
+  --color-text-primary: #e8eaed;
+  --color-text-secondary: #8b8fa3;
+  --color-text-tertiary: #5d6378;
+
+  /* Borders. */
+  --color-border: #2a2e3d;
+  --color-border-subtle: #1f2331;
+
+  /* Typography. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Legacy variable aliases. Existing CSS rules in this file resolve through
+   these so they keep working until each page migrates to the new utilities. */
 :root {
-  --bg-base: #0f1117;
-  --bg-surface: #161921;
-  --bg-elevated: #1e2230;
-  --accent: #c73e64;
-  --accent-hover: #d4516f;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --danger: #ef4444;
-  --text-primary: #e8eaed;
-  --text-secondary: #8b8fa3;
-  --border: #2a2e3d;
+  --bg-base: var(--color-page);
+  --bg-surface: var(--color-surface);
+  --bg-elevated: var(--color-elevated);
+  --accent: var(--color-accent);
+  --accent-hover: var(--color-accent-hover);
+  --success: var(--color-success);
+  --warning: var(--color-warning);
+  --danger: var(--color-danger);
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --border: var(--color-border);
   --radius: 8px;
   --nav-width: 220px;
   --nav-collapsed: 56px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 *,

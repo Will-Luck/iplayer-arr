@@ -1,8 +1,14 @@
+import type { JSX } from "solid-js";
 import { createSignal, onMount, Show } from "solid-js";
 import type { SystemInfo } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
 import { getSonarrSetup } from "../lib/sonarr-setup";
+import { Card } from "../ui/Card";
+import { Button } from "../ui/Button";
+import { Badge } from "../ui/Badge";
+import { Progress, type ProgressVariant } from "../ui/Progress";
+import { Icon } from "../ui/icons";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -20,6 +26,19 @@ function formatUptime(seconds: number): string {
   if (h > 0) parts.push(`${h}h`);
   parts.push(`${m}m`);
   return parts.join(" ");
+}
+
+function Row(p: { label: string; children: JSX.Element; mono?: boolean }) {
+  return (
+    <div class="flex items-start justify-between gap-3 border-b border-border-subtle py-2 last:border-b-0">
+      <span class="text-sm text-text-secondary">{p.label}</span>
+      <span
+        class={`text-right text-sm text-text-primary ${p.mono ? "break-all font-mono text-xs text-text-secondary" : ""}`}
+      >
+        {p.children}
+      </span>
+    </div>
+  );
 }
 
 export default function System() {
@@ -44,7 +63,10 @@ export default function System() {
           ? { ...prev, geo_ok: result.geo_ok, geo_checked_at: result.geo_checked_at }
           : prev,
       );
-      addToast(result.geo_ok ? "success" : "error", result.geo_ok ? "Geo check passed" : "Geo check failed");
+      addToast(
+        result.geo_ok ? "success" : "error",
+        result.geo_ok ? "Geo check passed" : "Geo check failed",
+      );
     } catch {
       addToast("error", "Geo check request failed");
     } finally {
@@ -53,18 +75,27 @@ export default function System() {
   }
 
   return (
-    <Show when={info()} fallback={<p class="text-muted">Loading...</p>}>
+    <Show
+      when={info()}
+      fallback={
+        <Card>
+          <Card.Body>
+            <p class="text-sm text-text-secondary">Loading...</p>
+          </Card.Body>
+        </Card>
+      }
+    >
       {(sys) => {
         const diskUsedPct = () =>
           sys().disk_total > 0
             ? Math.round(((sys().disk_total - sys().disk_free) / sys().disk_total) * 100)
             : 0;
 
-        const diskUsageClass = () => {
+        const diskVariant = (): ProgressVariant => {
           const p = diskUsedPct();
-          if (p >= 90) return "heavy";
-          if (p >= 80) return "caution";
-          return "healthy";
+          if (p >= 90) return "failed";
+          if (p >= 80) return "paused";
+          return "default";
         };
 
         const totalDls = () => sys().downloads_completed + sys().downloads_failed;
@@ -74,168 +105,127 @@ export default function System() {
             : 0;
 
         return (
-          <div>
+          <div class="flex flex-col gap-4">
             <h1 class="page-title">System</h1>
 
-            <div class="system-grid">
-              {/* BBC iPlayer Status */}
-              <div class="card">
-                <div class="card-header">BBC iPlayer Status</div>
-                <div class="card-body">
-                  <div class="system-row">
-                    <span class="system-label">Geo check</span>
-                    <span class="system-value">
-                      <span
-                        class="status-dot"
-                        classList={{ ok: sys().geo_ok, err: !sys().geo_ok }}
-                        aria-label={sys().geo_ok ? "Passed" : "Failed"}
-                      />
-                      {sys().geo_ok ? "OK — UK access confirmed" : "Blocked"}
-                    </span>
-                  </div>
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <Card>
+                <Card.Header>BBC iPlayer status</Card.Header>
+                <Card.Body>
+                  <Row label="Geo check">
+                    <Badge variant={sys().geo_ok ? "completed" : "failed"}>
+                      {sys().geo_ok ? "UK OK" : "Blocked"}
+                    </Badge>
+                  </Row>
                   <Show when={sys().geo_checked_at}>
-                    <div class="system-row">
-                      <span class="system-label">Last checked</span>
-                      <span class="system-value text-secondary">
+                    <Row label="Last checked">
+                      <span class="text-text-secondary">
                         {new Date(sys().geo_checked_at!).toLocaleString()}
                       </span>
-                    </div>
+                    </Row>
                   </Show>
-                  <div style="margin-top:12px">
-                    <button
-                      class="btn btn-sm btn-primary"
+                  <div class="mt-3">
+                    <Button
+                      size="sm"
                       onClick={runGeoCheck}
-                      disabled={geoLoading()}
+                      loading={geoLoading()}
                     >
+                      <Show when={!geoLoading()}>
+                        <Icon name="refresh" size={14} />
+                      </Show>
                       {geoLoading() ? "Checking..." : "Re-check"}
-                    </button>
+                    </Button>
                   </div>
-                </div>
-              </div>
+                </Card.Body>
+              </Card>
 
-              {/* ffmpeg */}
-              <div class="card">
-                <div class="card-header">ffmpeg</div>
-                <div class="card-body">
-                  <div class="system-row">
-                    <span class="system-label">Version</span>
-                    <span class="system-value">
-                      <Show when={sys().ffmpeg_version} fallback={<span class="text-danger">Not found</span>}>
-                        {sys().ffmpeg_version}
-                      </Show>
-                    </span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Path</span>
-                    <span class="system-value text-secondary" style="word-break:break-all;font-size:12px">
-                      <Show when={sys().ffmpeg_path} fallback="—">
-                        {sys().ffmpeg_path}
-                      </Show>
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Download Stats */}
-              <div class="card">
-                <div class="card-header">Download Stats</div>
-                <div class="card-body">
-                  <div class="system-row">
-                    <span class="system-label">Completed</span>
-                    <span class="system-value">{sys().downloads_completed}</span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Failed</span>
-                    <span class="system-value">{sys().downloads_failed}</span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Success rate</span>
-                    <span class="system-value">{successRate()}%</span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Total downloaded</span>
-                    <span class="system-value">{formatBytes(sys().downloads_total_bytes)}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Storage */}
-              <div class="card">
-                <div class="card-header">Storage</div>
-                <div class="card-body">
-                  <div class="system-row">
-                    <span class="system-label">Download dir</span>
-                    <span class="system-value text-secondary" style="word-break:break-all;font-size:12px">
-                      {sys().disk_path || "—"}
-                    </span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Free</span>
-                    <span class="system-value">{formatBytes(sys().disk_free)}</span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Total</span>
-                    <span class="system-value">{formatBytes(sys().disk_total)}</span>
-                  </div>
-                  <div style="margin-top:10px">
-                    <div
-                      class="progress-bar"
-                      role="progressbar"
-                      aria-valuenow={diskUsedPct()}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-label={`Disk usage ${diskUsedPct()}%`}
+              <Card>
+                <Card.Header>ffmpeg</Card.Header>
+                <Card.Body>
+                  <Row label="Version">
+                    <Show
+                      when={sys().ffmpeg_version}
+                      fallback={<span class="text-danger">Not found</span>}
                     >
-                      <div class={`progress-fill ${diskUsageClass()}`} style={{ width: `${diskUsedPct()}%` }} />
-                    </div>
-                    <p class="text-secondary" style="font-size:12px;margin-top:4px">{diskUsedPct()}% used</p>
-                  </div>
-                </div>
-              </div>
+                      {sys().ffmpeg_version}
+                    </Show>
+                  </Row>
+                  <Row label="Path" mono>
+                    <Show when={sys().ffmpeg_path} fallback="-">
+                      {sys().ffmpeg_path}
+                    </Show>
+                  </Row>
+                </Card.Body>
+              </Card>
 
-              {/* Sonarr Integration */}
-              <div class="card">
-                <div class="card-header">Sonarr Integration</div>
-                <div class="card-body">
-                  <div class="system-row">
-                    <span class="system-label">Indexer URL</span>
-                    <span class="system-value text-secondary" style="word-break:break-all;font-size:12px">
-                      {sonarrSetup().indexerUrl}
-                    </span>
+              <Card>
+                <Card.Header>Download stats</Card.Header>
+                <Card.Body>
+                  <Row label="Completed">
+                    <span class="tabular">{sys().downloads_completed}</span>
+                  </Row>
+                  <Row label="Failed">
+                    <span class="tabular">{sys().downloads_failed}</span>
+                  </Row>
+                  <Row label="Success rate">
+                    <span class="tabular">{successRate()}%</span>
+                  </Row>
+                  <Row label="Total downloaded">
+                    <span class="tabular">{formatBytes(sys().downloads_total_bytes)}</span>
+                  </Row>
+                </Card.Body>
+              </Card>
+
+              <Card>
+                <Card.Header>Storage</Card.Header>
+                <Card.Body>
+                  <Row label="Download dir" mono>
+                    {sys().disk_path || "-"}
+                  </Row>
+                  <Row label="Free">
+                    <span class="tabular">{formatBytes(sys().disk_free)}</span>
+                  </Row>
+                  <Row label="Total">
+                    <span class="tabular">{formatBytes(sys().disk_total)}</span>
+                  </Row>
+                  <div class="mt-3">
+                    <Progress
+                      value={diskUsedPct()}
+                      variant={diskVariant()}
+                      ariaLabel={`Disk usage ${diskUsedPct()}%`}
+                    />
+                    <p class="mt-1 text-xs text-text-secondary">{diskUsedPct()}% used</p>
                   </div>
-                  <div class="system-row">
-                    <span class="system-label">Last request</span>
-                    <span class="system-value text-secondary">
+                </Card.Body>
+              </Card>
+
+              <Card>
+                <Card.Header>Sonarr integration</Card.Header>
+                <Card.Body>
+                  <Row label="Indexer URL" mono>
+                    {sonarrSetup().indexerUrl}
+                  </Row>
+                  <Row label="Last request">
+                    <span class="text-text-secondary">
                       <Show when={sys().last_indexer_request} fallback="Never">
                         {new Date(sys().last_indexer_request!).toLocaleString()}
                       </Show>
                     </span>
-                  </div>
-                </div>
-              </div>
+                  </Row>
+                </Card.Body>
+              </Card>
 
-              {/* About */}
-              <div class="card">
-                <div class="card-header">About</div>
-                <div class="card-body">
-                  <div class="system-row">
-                    <span class="system-label">Version</span>
-                    <span class="system-value">{sys().version || "—"}</span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Go version</span>
-                    <span class="system-value">{sys().go_version || "—"}</span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Uptime</span>
-                    <span class="system-value">{formatUptime(sys().uptime_seconds)}</span>
-                  </div>
-                  <div class="system-row">
-                    <span class="system-label">Build date</span>
-                    <span class="system-value text-secondary">{sys().build_date || "—"}</span>
-                  </div>
-                </div>
-              </div>
+              <Card>
+                <Card.Header>About</Card.Header>
+                <Card.Body>
+                  <Row label="Version">{sys().version || "-"}</Row>
+                  <Row label="Go version">{sys().go_version || "-"}</Row>
+                  <Row label="Uptime">{formatUptime(sys().uptime_seconds)}</Row>
+                  <Row label="Build date">
+                    <span class="text-text-secondary">{sys().build_date || "-"}</span>
+                  </Row>
+                </Card.Body>
+              </Card>
             </div>
           </div>
         );

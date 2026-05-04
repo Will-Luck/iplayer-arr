@@ -1,6 +1,6 @@
 {
   "name": "iplayer-arr-frontend",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "description": "iplayer-arr web UI",
   "scripts": {
     "dev": "vite",
@@ -12,11 +12,14 @@
   "author": "",
   "license": "GPL-3.0-only",
   "dependencies": {
+    "@kobalte/core": "^0.13.11",
     "@solidjs/router": "^0.16.1",
     "solid-js": "^1.9.12"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.2.4",
     "jsdom": "^29.0.1",
+    "tailwindcss": "^4.2.4",
     "typescript": "^6.0.2",
     "vite": "^8.0.3",
     "vite-plugin-solid": "^2.11.11",

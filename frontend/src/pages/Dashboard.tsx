@@ -3,6 +3,15 @@ import type { Download, StatusResponse, SystemInfo, HistoryStats } from "../type
 import { api } from "../api";
 import { connectSSE } from "../sse";
 import { confirmDialog } from "../confirm";
+import { Card } from "../ui/Card";
+import { Button } from "../ui/Button";
+import { Badge, type BadgeVariant } from "../ui/Badge";
+import { Table } from "../ui/Table";
+import { IconButton } from "../ui/IconButton";
+import { Progress } from "../ui/Progress";
+import { Pagination } from "../ui/Pagination";
+import { Select, type SelectOption } from "../ui/Select";
+import { EmptyState } from "../ui/EmptyState";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -19,8 +28,28 @@ function formatDuration(seconds: number): string {
   return `${m}m`;
 }
 
-function statusBadgeClass(status: string): string {
-  return `badge badge-${status}`;
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function statusVariant(dl: Download): BadgeVariant {
+  if (dl.status === "completed" && dl.file_exists === false) return "imported";
+  if (dl.status === "completed") return "completed";
+  if (dl.status === "failed") return "failed";
+  if (dl.status === "pending") return "pending";
+  return "neutral";
+}
+
+function statusLabel(dl: Download): string {
+  if (dl.status === "completed" && dl.file_exists === false) return "imported";
+  return dl.status;
 }
 
 function relativeTime(iso: string): string {
@@ -62,6 +91,39 @@ const monthAgoISO = () => {
   return d.toISOString().split("T")[0];
 };
 
+const STATUS_OPTIONS: SelectOption[] = [
+  { value: "", label: "All Statuses" },
+  { value: "completed", label: "Completed" },
+  { value: "failed", label: "Failed" },
+];
+
+function HealthPill(props: {
+  state: "ok" | "warn" | "err" | "neutral";
+  label: string;
+}) {
+  const dot = () => {
+    switch (props.state) {
+      case "ok": return "bg-success";
+      case "warn": return "bg-warning";
+      case "err": return "bg-danger";
+      default: return "bg-text-tertiary";
+    }
+  };
+  const text = () => {
+    switch (props.state) {
+      case "err": return "text-danger";
+      case "neutral": return "text-text-secondary";
+      default: return "text-text-primary";
+    }
+  };
+  return (
+    <span class="inline-flex items-center gap-2 rounded-full border border-border bg-elevated px-3 py-1.5 text-xs">
+      <span class={`h-2 w-2 rounded-full ${dot()}`} aria-hidden="true" />
+      <span class={text()}>{props.label}</span>
+    </span>
+  );
+}
+
 export default function Dashboard() {
   const [status, setStatus] = createSignal<StatusResponse | null>(null);
   const [system, setSystem] = createSignal<SystemInfo | null>(null);
@@ -72,13 +134,19 @@ export default function Dashboard() {
   const [paused, setPaused] = createSignal(false);
   const [stats, setStats] = createSignal<HistoryStats | null>(null);
 
-  // History filter/sort/pagination state
   const [statusFilter, setStatusFilter] = createSignal("");
   const [sinceFilter, setSinceFilter] = createSignal("");
   const [sortField, setSortField] = createSignal("completed_at");
-  const [sortOrder, setSortOrder] = createSignal("desc");
+  const [sortOrder, setSortOrder] = createSignal<"asc" | "desc">("desc");
   const [currentPage, setCurrentPage] = createSignal(1);
   const perPage = 20;
+
+  const sinceOptions: SelectOption[] = [
+    { value: "", label: "All Time" },
+    { value: todayISO(), label: "Today" },
+    { value: weekAgoISO(), label: "7 Days" },
+    { value: monthAgoISO(), label: "30 Days" },
+  ];
 
   const totalPages = () => Math.max(1, Math.ceil(totalCount() / perPage));
 
@@ -138,7 +206,6 @@ export default function Dashboard() {
 
   function updateDownload(data: Download) {
     if (data.status === "pending") {
-      // New or still-pending download belongs in the queue
       setQueue((prev) => {
         const idx = prev.findIndex((d) => d.id === data.id);
         if (idx >= 0) {
@@ -151,7 +218,6 @@ export default function Dashboard() {
       setActive((prev) => prev.filter((d) => d.id !== data.id));
       return;
     }
-    // Non-pending: move to active, remove from queue
     setActive((prev) => {
       const idx = prev.findIndex((d) => d.id === data.id);
       if (idx >= 0) {
@@ -216,9 +282,7 @@ export default function Dashboard() {
     refreshHistory();
   }
 
-  // Re-fetch history whenever filters, sort or page change
   createEffect(() => {
-    // Access all reactive dependencies so the effect re-runs on change
     void currentPage();
     void statusFilter();
     void sinceFilter();
@@ -250,7 +314,6 @@ export default function Dashboard() {
       "download:complete": (data) => {
         const dl = data as Download;
         setActive((prev) => prev.filter((d) => d.id !== dl.id));
-        // Refresh history to pick up the completed item
         refreshHistory();
       },
       "pause:changed": (data) => {
@@ -259,7 +322,6 @@ export default function Dashboard() {
       },
       "download:failed": (data) => {
         const dl = data as Download;
-        // Mark as failed in the active list briefly, then move to history
         setActive((prev) => {
           const idx = prev.findIndex((d) => d.id === dl.id);
           if (idx >= 0) {
@@ -269,7 +331,6 @@ export default function Dashboard() {
           }
           return prev;
         });
-        // Refresh after a moment so it appears in history
         setTimeout(() => {
           setActive((prev) => prev.filter((d) => d.id !== dl.id));
           refreshHistory();
@@ -281,319 +342,262 @@ export default function Dashboard() {
   });
 
   return (
-    <div>
-      <h1 class="page-title">Dashboard</h1>
+    <div class="flex flex-col gap-5">
+      <h1 class="text-2xl font-semibold">Dashboard</h1>
 
       {/* Health strip */}
       <Show when={status()}>
         {(st) => (
-          <div class="health-strip">
-            {/* Geo Check */}
-            <div class="health-pill">
-              <span
-                class="status-dot"
-                classList={{ ok: st().geo_ok, err: !st().geo_ok }}
-                aria-hidden="true"
-              />
-              <span style={{ color: st().geo_ok ? "var(--success)" : "var(--danger)" }}>
-                {st().geo_ok ? "UK OK" : "Geo Blocked"}
-              </span>
-            </div>
-
-            {/* ffmpeg */}
-            <div class="health-pill">
-              <span
-                class="status-dot"
-                classList={{ ok: !!st().ffmpeg, err: !st().ffmpeg }}
-                aria-hidden="true"
-              />
-              <span style={{ color: st().ffmpeg ? undefined : "var(--danger)" }}>
-                {st().ffmpeg ? st().ffmpeg : "Not Found"}
-              </span>
-            </div>
-
-            {/* Sonarr */}
+          <div class="flex flex-wrap items-center gap-2">
+            <HealthPill
+              state={st().geo_ok ? "ok" : "err"}
+              label={st().geo_ok ? "UK OK" : "Geo Blocked"}
+            />
+            <HealthPill
+              state={st().ffmpeg ? "ok" : "err"}
+              label={st().ffmpeg || "ffmpeg: Not Found"}
+            />
             <Show when={system()}>
               {(sys) => (
-                <div class="health-pill">
-                  <span
-                    class="status-dot"
-                    classList={{ ok: !!sys().last_indexer_request, neutral: !sys().last_indexer_request }}
-                    aria-hidden="true"
-                  />
-                  <span style={{ color: sys().last_indexer_request ? undefined : "var(--text-secondary)" }}>
-                    {sys().last_indexer_request
-                      ? `Connected · ${relativeTime(sys().last_indexer_request!)}`
-                      : "No requests yet"}
-                  </span>
-                </div>
+                <HealthPill
+                  state={sys().last_indexer_request ? "ok" : "neutral"}
+                  label={
+                    sys().last_indexer_request
+                      ? `Sonarr · ${relativeTime(sys().last_indexer_request!)}`
+                      : "Sonarr · No requests yet"
+                  }
+                />
               )}
             </Show>
-
-            {/* Disk Space */}
-            <div class="health-pill">
-              <span
-                class="status-dot"
-                classList={{
-                  ok: st().disk_free > 1_073_741_824,
-                  err: st().disk_free > 0 && st().disk_free <= 1_073_741_824,
-                }}
-                aria-hidden="true"
-              />
-              <span style={{ color: st().disk_free <= 1_073_741_824 && st().disk_free > 0 ? "var(--danger)" : undefined }}>
-                {st().disk_free > 0 ? `${formatBytes(st().disk_free)} free` : "Disk unknown"}
-              </span>
-            </div>
-
-            <button
-              class="btn btn-sm"
-              style={{
-                "margin-left": "auto",
-                background: paused() ? "var(--warning)" : "var(--muted)",
-                color: "white",
-              }}
+            <HealthPill
+              state={
+                st().disk_free === 0
+                  ? "neutral"
+                  : st().disk_free > 1_073_741_824
+                    ? "ok"
+                    : "err"
+              }
+              label={st().disk_free > 0 ? `${formatBytes(st().disk_free)} free` : "Disk unknown"}
+            />
+            <Button
+              class="ml-auto"
+              size="sm"
+              variant={paused() ? "warning" : "secondary"}
               onClick={togglePause}
             >
               {paused() ? "Resume Downloads" : "Pause Downloads"}
-            </button>
+            </Button>
           </div>
         )}
       </Show>
 
       {/* Active downloads */}
-      <div class="card">
-        <div class="card-header">Active Downloads</div>
-        <div class="card-body scroll-thin" style={{ "max-height": "400px" }}>
-          <Show when={active().length > 0} fallback={<div class="card-empty">No active downloads</div>}>
-            <For each={active()}>
-              {(dl) => (
-                <div class="dl-item">
-                  <div class="dl-row">
-                    <span class="dl-title">{dl.title || dl.pid}</span>
-                    <span class={statusBadgeClass(dl.status)}>{dl.status}</span>
-                  </div>
-                  <div
-                    class="progress-bar"
-                    role="progressbar"
-                    aria-valuenow={Math.round(dl.progress)}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label={`Download progress for ${dl.title || dl.pid}`}
-                  >
-                    <div
-                      class="progress-fill"
-                      classList={{ failed: dl.status === "failed" }}
-                      style={{ width: `${Math.min(dl.progress, 100)}%` }}
+      <Card>
+        <Card.Header title="Active Downloads" />
+        <Card.Body padded={false}>
+          <Show
+            when={active().length > 0}
+            fallback={
+              <EmptyState icon="download" description="No active downloads" class="py-8" />
+            }
+          >
+            <div class="max-h-[400px] overflow-y-auto">
+              <For each={active()}>
+                {(dl) => (
+                  <div class="border-b border-border-subtle px-4 py-3 last:border-b-0">
+                    <div class="mb-2 flex items-center justify-between gap-3">
+                      <span class="truncate text-sm font-medium">
+                        {dl.title || dl.pid}
+                      </span>
+                      <Badge variant={statusVariant(dl)}>{statusLabel(dl)}</Badge>
+                    </div>
+                    <Progress
+                      value={Math.min(dl.progress, 100)}
+                      variant={dl.status === "failed" ? "failed" : "default"}
+                      ariaLabel={`Download progress for ${dl.title || dl.pid}`}
+                      label={`${dl.progress.toFixed(1)}%`}
+                      showLabel
                     />
+                    <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-text-secondary">
+                      <Show when={speedMap.get(dl.id)?.lastProgress !== undefined}>
+                        {(() => {
+                          const speed = calcSpeed(dl.id, dl.progress);
+                          return speed ? <span class="tabular">{speed}</span> : null;
+                        })()}
+                      </Show>
+                      <span class="tabular">{formatBytes(dl.downloaded)}</span>
+                      <Show when={dl.duration > 0}>
+                        <span class="tabular">{formatDuration(dl.duration)}</span>
+                      </Show>
+                      <Show when={dl.error}>
+                        <span class="text-danger">{dl.error}</span>
+                      </Show>
+                    </div>
                   </div>
-                  <div class="dl-meta">
-                    <span>{dl.progress.toFixed(1)}%</span>
-                    <Show when={speedMap.get(dl.id)?.lastProgress !== undefined}>
-                      {(() => {
-                        const speed = calcSpeed(dl.id, dl.progress);
-                        return speed ? <span class="text-muted">{speed}</span> : null;
-                      })()}
-                    </Show>
-                    <span>{formatBytes(dl.downloaded)}</span>
-                    <Show when={dl.duration > 0}>
-                      <span>{formatDuration(dl.duration)}</span>
-                    </Show>
-                    <span class="text-muted">Determining quality…</span>
-                    <Show when={dl.error}>
-                      <span class="text-danger">{dl.error}</span>
-                    </Show>
-                  </div>
-                </div>
-              )}
-            </For>
+                )}
+              </For>
+            </div>
           </Show>
-        </div>
-      </div>
+        </Card.Body>
+      </Card>
 
       {/* Queue */}
       <Show when={queue().length > 0}>
-        <div class="card">
-          <div class="card-header">Queue ({queue().length})</div>
-          <div class="card-body scroll-thin" style={{ "max-height": "300px" }}>
-            <For each={queue()}>
-              {(dl) => (
-                <div class="dl-item">
-                  <div class="dl-row">
-                    <span class="dl-title">{dl.title || dl.pid}</span>
-                    <span class="badge badge-pending">pending</span>
+        <Card>
+          <Card.Header title={`Queue (${queue().length})`} />
+          <Card.Body padded={false}>
+            <div class="max-h-[300px] overflow-y-auto">
+              <For each={queue()}>
+                {(dl) => (
+                  <div class="border-b border-border-subtle px-4 py-3 last:border-b-0">
+                    <div class="mb-1 flex items-center justify-between gap-3">
+                      <span class="truncate text-sm font-medium">
+                        {dl.title || dl.pid}
+                      </span>
+                      <Badge variant="pending">pending</Badge>
+                    </div>
+                    <div class="flex gap-3 text-xs text-text-secondary">
+                      <span>{dl.quality}</span>
+                      <span>{dl.category}</span>
+                    </div>
                   </div>
-                  <div class="dl-meta">
-                    <span class="text-muted">{dl.quality}</span>
-                    <span class="text-muted">{dl.category}</span>
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
-        </div>
+                )}
+              </For>
+            </div>
+          </Card.Body>
+        </Card>
       </Show>
 
       {/* History */}
-      <div class="card">
-        <div class="card-header" style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-          <span>History</span>
-          <button class="btn btn-danger btn-sm ml-auto" onClick={clearAllHistory}>
-            Clear All
-          </button>
-        </div>
-        <div class="card-body">
-          {/* Stats row */}
+      <Card>
+        <Card.Header
+          title="History"
+          actions={
+            <Button variant="danger" size="sm" onClick={clearAllHistory}>
+              Clear all
+            </Button>
+          }
+        />
+        <Card.Toolbar>
+          <Select
+            value={statusFilter()}
+            onChange={(v) => {
+              setStatusFilter(v);
+              setCurrentPage(1);
+            }}
+            options={STATUS_OPTIONS}
+            ariaLabel="Filter by status"
+          />
+          <Select
+            value={sinceFilter()}
+            onChange={(v) => {
+              setSinceFilter(v);
+              setCurrentPage(1);
+            }}
+            options={sinceOptions}
+            ariaLabel="Filter by time"
+          />
           <Show when={stats()}>
             {(s) => (
-              <div class="history-stats">
-                {s().completed} completed / {s().failed} failed / {formatBytes(s().total_bytes)} total
-              </div>
+              <span class="ml-auto text-xs text-text-secondary">
+                <span class="tabular text-text-primary">{s().completed}</span>{" "}
+                completed ·{" "}
+                <span class="tabular text-text-primary">{s().failed}</span>{" "}
+                failed ·{" "}
+                <span class="tabular text-text-primary">
+                  {formatBytes(s().total_bytes)}
+                </span>{" "}
+                total
+              </span>
             )}
           </Show>
-
-          {/* Filter controls */}
-          <div class="history-controls">
-            <select
-              class="input config-select"
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setCurrentPage(1);
-              }}
-            >
-              <option value="">All Statuses</option>
-              <option value="completed">Completed</option>
-              <option value="failed">Failed</option>
-            </select>
-            <select
-              class="input config-select"
-              onChange={(e) => {
-                setSinceFilter(e.target.value);
-                setCurrentPage(1);
-              }}
-            >
-              <option value="">All Time</option>
-              <option value={todayISO()}>Today</option>
-              <option value={weekAgoISO()}>7 Days</option>
-              <option value={monthAgoISO()}>30 Days</option>
-            </select>
-          </div>
-
-          {/* Table */}
+        </Card.Toolbar>
+        <Card.Body padded={false}>
           <Show
             when={historyItems().length > 0}
-            fallback={<div class="card-empty">No history yet</div>}
+            fallback={
+              <EmptyState
+                icon="archive"
+                title="No history yet"
+                description="Completed and failed downloads will appear here."
+              />
+            }
           >
-            <table class="table">
-              <thead>
-                <tr>
-                  <th
-                    scope="col"
-                    data-sortable
-                    role="button"
-                    tabindex="0"
-                    aria-sort={sortField() === "title" ? (sortOrder() === "asc" ? "ascending" : "descending") : "none"}
-                    onClick={() => toggleSort("title")}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        toggleSort("title");
-                      }
-                    }}
-                  >
-                    Title{" "}
-                    {sortField() === "title"
-                      ? sortOrder() === "asc"
-                        ? "▲"
-                        : "▼"
-                      : ""}
-                  </th>
-                  <th scope="col" class="text-center" style={{ width: "60px" }}>Quality</th>
-                  <th scope="col" class="text-center" style={{ width: "80px" }}>Status</th>
-                  <th
-                    scope="col"
-                    data-sortable
-                    role="button"
-                    tabindex="0"
-                    style={{ width: "100px" }}
-                    aria-sort={sortField() === "completed_at" ? (sortOrder() === "asc" ? "ascending" : "descending") : "none"}
-                    onClick={() => toggleSort("completed_at")}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        toggleSort("completed_at");
-                      }
-                    }}
-                  >
-                    Completed{" "}
-                    {sortField() === "completed_at"
-                      ? sortOrder() === "asc"
-                        ? "▲"
-                        : "▼"
-                      : ""}
-                  </th>
-                  <th scope="col" class="text-center" style={{ width: "55px" }}>Size</th>
-                  <th scope="col" style={{ width: "55px" }}></th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table
+              sortField={sortField()}
+              sortOrder={sortOrder()}
+              onSort={toggleSort}
+              collapse="card"
+            >
+              <Table.THead>
+                <Table.TR>
+                  <Table.TH name="title" sortable>
+                    Title
+                  </Table.TH>
+                  <Table.TH align="center" width={70}>
+                    Quality
+                  </Table.TH>
+                  <Table.TH align="center" width={100}>
+                    Status
+                  </Table.TH>
+                  <Table.TH name="completed_at" sortable width={170}>
+                    Completed
+                  </Table.TH>
+                  <Table.TH align="center" width={80}>
+                    Size
+                  </Table.TH>
+                  <Table.TH width={48} />
+                </Table.TR>
+              </Table.THead>
+              <Table.TBody>
                 <For each={historyItems()}>
                   {(dl) => (
-                    <tr>
-                      <td>{dl.title || dl.pid}</td>
-                      <td class="text-muted text-center">{dl.actual_quality || dl.quality}</td>
-                      <td class="text-center">
-                        <span class={statusBadgeClass(dl.status === "completed" && dl.file_exists === false ? "imported" : dl.status)}>
-                          {dl.status === "completed" && dl.file_exists === false ? "imported" : dl.status}
+                    <Table.TR>
+                      <Table.TD primary label="Title">
+                        <span class="block truncate" title={dl.title || dl.pid}>
+                          {dl.title || dl.pid}
                         </span>
-                      </td>
-                      <td class="text-secondary">
-                        {dl.completed_at ? new Date(dl.completed_at).toLocaleString() : ""}
-                      </td>
-                      <td class="text-muted text-center">
+                      </Table.TD>
+                      <Table.TD align="center" muted tabular label="Quality">
+                        {dl.actual_quality || dl.quality}
+                      </Table.TD>
+                      <Table.TD align="center" label="Status">
+                        <Badge variant={statusVariant(dl)}>{statusLabel(dl)}</Badge>
+                      </Table.TD>
+                      <Table.TD muted tabular label="Completed">
+                        {formatDate(dl.completed_at)}
+                      </Table.TD>
+                      <Table.TD align="center" muted tabular label="Size">
                         <Show when={dl.size > 0}>{formatBytes(dl.size)}</Show>
-                      </td>
-                      <td>
-                        <button
-                          class="btn btn-danger btn-sm"
+                      </Table.TD>
+                      <Table.TD align="right" label="">
+                        <IconButton
+                          icon="trash"
+                          tone="danger"
+                          size="sm"
+                          aria-label={`Delete ${dl.title || dl.pid}`}
                           onClick={() => deleteHistoryItem(dl.id)}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
+                        />
+                      </Table.TD>
+                    </Table.TR>
                   )}
                 </For>
-              </tbody>
-            </table>
+              </Table.TBody>
+            </Table>
           </Show>
-
-          {/* Pagination */}
-          <Show when={totalCount() > perPage}>
-            <div class="history-pagination">
-              <span class="text-secondary">
-                Showing {historyItems().length} of {totalCount()}
-              </span>
-              <button
-                class="btn btn-sm"
-                disabled={currentPage() <= 1}
-                onClick={() => setCurrentPage((p) => p - 1)}
-              >
-                Prev
-              </button>
-              <span>
-                Page {currentPage()} of {totalPages()}
-              </span>
-              <button
-                class="btn btn-sm"
-                disabled={currentPage() >= totalPages()}
-                onClick={() => setCurrentPage((p) => p + 1)}
-              >
-                Next
-              </button>
-            </div>
-          </Show>
-        </div>
-      </div>
+        </Card.Body>
+        <Show when={totalCount() > perPage}>
+          <Card.Footer>
+            <Pagination
+              current={currentPage()}
+              total={totalPages()}
+              onPageChange={setCurrentPage}
+              showing={historyItems().length}
+              totalCount={totalCount()}
+            />
+          </Card.Footer>
+        </Show>
+      </Card>
     </div>
   );
 }

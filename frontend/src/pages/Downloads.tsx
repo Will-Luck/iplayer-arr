@@ -3,12 +3,28 @@ import type { DirectoryEntry } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
 import { confirmDialog } from "../confirm";
+import { Card } from "../ui/Card";
+import { Badge } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { EmptyState } from "../ui/EmptyState";
+import { Table } from "../ui/Table";
+import { Icon } from "../ui/icons";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return (bytes / Math.pow(1024, i)).toFixed(1) + " " + units[i];
+}
+
+function uniqueExtensions(files: { name: string }[]): string {
+  const seen = new Set<string>();
+  for (const f of files) {
+    const ext = f.name.split(".").pop();
+    if (ext) seen.add(ext);
+  }
+  return Array.from(seen).join(", ");
 }
 
 export default function Downloads() {
@@ -51,67 +67,102 @@ export default function Downloads() {
   });
 
   return (
-    <div>
+    <div class="flex flex-col gap-4">
       <h1 class="page-title">Downloads Directory</h1>
 
       <Show when={error()}>
-        <p class="text-error">Failed to load downloads: {error()}</p>
+        <Card>
+          <Card.Body>
+            <p class="text-sm text-danger">Failed to load downloads: {error()}</p>
+          </Card.Body>
+        </Card>
       </Show>
 
-      <Show when={!loading()} fallback={<p class="text-muted">Loading...</p>}>
-        <div class="card">
-          <div class="card-header" style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-            <span>Folders ({entries().length})</span>
-            <button class="btn btn-primary btn-sm ml-auto" onClick={loadDirectory}>Refresh</button>
-          </div>
-          <Show when={entries().length > 0} fallback={<div class="card-empty">Downloads directory is empty</div>}>
-            <table class="table">
-              <thead>
-                <tr>
-                  <th scope="col">Folder</th>
-                  <th scope="col">Files</th>
-                  <th scope="col">Size</th>
-                  <th scope="col">Owner</th>
-                  <th scope="col">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={entries()}>
-                  {(entry) => (
-                    <tr>
-                      <td class="dl-folder-name" title={entry.name}>
-                        {entry.name}
-                      </td>
-                      <td class="text-muted">
-                        {entry.files.length} {entry.files.length === 1 ? "file" : "files"}
-                        <Show when={entry.files.length > 0}>
-                          <br/>
-                          <span class="dl-file-types">{entry.files.map(f => f.name.split('.').pop()).filter((v, i, a) => a.indexOf(v) === i).join(", ")}</span>
-                        </Show>
-                      </td>
-                      <td class="text-muted">{formatBytes(entry.total_size)}</td>
-                      <td>
-                        <span class={`badge badge-${entry.owned ? "completed" : "pending"}`}>
-                          {entry.owned ? "iplayer-arr" : "unknown"}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          class="btn btn-sm btn-delete"
-                          disabled={!entry.owned}
-                          title={entry.owned ? "Delete folder" : "Cannot delete: not owned by iplayer-arr"}
-                          onClick={() => deleteFolder(entry.name)}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
+      <Show when={!loading()} fallback={
+        <Card>
+          <Card.Body>
+            <p class="text-sm text-text-secondary">Loading...</p>
+          </Card.Body>
+        </Card>
+      }>
+        <Card>
+          <Card.Header
+            actions={
+              <Button variant="secondary" size="sm" onClick={loadDirectory}>
+                <Icon name="refresh" size={14} />
+                Refresh
+              </Button>
+            }
+          >
+            Folders ({entries().length})
+          </Card.Header>
+          <Show
+            when={entries().length > 0}
+            fallback={
+              <Card.Body padded={false}>
+                <EmptyState
+                  icon="archive"
+                  title="Downloads directory is empty"
+                  description="Queued downloads will appear here once started."
+                />
+              </Card.Body>
+            }
+          >
+            <Card.Body padded={false}>
+              <Table collapse="card">
+                <Table.THead>
+                  <Table.TR>
+                    <Table.TH name="folder">Folder</Table.TH>
+                    <Table.TH name="files" width={160}>Files</Table.TH>
+                    <Table.TH name="size" align="right" width={100}>Size</Table.TH>
+                    <Table.TH name="owner" width={130}>Owner</Table.TH>
+                    <Table.TH name="actions" align="right" width={80}>
+                      <span class="sr-only">Actions</span>
+                    </Table.TH>
+                  </Table.TR>
+                </Table.THead>
+                <Table.TBody>
+                  <For each={entries()}>
+                    {(entry) => (
+                      <Table.TR>
+                        <Table.TD primary label="Folder">
+                          <span title={entry.name} class="block truncate">{entry.name}</span>
+                        </Table.TD>
+                        <Table.TD muted label="Files">
+                          {entry.files.length} {entry.files.length === 1 ? "file" : "files"}
+                          <Show when={entry.files.length > 0}>
+                            <div class="text-xs text-text-tertiary">
+                              {uniqueExtensions(entry.files)}
+                            </div>
+                          </Show>
+                        </Table.TD>
+                        <Table.TD muted tabular align="right" label="Size">
+                          {formatBytes(entry.total_size)}
+                        </Table.TD>
+                        <Table.TD label="Owner">
+                          <Badge variant={entry.owned ? "completed" : "pending"}>
+                            {entry.owned ? "iplayer-arr" : "unknown"}
+                          </Badge>
+                        </Table.TD>
+                        <Table.TD align="right" label="Actions">
+                          <IconButton
+                            icon="trash"
+                            tone="danger"
+                            size="sm"
+                            disabled={!entry.owned}
+                            aria-label={`Delete ${entry.name}`}
+                            title={entry.owned ? "Delete folder" : "Cannot delete: not owned by iplayer-arr"}
+                            onClick={() => deleteFolder(entry.name)}
+                          />
+                        </Table.TD>
+                      </Table.TR>
+                    )}
+                  </For>
+                </Table.TBody>
+              </Table>
+            </Card.Body>
           </Show>
-        </div>
+        </Card>
       </Show>
     </div>
   );

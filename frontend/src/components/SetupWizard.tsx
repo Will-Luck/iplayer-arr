@@ -3,6 +3,13 @@ import { api } from "../api";
 import { getSonarrSetup } from "../lib/sonarr-setup";
 import { copyToClipboard } from "../lib/clipboard";
 import type { ConfigResponse } from "../types";
+import { Card } from "../ui/Card";
+import { Button } from "../ui/Button";
+import { Badge } from "../ui/Badge";
+import { Icon } from "../ui/icons";
+
+const maskKey = (k: string) =>
+  k.length > 8 ? k.slice(0, 4) + "•".repeat(8) + k.slice(-4) : k;
 
 export default function SetupWizard(props: { show: boolean; onComplete: () => void }) {
   const [step, setStep] = createSignal(1);
@@ -14,8 +21,7 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
   const [keyRevealed, setKeyRevealed] = createSignal(false);
   const sonarrSetup = () => getSonarrSetup(window.location);
 
-  const maskKey = (k: string) => k.length > 8 ? k.slice(0, 4) + "•".repeat(8) + k.slice(-4) : k;
-  const displayKey = (k: string) => keyRevealed() ? k : maskKey(k);
+  const displayKey = (k: string) => (keyRevealed() ? k : maskKey(k));
 
   onMount(async () => {
     try {
@@ -67,20 +73,60 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
     return "wizard-step";
   }
 
-  function StatusDot(p: { ok: boolean | null; label: string }) {
+  function StatusPill(p: { ok: boolean | null }) {
     return (
-      <span>
-        <Show when={p.ok !== null} fallback={<span class="text-secondary">—</span>}>
-          <span
-            class="status-dot"
-            classList={{ ok: p.ok === true, err: p.ok === false }}
-            aria-label={p.label}
-          />
-          {p.ok ? "OK" : "Failed"}
-        </Show>
-      </span>
+      <Show
+        when={p.ok !== null}
+        fallback={<Badge variant="neutral">Unknown</Badge>}
+      >
+        <Badge variant={p.ok ? "completed" : "failed"}>{p.ok ? "OK" : "Failed"}</Badge>
+      </Show>
     );
   }
+
+  function CopyRow(p: { label: string; value: string; field: string; copyValue?: string; trailing?: import("solid-js").JSX.Element }) {
+    return (
+      <div class="flex items-center justify-between gap-3 border-b border-border-subtle py-2 last:border-b-0">
+        <span class="text-sm text-text-secondary">{p.label}</span>
+        <span class="flex flex-wrap items-center gap-2">
+          <code class="rounded bg-elevated px-2 py-1 font-mono text-xs text-text-primary">
+            {p.value}
+          </code>
+          {p.trailing}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => copyField(p.copyValue ?? p.value, p.field)}
+            aria-label={`Copy ${p.label}`}
+          >
+            <Show
+              when={copiedField() === p.field}
+              fallback={
+                <>
+                  <Icon name="copy" size={14} />
+                  Copy
+                </>
+              }
+            >
+              <Icon name="check" size={14} />
+              Copied
+            </Show>
+          </Button>
+        </span>
+      </div>
+    );
+  }
+
+  const RevealButton = () => (
+    <Button
+      variant="secondary"
+      size="sm"
+      onClick={() => setKeyRevealed(!keyRevealed())}
+      aria-pressed={keyRevealed()}
+    >
+      {keyRevealed() ? "Hide" : "Reveal"}
+    </Button>
+  );
 
   return (
     <Show when={props.show}>
@@ -106,159 +152,124 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
           </div>
 
           <Show when={step() === 1}>
-            <h2 class="page-title" style="margin-bottom:8px">Welcome to iplayer-arr</h2>
-            <p class="text-secondary" style="margin-bottom:20px">
+            <h2 class="mb-2 text-lg font-semibold text-text-primary">Welcome to iplayer-arr</h2>
+            <p class="mb-5 text-sm text-text-secondary">
               Let's make sure everything is ready before you start.
             </p>
 
-            <div class="card" style="margin-bottom:16px">
-              <div class="card-body">
-                <div class="system-row">
-                  <span>UK geo access</span>
-                  <StatusDot ok={geoOk()} label={geoOk() ? "Geo OK" : "Geo failed"} />
+            <Card class="mb-4">
+              <Card.Body>
+                <div class="flex items-center justify-between border-b border-border-subtle py-2">
+                  <span class="text-sm text-text-primary">UK geo access</span>
+                  <StatusPill ok={geoOk()} />
                 </div>
-                <div class="system-row">
-                  <span>ffmpeg</span>
-                  <StatusDot ok={ffmpegOk()} label={ffmpegOk() ? "ffmpeg found" : "ffmpeg missing"} />
+                <div class="flex items-center justify-between py-2">
+                  <span class="text-sm text-text-primary">ffmpeg</span>
+                  <StatusPill ok={ffmpegOk()} />
                 </div>
-              </div>
-            </div>
+              </Card.Body>
+            </Card>
 
             <Show when={geoOk() === false}>
-              <p class="text-secondary" style="margin-bottom:12px;font-size:13px">
+              <p class="mb-3 text-xs text-text-secondary">
                 iplayer-arr must reach BBC iPlayer. Ensure your container routes through a UK VPN.
               </p>
             </Show>
 
             <Show when={ffmpegOk() === false}>
-              <p class="text-secondary" style="margin-bottom:12px;font-size:13px">
+              <p class="mb-3 text-xs text-text-secondary">
                 ffmpeg was not found. Install it in your container or set the FFMPEG_PATH environment variable.
               </p>
             </Show>
 
-            <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
-              <button
-                class="btn btn-sm"
+            <div class="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={runGeoCheck}
-                disabled={geoChecking()}
+                loading={geoChecking()}
               >
                 {geoChecking() ? "Checking..." : "Re-check geo"}
-              </button>
-              <button
-                class="btn btn-primary btn-sm"
-                style="margin-left:auto"
+              </Button>
+              <Button
+                size="sm"
+                class="ml-auto"
                 disabled={!geoOk()}
                 onClick={() => setStep(2)}
               >
                 Next
-              </button>
+              </Button>
             </div>
           </Show>
 
           <Show when={step() === 2}>
-            <h2 class="page-title" style="margin-bottom:8px">Sonarr Setup</h2>
-            <p class="text-secondary" style="margin-bottom:20px">
+            <h2 class="mb-2 text-lg font-semibold text-text-primary">Sonarr setup</h2>
+            <p class="mb-5 text-sm text-text-secondary">
               Add iplayer-arr to Sonarr using the values below.
             </p>
 
-            <div class="card" style="margin-bottom:16px">
-              <div class="card-header">Newznab Indexer</div>
-              <div class="card-body">
-                <div class="system-row">
-                  <span class="system-label">Indexer URL</span>
-                  <span style="display:flex;align-items:center;gap:8px">
-                    <code style="font-size:12px">{sonarrSetup().indexerUrl}</code>
-                    <button
-                      class="copy-btn"
-                      onClick={() => copyField(sonarrSetup().indexerUrl, "indexer-url")}
-                    >
-                      {copiedField() === "indexer-url" ? "Copied!" : "Copy"}
-                    </button>
-                  </span>
-                </div>
-                <div class="system-row">
-                  <span class="system-label">API Key</span>
-                  <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <code style="font-size:12px">{config()?.api_key ? displayKey(config()!.api_key) : "—"}</code>
-                    <Show when={config()?.api_key}>
-                      <button
-                        class="btn btn-sm"
-                        type="button"
-                        onClick={() => setKeyRevealed(!keyRevealed())}
-                        aria-pressed={keyRevealed()}
-                      >
-                        {keyRevealed() ? "Hide" : "Reveal"}
-                      </button>
-                      <button
-                        class="copy-btn"
-                        onClick={() => copyField(config()!.api_key, "indexer-key")}
-                      >
-                        {copiedField() === "indexer-key" ? "Copied!" : "Copy"}
-                      </button>
-                    </Show>
-                  </span>
-                </div>
-              </div>
-            </div>
+            <Card class="mb-4">
+              <Card.Header>Newznab indexer</Card.Header>
+              <Card.Body>
+                <CopyRow
+                  label="Indexer URL"
+                  value={sonarrSetup().indexerUrl}
+                  field="indexer-url"
+                />
+                <Show
+                  when={config()?.api_key}
+                  fallback={
+                    <div class="flex items-center justify-between gap-3 py-2">
+                      <span class="text-sm text-text-secondary">API key</span>
+                      <span class="text-text-tertiary">-</span>
+                    </div>
+                  }
+                >
+                  <CopyRow
+                    label="API key"
+                    value={displayKey(config()!.api_key)}
+                    copyValue={config()!.api_key}
+                    field="indexer-key"
+                    trailing={<RevealButton />}
+                  />
+                </Show>
+              </Card.Body>
+            </Card>
 
-            <div class="card" style="margin-bottom:16px">
-              <div class="card-header">SABnzbd Download Client</div>
-              <div class="card-body">
-                {[
-                  { label: "Host", value: sonarrSetup().sabHost, key: "sab-host" },
-                  { label: "Port", value: sonarrSetup().sabPort, key: "sab-port" },
-                  { label: "URL Base", value: sonarrSetup().sabBase, key: "sab-base" },
-                  { label: "Category", value: sonarrSetup().sabCategory, key: "sab-cat" },
-                ].map((row) => (
-                  <div class="system-row">
-                    <span class="system-label">{row.label}</span>
-                    <span style="display:flex;align-items:center;gap:8px">
-                      <code style="font-size:12px">{row.value}</code>
-                      <button
-                        class="copy-btn"
-                        onClick={() => copyField(row.value, row.key)}
-                      >
-                        {copiedField() === row.key ? "Copied!" : "Copy"}
-                      </button>
-                    </span>
-                  </div>
-                ))}
-                <div class="system-row">
-                  <span class="system-label">API Key</span>
-                  <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <code style="font-size:12px">{config()?.api_key ? displayKey(config()!.api_key) : "—"}</code>
-                    <Show when={config()?.api_key}>
-                      <button
-                        class="btn btn-sm"
-                        type="button"
-                        onClick={() => setKeyRevealed(!keyRevealed())}
-                        aria-pressed={keyRevealed()}
-                      >
-                        {keyRevealed() ? "Hide" : "Reveal"}
-                      </button>
-                      <button
-                        class="copy-btn"
-                        onClick={() => copyField(config()!.api_key, "sab-key")}
-                      >
-                        {copiedField() === "sab-key" ? "Copied!" : "Copy"}
-                      </button>
-                    </Show>
-                  </span>
-                </div>
-              </div>
-            </div>
+            <Card class="mb-4">
+              <Card.Header>SABnzbd download client</Card.Header>
+              <Card.Body>
+                <CopyRow label="Host" value={sonarrSetup().sabHost} field="sab-host" />
+                <CopyRow label="Port" value={sonarrSetup().sabPort} field="sab-port" />
+                <CopyRow label="URL base" value={sonarrSetup().sabBase} field="sab-base" />
+                <CopyRow label="Category" value={sonarrSetup().sabCategory} field="sab-cat" />
+                <Show
+                  when={config()?.api_key}
+                  fallback={
+                    <div class="flex items-center justify-between gap-3 py-2">
+                      <span class="text-sm text-text-secondary">API key</span>
+                      <span class="text-text-tertiary">-</span>
+                    </div>
+                  }
+                >
+                  <CopyRow
+                    label="API key"
+                    value={displayKey(config()!.api_key)}
+                    copyValue={config()!.api_key}
+                    field="sab-key"
+                    trailing={<RevealButton />}
+                  />
+                </Show>
+              </Card.Body>
+            </Card>
 
-            <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn btn-sm" onClick={() => setStep(1)}>
+            <div class="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setStep(1)}>
                 Back
-              </button>
-              <button
-                class="btn btn-primary btn-sm"
-                style="margin-left:auto"
-                onClick={props.onComplete}
-              >
+              </Button>
+              <Button size="sm" class="ml-auto" onClick={props.onComplete}>
                 Done
-              </button>
+              </Button>
             </div>
           </Show>
         </div>

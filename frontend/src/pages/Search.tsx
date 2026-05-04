@@ -3,6 +3,28 @@ import type { SearchResult } from "../types";
 import { QUALITY_OPTIONS } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
+import { Card } from "../ui/Card";
+import { Badge, type BadgeVariant } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { Select } from "../ui/Select";
+import { EmptyState } from "../ui/EmptyState";
+import { Icon } from "../ui/icons";
+
+const QUALITY_SELECT_OPTIONS = QUALITY_OPTIONS.map((q) => ({ value: q, label: q }));
+
+type Tier = { variant: BadgeVariant; label: string };
+
+function tierFor(r: SearchResult): Tier {
+  if (r.Series > 0 && r.EpisodeNum > 0) {
+    return {
+      variant: "completed",
+      label: `S${String(r.Series).padStart(2, "0")}E${String(r.EpisodeNum).padStart(2, "0")}`,
+    };
+  }
+  if (r.Position > 0) return { variant: "imported", label: `Pos ${r.Position}` };
+  if (r.AirDate) return { variant: "pending", label: r.AirDate };
+  return { variant: "neutral", label: "Manual" };
+}
 
 export default function Search() {
   const [query, setQuery] = createSignal("");
@@ -16,13 +38,19 @@ export default function Search() {
     const val = (e.target as HTMLInputElement).value;
     setQuery(val);
     clearTimeout(debounceTimer);
-    if (val.length < 2) { setResults([]); return; }
+    if (val.length < 2) {
+      setResults([]);
+      return;
+    }
     debounceTimer = window.setTimeout(async () => {
       setLoading(true);
       try {
         const res = await api.search(val);
         setResults(res || []);
-      } catch (e) { setResults([]); addToast("error", `Search failed: ${e instanceof Error ? e.message : "unknown error"}`); }
+      } catch (e) {
+        setResults([]);
+        addToast("error", `Search failed: ${e instanceof Error ? e.message : "unknown error"}`);
+      }
       setLoading(false);
     }, 300);
   }
@@ -42,74 +70,95 @@ export default function Search() {
   }
 
   function setQuality(pid: string, val: string) {
-    setSelectedQuality(prev => ({ ...prev, [pid]: val }));
-  }
-
-  function tierClass(r: SearchResult): string {
-    if (r.Series > 0 && r.EpisodeNum > 0) return "badge-completed";
-    if (r.Position > 0) return "badge-downloading";
-    if (r.AirDate) return "badge-resolving";
-    return "badge-pending";
-  }
-
-  function tierLabel(r: SearchResult): string {
-    if (r.Series > 0 && r.EpisodeNum > 0) return `S${String(r.Series).padStart(2, "0")}E${String(r.EpisodeNum).padStart(2, "0")}`;
-    if (r.Position > 0) return `Pos ${r.Position}`;
-    if (r.AirDate) return r.AirDate;
-    return "Manual";
+    setSelectedQuality((prev) => ({ ...prev, [pid]: val }));
   }
 
   return (
-    <div>
+    <div class="flex flex-col gap-4">
       <h1 class="page-title">Search</h1>
-      <div class="card">
-        <div class="card-header">Search BBC iPlayer</div>
-        <div class="card-body">
-          <input
-            class="input"
-            type="text"
-            placeholder="Search for a programme..."
-            value={query()}
-            onInput={onInput}
-            aria-label="Search BBC iPlayer"
-          />
-        </div>
-      </div>
+
+      <Card>
+        <Card.Header>Search BBC iPlayer</Card.Header>
+        <Card.Body>
+          <label class="relative block">
+            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary">
+              <Icon name="search" size={16} />
+            </span>
+            <input
+              type="text"
+              placeholder="Search for a programme"
+              value={query()}
+              onInput={onInput}
+              aria-label="Search BBC iPlayer"
+              class="h-10 w-full rounded-md border border-border bg-elevated pl-9 pr-3 text-sm text-text-primary placeholder:text-text-tertiary transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+            />
+          </label>
+        </Card.Body>
+      </Card>
 
       <Show when={loading()}>
-        <p class="text-muted mt-8 mb-8">Searching...</p>
+        <p class="text-sm text-text-secondary">Searching...</p>
       </Show>
 
-      <For each={results()}>{r => (
-        <div class="card">
-          <div class="card-body search-result">
-            <Show when={r.Thumbnail}>
-              <img src={r.Thumbnail} alt="" class="search-thumb" />
-            </Show>
-            <div class="search-body">
-              <div class="search-title">{r.Title}</div>
-              <div class="text-secondary search-subtitle">{r.Subtitle}</div>
-              <div class="search-badges">
-                <span class={`badge ${tierClass(r)}`}>{tierLabel(r)}</span>
-                <Show when={r.Channel}>
-                  <span class="badge badge-channel">{r.Channel}</span>
-                </Show>
-              </div>
-              <div class="search-actions">
-                <select class="input config-select" value={qualityFor(r.PID)} onChange={e => setQuality(r.PID, e.target.value)} aria-label={`Download quality for ${r.Title}`}>
-                  <For each={QUALITY_OPTIONS as unknown as string[]}>{q => <option value={q}>{q}</option>}</For>
-                </select>
-                <button class="btn btn-primary btn-sm" onClick={() => startDownload(r)} aria-label={`Download ${r.Title}`}>Download</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}</For>
+      <For each={results()}>
+        {(r) => {
+          const tier = tierFor(r);
+          return (
+            <Card>
+              <Card.Body>
+                <div class="flex flex-col gap-4 sm:flex-row">
+                  <Show when={r.Thumbnail}>
+                    <img
+                      src={r.Thumbnail}
+                      alt=""
+                      class="aspect-video w-full max-w-[12rem] flex-none rounded-md border border-border-subtle object-cover sm:w-48"
+                    />
+                  </Show>
+                  <div class="flex min-w-0 flex-1 flex-col gap-2">
+                    <div class="text-base font-semibold text-text-primary">{r.Title}</div>
+                    <Show when={r.Subtitle}>
+                      <div class="text-sm text-text-secondary">{r.Subtitle}</div>
+                    </Show>
+                    <div class="flex flex-wrap gap-2">
+                      <Badge variant={tier.variant}>{tier.label}</Badge>
+                      <Show when={r.Channel}>
+                        <Badge variant="neutral">{r.Channel}</Badge>
+                      </Show>
+                    </div>
+                    <div class="mt-1 flex flex-wrap items-center gap-2 sm:justify-end">
+                      <Select
+                        value={qualityFor(r.PID)}
+                        onChange={(v) => setQuality(r.PID, v)}
+                        options={QUALITY_SELECT_OPTIONS}
+                        ariaLabel={`Download quality for ${r.Title}`}
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => startDownload(r)}
+                        aria-label={`Download ${r.Title}`}
+                      >
+                        <Icon name="download" size={14} />
+                        Download
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </Card.Body>
+            </Card>
+          );
+        }}
+      </For>
 
       <Show when={!loading() && query().length >= 2 && results().length === 0}>
-        <div class="card">
-          <div class="card-empty">No results found</div>
-        </div>
+        <Card>
+          <Card.Body padded={false}>
+            <EmptyState
+              icon="search"
+              title="No results found"
+              description="Try a shorter query or a different spelling."
+            />
+          </Card.Body>
+        </Card>
       </Show>
     </div>
   );

@@ -1,8 +1,11 @@
 import { Router, Route, useLocation } from "@solidjs/router";
 import { createSignal, createEffect, onMount, onCleanup, ErrorBoundary } from "solid-js";
 import Nav from "./components/Nav";
-import ToastContainer from "./components/Toast";
-import ConfirmDialog from "./components/ConfirmDialog";
+import { ToastViewport } from "./ui/Toast";
+import { Dialog } from "./ui/Dialog";
+import { Card } from "./ui/Card";
+import { Button } from "./ui/Button";
+import { pending, resolvePending } from "./confirm";
 import SetupWizard from "./components/SetupWizard";
 import Dashboard from "./pages/Dashboard";
 import Downloads from "./pages/Downloads";
@@ -13,6 +16,24 @@ import Logs from "./pages/Logs";
 import System from "./pages/System";
 import NotFound from "./pages/NotFound";
 import { api } from "./api";
+
+function ConfirmHost() {
+  return (
+    <Dialog.Confirm
+      open={pending() !== null}
+      onOpenChange={(open) => {
+        if (!open && pending()) resolvePending(false);
+      }}
+      title={pending()?.title}
+      message={pending()?.message ?? ""}
+      confirmLabel={pending()?.confirmLabel}
+      cancelLabel={pending()?.cancelLabel}
+      danger={pending()?.danger}
+      onConfirm={() => resolvePending(true)}
+      onCancel={() => resolvePending(false)}
+    />
+  );
+}
 
 function Layout(props: { children?: any }) {
   const [showWizard, setShowWizard] = createSignal(false);
@@ -46,20 +67,22 @@ function Layout(props: { children?: any }) {
       <main ref={mainRef} id="main" class="main" tabindex="-1">
         <ErrorBoundary
           fallback={(err: Error, reset: () => void) => (
-            <div class="card" role="alert">
-              <div class="card-header">Something went wrong</div>
-              <div class="card-body">
-                <p class="text-secondary" style="margin-bottom:12px">{String(err?.message ?? err)}</p>
-                <button class="btn btn-primary" onClick={reset}>Try again</button>
-              </div>
-            </div>
+            <Card>
+              <Card.Header>Something went wrong</Card.Header>
+              <Card.Body>
+                <p class="mb-3 text-sm text-text-secondary">
+                  {String(err?.message ?? err)}
+                </p>
+                <Button onClick={reset}>Try again</Button>
+              </Card.Body>
+            </Card>
           )}
         >
           {props.children}
         </ErrorBoundary>
       </main>
-      <ToastContainer />
-      <ConfirmDialog />
+      <ToastViewport />
+      <ConfirmHost />
       <SetupWizard show={showWizard()} onComplete={() => setShowWizard(false)} />
     </div>
   );
