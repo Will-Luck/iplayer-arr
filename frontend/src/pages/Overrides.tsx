@@ -90,9 +90,11 @@ export default function Overrides() {
   );
 
   return (
-    <div class="card">
-      <div class="card-header override-header">
-        <span>Show Overrides</span>
+    <div>
+      <h1 class="page-title">Overrides</h1>
+      <div class="card">
+        <div class="card-header override-header">
+          <span>Show Overrides</span>
         <button class="btn btn-primary btn-sm" onClick={startAdd} disabled={adding()}>Add Override</button>
       </div>
       <div class="card-body overrides-body">
@@ -139,6 +141,7 @@ export default function Overrides() {
         <Show when={overrides().length === 0 && !adding()}>
           <p class="text-muted text-center overrides-empty">No overrides configured</p>
         </Show>
+        </div>
       </div>
     </div>
   );

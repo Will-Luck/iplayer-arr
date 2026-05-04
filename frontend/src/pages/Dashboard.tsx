@@ -489,7 +489,16 @@ export default function Dashboard() {
                   <th
                     scope="col"
                     data-sortable
+                    role="button"
+                    tabindex="0"
+                    aria-sort={sortField() === "title" ? (sortOrder() === "asc" ? "ascending" : "descending") : "none"}
                     onClick={() => toggleSort("title")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        toggleSort("title");
+                      }
+                    }}
                   >
                     Title{" "}
                     {sortField() === "title"
@@ -503,8 +512,17 @@ export default function Dashboard() {
                   <th
                     scope="col"
                     data-sortable
+                    role="button"
+                    tabindex="0"
                     style={{ width: "100px" }}
+                    aria-sort={sortField() === "completed_at" ? (sortOrder() === "asc" ? "ascending" : "descending") : "none"}
                     onClick={() => toggleSort("completed_at")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        toggleSort("completed_at");
+                      }
+                    }}
                   >
                     Completed{" "}
                     {sortField() === "completed_at"

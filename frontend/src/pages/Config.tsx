@@ -35,9 +35,11 @@ export default function Config() {
   }
 
   return (
-    <Show when={config()} fallback={<p class="text-muted">Loading...</p>}>
-      <div class="card">
-        <div class="card-header">API Key</div>
+    <div>
+      <h1 class="page-title">Configuration</h1>
+      <Show when={config()} fallback={<p class="text-muted">Loading...</p>}>
+        <div class="card">
+          <div class="card-header">API Key</div>
         <div class="card-body">
           <div class="api-key-row">
             <code class="api-key-code" aria-label="API key">
@@ -152,6 +154,7 @@ export default function Config() {
           Re-run Setup Wizard
         </button>
       </div>
-    </Show>
+      </Show>
+    </div>
   );
 }

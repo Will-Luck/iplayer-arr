@@ -61,6 +61,7 @@ export default function Search() {
 
   return (
     <div>
+      <h1 class="page-title">Search</h1>
       <div class="card">
         <div class="card-header">Search BBC iPlayer</div>
         <div class="card-body">

@@ -117,6 +117,7 @@ export default function Nav() {
           onClick={() => setMobileOpen(!mobileOpen())}
           aria-label="Toggle navigation"
           aria-expanded={mobileOpen()}
+          aria-controls="primary-nav"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="3" y1="6" x2="21" y2="6" />
@@ -134,6 +135,7 @@ export default function Nav() {
       />
 
       <nav
+        id="primary-nav"
         class="nav"
         classList={{ collapsed: collapsed(), "mobile-open": mobileOpen() }}
         aria-label="Main navigation"
