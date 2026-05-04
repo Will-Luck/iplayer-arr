@@ -246,6 +246,9 @@ body {
 
 .progress-fill.complete { background: var(--success); }
 .progress-fill.failed { background: var(--danger); }
+.progress-fill.healthy { background: var(--success); }
+.progress-fill.caution { background: var(--warning); }
+.progress-fill.heavy { background: var(--danger); }
 
 /* Badges */
 .badge {
@@ -521,7 +524,7 @@ select.input {
 }
 
 .config-hint {
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 4px;
 }
 
@@ -541,7 +544,7 @@ select.input {
 }
 
 .dl-file-types {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 
@@ -559,7 +562,7 @@ select.input {
 }
 
 .field-error {
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 2px;
 }
 
@@ -852,9 +855,18 @@ select.input {
   }
   .main {
     margin-left: 0 !important;
-    padding-top: 64px;
+    padding: 64px 16px 16px;
   }
   .sidebar-toggle { display: none; }
+
+  /* Touch targets: WCAG 2.5.5 minimum 44x44 */
+  .btn-sm { min-height: 44px; padding: 10px 14px; }
+  .copy-btn { min-height: 44px; min-width: 44px; padding: 10px 12px; }
+  .hamburger { min-height: 44px; min-width: 44px; padding: 12px; }
+  .nav-link { min-height: 44px; }
+
+  /* Single-column grids prevent horizontal overflow */
+  .system-grid { grid-template-columns: 1fr; }
 }
 
 /* Logs page */

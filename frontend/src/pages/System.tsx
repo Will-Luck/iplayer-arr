@@ -60,6 +60,13 @@ export default function System() {
             ? Math.round(((sys().disk_total - sys().disk_free) / sys().disk_total) * 100)
             : 0;
 
+        const diskUsageClass = () => {
+          const p = diskUsedPct();
+          if (p >= 90) return "heavy";
+          if (p >= 80) return "caution";
+          return "healthy";
+        };
+
         const totalDls = () => sys().downloads_completed + sys().downloads_failed;
         const successRate = () =>
           totalDls() > 0
@@ -179,7 +186,7 @@ export default function System() {
                       aria-valuemax={100}
                       aria-label={`Disk usage ${diskUsedPct()}%`}
                     >
-                      <div class="progress-fill" style={{ width: `${diskUsedPct()}%` }} />
+                      <div class={`progress-fill ${diskUsageClass()}`} style={{ width: `${diskUsedPct()}%` }} />
                     </div>
                     <p class="text-secondary" style="font-size:12px;margin-top:4px">{diskUsedPct()}% used</p>
                   </div>
