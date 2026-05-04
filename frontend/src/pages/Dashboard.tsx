@@ -91,8 +91,11 @@ const monthAgoISO = () => {
   return d.toISOString().split("T")[0];
 };
 
+const STATUS_ALL = "all";
+const SINCE_ALL = "all";
+
 const STATUS_OPTIONS: SelectOption[] = [
-  { value: "", label: "All Statuses" },
+  { value: STATUS_ALL, label: "All statuses" },
   { value: "completed", label: "Completed" },
   { value: "failed", label: "Failed" },
 ];
@@ -134,18 +137,18 @@ export default function Dashboard() {
   const [paused, setPaused] = createSignal(false);
   const [stats, setStats] = createSignal<HistoryStats | null>(null);
 
-  const [statusFilter, setStatusFilter] = createSignal("");
-  const [sinceFilter, setSinceFilter] = createSignal("");
+  const [statusFilter, setStatusFilter] = createSignal(STATUS_ALL);
+  const [sinceFilter, setSinceFilter] = createSignal(SINCE_ALL);
   const [sortField, setSortField] = createSignal("completed_at");
   const [sortOrder, setSortOrder] = createSignal<"asc" | "desc">("desc");
   const [currentPage, setCurrentPage] = createSignal(1);
   const perPage = 20;
 
   const sinceOptions: SelectOption[] = [
-    { value: "", label: "All Time" },
+    { value: SINCE_ALL, label: "All time" },
     { value: todayISO(), label: "Today" },
-    { value: weekAgoISO(), label: "7 Days" },
-    { value: monthAgoISO(), label: "30 Days" },
+    { value: weekAgoISO(), label: "Last 7 days" },
+    { value: monthAgoISO(), label: "Last 30 days" },
   ];
 
   const totalPages = () => Math.max(1, Math.ceil(totalCount() / perPage));
@@ -237,8 +240,8 @@ export default function Dashboard() {
       sort: sortField(),
       order: sortOrder(),
     };
-    if (statusFilter()) params.status = statusFilter();
-    if (sinceFilter()) params.since = sinceFilter();
+    if (statusFilter() !== STATUS_ALL) params.status = statusFilter();
+    if (sinceFilter() !== SINCE_ALL) params.since = sinceFilter();
 
     api
       .listHistory(params)
@@ -249,7 +252,7 @@ export default function Dashboard() {
       .catch(() => {});
 
     api
-      .getHistoryStats(sinceFilter() || undefined)
+      .getHistoryStats(sinceFilter() === SINCE_ALL ? undefined : sinceFilter())
       .then(setStats)
       .catch(() => {});
   }
