@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Shared `<ConfirmDialog>` component** with `role=alertdialog`, `aria-modal`, focus trap, Esc-to-cancel, and backdrop-click-to-cancel. Replaces three native `confirm()` sites: `Dashboard.clearAllHistory`, `Downloads.deleteFolder`, `Overrides.remove`. Promise-based API: `confirmDialog({ title, message, confirmLabel, danger })`.
+- **`NotFound` page** registered at `path="*"` so unknown URLs render a real not-found page with a return-to-dashboard link instead of an empty layout.
+- **Top-level Solid `<ErrorBoundary>`** around the routed page so a render exception shows a fallback card with a `Try again` button instead of a blank screen.
+- **Skip-to-main-content link** as the first focusable element in `Layout`. Visually hidden until focused.
+- **Route-change focus management**: `Layout` watches `location.pathname` and focuses `<main>` after every navigation so SPA route changes announce the new page.
+- **Reveal toggle on Setup Wizard API key fields** (Sonarr panel and SAB panel). Keys are masked by default (`XXXX...XXXX`).
+- **`.progress-fill.healthy / .caution / .heavy` semantic states** for storage-style usage bars; `System.tsx` selects based on disk percentage so a healthy 42 % no longer reads as the destructive pink accent.
+
+### Changed
+
+- **Mobile media block (`@media (max-width: 768px)`)** in `frontend/src/styles.css`: `min-height: 44px` on `.btn-sm`, `.copy-btn`, `.hamburger`, `.nav-link` (WCAG 2.5.5); `.main` padding tightened to 16 px; `.system-grid` collapsed to single column to remove +73 / +92 / +29 px horizontal overflow on Dashboard / Config / System.
+- **Setup Wizard modal** is now scrollable (`max-height: calc(100dvh - 32px)`, `overflow-y: auto`) so the Done button stays in view on Step 2. Adds an X close button at top-right and treats Esc / backdrop click as Complete.
+- **Toast a11y semantics**: `<ToastContainer>` gains `aria-live=polite` on the wrapper. Success and warning toasts switch to `role=status` (implicitly polite); only error toasts retain `role=alert` (assertive). Stops screen readers from interrupting on every successful save.
+- **`.input:focus-visible`** gains a 2 px `box-shadow` ring so focus is visibly distinct from hover (the previous 1 px border swap was too subtle).
+- **`<th>` sortable headers in Dashboard history table** are now keyboard-accessible: `aria-sort` (`ascending` / `descending` / `none`), `role=button`, `tabindex=0`, `onKeyDown` for Enter and Space.
+- **Hamburger button** gains `aria-controls="primary-nav"` (matching `id` on the `<nav>`) so screen readers can associate it with the panel it toggles.
+- **Page heading hierarchy**: Search, Config, and Overrides gain `<h1 class="page-title">` (the four other pages already had one).
+- **`.field-error`, `.config-hint`, `.dl-file-types`** bumped from 11 → 12 px so validation messages and hints are legible at 1× density. Directly fixes the Overrides validation-message-clipping bug.
+- **`.mobile-topbar`** adds `env(safe-area-inset-*)` so iPhone notch / Dynamic Island devices do not obscure the hamburger or brand.
+- **`@media (prefers-reduced-motion: reduce)`** neutralises animations and transitions for users who request it.
+
+### Notes
+
+Source for this set of UI/UX changes is the audit filed as issue #19 on 2026-05-03. PRs #20–#23 form the four-cluster sweep against that audit. Functional findings from the same audit (Pause not actually pausing, "Determining quality…" stuck at 70 %, Downloads page being a folder browser instead of a queue, SSE `ERR_NETWORK_CHANGED` reconnection noise) were intentionally deferred to their own scoped issues.
+
 ## [1.1.8] - 2026-05-01
 
 ### Fixed
