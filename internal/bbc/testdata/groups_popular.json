@@ -1,0 +1,630 @@
+{
+    "version": "1.0",
+    "schema": "/ibl/v1/schema/ibl.json",
+    "group_episodes": {
+        "page": 1,
+        "per_page": 3,
+        "count": 150,
+        "group": {
+            "id": "popular",
+            "type": "group",
+            "group_type": "automated",
+            "content_type": "episodes",
+            "stacked": false,
+            "images": {
+                "type": "image",
+                "standard": "https://ichef.bbci.co.uk/images/ic/{recipe}/p07mkfyl.jpg",
+                "vertical": "https://ichef.bbci.co.uk/images/ic/{recipe}/p07mkg32.jpg"
+            },
+            "related_links": [],
+            "title": "Most Popular Today",
+            "synopses": {
+                "small": "Today's most popular programmes available on BBC iPlayer."
+            }
+        },
+        "elements": [
+            {
+                "id": "m002w167",
+                "live": false,
+                "type": "episode",
+                "title": "EastEnders",
+                "images": {
+                    "type": "image",
+                    "portrait": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0njclbr.jpg",
+                    "standard": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0nh38w5.jpg",
+                    "promotional": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0njcl8t.jpg",
+                    "promotional_with_logo": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0njcldw.jpg"
+                },
+                "labels": {
+                    "category": "Drama"
+                },
+                "signed": false,
+                "status": "available",
+                "tleo_id": "b006m86d",
+                "guidance": false,
+                "subtitle": "07/05/2026",
+                "synopses": {
+                    "small": "Max's jealousy mounts.",
+                    "medium": "It\u2019s election day, and Ian and Elaine are anxiously awaiting the results. Nicola tries to support George, and Max\u2019s jealousy mounts.",
+                    "editorial": "07/05/2026: It\u2019s election day, and Ian and Elaine are anxiously awaiting the results"
+                },
+                "versions": [
+                    {
+                        "hd": true,
+                        "id": "m002w166",
+                        "hdr": false,
+                        "uhd": false,
+                        "kind": "original",
+                        "type": "version",
+                        "events": [
+                            {
+                                "name": "started",
+                                "offset": 30,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "ended",
+                                "offset": 1618,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 1564,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "dax"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 1564,
+                                "system": "dax"
+                            }
+                        ],
+                        "download": true,
+                        "duration": {
+                            "text": "29 mins",
+                            "value": "PT28M58.080S"
+                        },
+                        "availability": {
+                            "end": "2027-05-07T19:00:02Z",
+                            "start": "2026-05-07T05:00:00Z",
+                            "remaining": {
+                                "text": "Available for over a year"
+                            }
+                        },
+                        "interactions": [
+                            {
+                                "type": "skip",
+                                "title": {
+                                    "long": "Skip intro",
+                                    "short": "Skip"
+                                },
+                                "subtype": "intro",
+                                "interaction_points": {
+                                    "skip_to": 23,
+                                    "show_from": 1
+                                }
+                            }
+                        ],
+                        "credits_start": 1696,
+                        "first_broadcast": "7:30pm 7 May 2026",
+                        "first_broadcast_date_time": "2026-05-07T18:30:00.000Z"
+                    },
+                    {
+                        "hd": false,
+                        "id": "p0njqd6b",
+                        "hdr": false,
+                        "uhd": false,
+                        "kind": "audio-described",
+                        "type": "version",
+                        "events": [
+                            {
+                                "name": "started",
+                                "offset": 30,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "ended",
+                                "offset": 1618,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 1564,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "dax"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 1564,
+                                "system": "dax"
+                            }
+                        ],
+                        "download": false,
+                        "duration": {
+                            "text": "29 mins",
+                            "value": "PT28M58.080S"
+                        },
+                        "availability": {
+                            "end": "2027-05-07T19:00:02Z",
+                            "start": "2026-05-07T05:00:00Z",
+                            "remaining": {
+                                "text": "Available for over a year"
+                            }
+                        },
+                        "first_broadcast": "7 May 2026",
+                        "first_broadcast_date_time": "2026-05-07T00:00:00.000Z"
+                    }
+                ],
+                "childrens": false,
+                "parent_id": "b006m86d",
+                "tleo_type": "brand",
+                "categories": [
+                    "audio-described",
+                    "drama-and-soaps",
+                    "soaps"
+                ],
+                "has_credits": true,
+                "requires_ab": [
+                    "u13",
+                    "u16",
+                    "u18",
+                    "o18"
+                ],
+                "master_brand": {
+                    "id": "bbc_one",
+                    "titles": {
+                        "large": "BBC One",
+                        "small": "BBC One",
+                        "medium": "BBC One"
+                    },
+                    "attribution": "bbc_one"
+                },
+                "release_date": "7 May 2026",
+                "related_links": [],
+                "original_title": "07/05/2026",
+                "programme_type": "sequential",
+                "audio_described": true,
+                "parent_position": 7326,
+                "requires_sign_in": true,
+                "release_date_time": "2026-05-07T00:00:00.000Z",
+                "editorial_subtitle": "07/05/2026: It\u2019s election day",
+                "lexical_sort_letter": "E",
+                "requires_tv_licence": true
+            },
+            {
+                "id": "m002thds",
+                "live": false,
+                "type": "episode",
+                "title": "Race Across the World",
+                "images": {
+                    "type": "image",
+                    "portrait": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0n7ks4q.jpg",
+                    "standard": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0n8vh3b.jpg",
+                    "promotional": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0n7ks40.jpg",
+                    "promotional_with_logo": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0n7ks5r.jpg"
+                },
+                "labels": {
+                    "category": "Entertainment"
+                },
+                "signed": true,
+                "status": "available",
+                "tleo_id": "m0002tvs",
+                "guidance": false,
+                "slice_id": "m0002tvs-structural-6-m002thdt",
+                "subtitle": "Series 6: Episode 1",
+                "synopses": {
+                    "large": "Five intrepid teams embark on the journey of a lifetime, racing more than 12,000km across Europe and Asia, the largest continental area on earth. The route carves through eight distinctive countries: Italy, Greece, T\u00fcrkiye, Georgia, Kazakhstan, Uzbekistan, Kyrgyzstan and Mongolia \u2013 each with its own language, culture and climate. In the most extreme race to date, conditions swing from 30\u00b0C Mediterranean heat to subarctic temperatures of -20\u00b0C. And they\u2019ve got to do it all on a budget of less than \u00a326 per person per day.\n \nThe teams will race from Palermo on the island of Sicily all the way to the remote village of Hatgal on the shores of Lake H\u00f6vsg\u00f6l in northern Mongolia. Retracing parts of the ancient Silk Road, they will follow in the footsteps of traders who once connected the west and east across these vast, unforgiving landscapes. They will have to navigate their way from the bustling streets of Italy \u2013 one of the world\u2019s most visited destinations \u2013 to one of its most remote, the windswept Mongolian Steppe. With smartphones, internet access and bank cards left behind, they are armed with nothing but the cash equivalent of flying the route.\n \nThe race begins in the city of Palermo, the capital of the Mediterranean\u2019s largest island and most conquered city in Europe. To reach the first checkpoint, teams must first travel through southern Italy. A ferry across the Tyrrhenian Sea could propel them straight to the vibrant city of Naples, or they could choose to travel by land through the rugged region of Calabria, passing hilltop hamlets and coastal enclaves, each with its own unique character. Once in Puglia, the race continues across the Adriatic towards the first checkpoint: Fiskardo on the island of Kefalonia.\n \nChildhood best friends from Liverpool, Jo and Kush, who are both 19, are the youngest duo in the race. Still living at home with their mums and fresh out of school, this is their first real taste of independence. Their Scouse charm and willingness to throw themselves into local life proves fruitful, but when they cross paths with another team, their laid-back approach gives way to a more competitive streak!\n \nInseparable siblings Katie, 20, and Harrison, 23, from Manchester, may do everything together, but they could not be more different when it comes to the race. Accountant Harrison\u2019s laser-like focus on the budget and high-paid work takes them to an upmarket cafe in Naples, leaving Katie to embrace whatever comes their way.\n \nJunior doctor Molly, 23, and her father Andrew, 54, have always been close, but as Molly prepares to begin her medical career, she wants to prove to her dad that she is more capable than he gives her credit for. Geography teacher Andrew\u2019s desire to explore sees them head away from the main transport hubs and into a labyrinth of sea caves in Maratea.\n\nPuja, 31, and her cousin Roshni, 32, spent their twenties building successful careers and putting wanderlust on hold. Determined to stretch every penny, their plan to avoid pricey areas and expensive transport leads them towards a rural homestay and a more authentic Italian travel experience.\n \nUnlikely duo Mark, 66, and Margo, 59, have spent the past 40 years with a typically fractious in-law relationship. But after recently putting their differences aside in pursuit of a shared goal \u2013 caring for a loved one \u2013 they have developed a fondness for each other\u2019s company. A slow start leaves them trailing the pack, exposing their very different approaches to the race. And when faced with expensive Italian accommodation, they\u2019re forced to put their friendship to the ultimate test... sharing a double bed!\n \nThe race will test the five teams both physically and emotionally, pushing them to their absolute limits. But with their feet on the ground and their eyes wide open, the rewards will be immense, and the memories unforgettable. Only one team can emerge victorious as they battle to be the first to reach the finish line and claim the \u00a320,000 prize in their race across the world.",
+                    "small": "Five teams set off from Palermo on a 12,000km race to reach Hatgal in northern Mongolia.",
+                    "medium": "Five adventurous teams are pushed to the limit, battling extreme climates and harsh terrain in a 12,000km race across Europe and Asia to reach Hatgal in northern Mongolia.",
+                    "editorial": "The further they go, the closer they\u2019ll get. It\u2019s the most extreme and exciting race yet",
+                    "programme_small": "No flights, no phones - and one high-stakes, low-budget race to the finish."
+                },
+                "versions": [
+                    {
+                        "hd": true,
+                        "id": "m002thdr",
+                        "hdr": false,
+                        "uhd": false,
+                        "kind": "original",
+                        "type": "version",
+                        "events": [
+                            {
+                                "name": "started",
+                                "offset": 30,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "ended",
+                                "offset": 3536,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 3290,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "dax"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 3290,
+                                "system": "dax"
+                            }
+                        ],
+                        "download": true,
+                        "duration": {
+                            "text": "1h 1m",
+                            "value": "PT1H55.880S"
+                        },
+                        "availability": {
+                            "end": "2027-05-21T21:00:30Z",
+                            "start": "2026-04-02T20:02:55Z",
+                            "remaining": {
+                                "text": "Available for over a year"
+                            }
+                        },
+                        "credits_start": 3628,
+                        "first_broadcast": "8pm 2 Apr 2026",
+                        "first_broadcast_date_time": "2026-04-02T19:00:00.000Z"
+                    },
+                    {
+                        "hd": false,
+                        "id": "p0nb1ymw",
+                        "hdr": false,
+                        "uhd": false,
+                        "kind": "audio-described",
+                        "type": "version",
+                        "events": [
+                            {
+                                "name": "started",
+                                "offset": 30,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "ended",
+                                "offset": 3536,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 3290,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "dax"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 3290,
+                                "system": "dax"
+                            }
+                        ],
+                        "download": false,
+                        "duration": {
+                            "text": "1h 1m",
+                            "value": "PT1H55.880S"
+                        },
+                        "availability": {
+                            "end": "2027-05-21T21:00:30Z",
+                            "start": "2026-04-02T20:02:55Z",
+                            "remaining": {
+                                "text": "Available for over a year"
+                            }
+                        },
+                        "first_broadcast": "2 Apr 2026",
+                        "first_broadcast_date_time": "2026-04-02T00:00:00.000Z"
+                    },
+                    {
+                        "hd": true,
+                        "id": "m002ttrn",
+                        "hdr": false,
+                        "uhd": false,
+                        "kind": "signed",
+                        "type": "version",
+                        "events": [
+                            {
+                                "name": "started",
+                                "offset": 30,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "ended",
+                                "offset": 3536,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 3290,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "dax"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 3290,
+                                "system": "dax"
+                            }
+                        ],
+                        "download": true,
+                        "duration": {
+                            "text": "1h 1m",
+                            "value": "PT1H55.880S"
+                        },
+                        "availability": {
+                            "end": "2031-05-28T20:00:00Z",
+                            "start": "2026-04-07T02:08:35Z",
+                            "remaining": {
+                                "text": "Available for over a year"
+                            }
+                        },
+                        "first_broadcast": "2 Apr 2026",
+                        "first_broadcast_date_time": "2026-04-02T00:00:00.000Z"
+                    }
+                ],
+                "childrens": false,
+                "parent_id": "m002thdt",
+                "tleo_type": "brand",
+                "categories": [
+                    "audio-described",
+                    "lifestyle",
+                    "signed"
+                ],
+                "preview_id": "p0nbzkv1",
+                "has_credits": true,
+                "requires_ab": [
+                    "u16",
+                    "u18",
+                    "o18"
+                ],
+                "master_brand": {
+                    "id": "bbc_one",
+                    "titles": {
+                        "large": "BBC One",
+                        "small": "BBC One",
+                        "medium": "BBC One"
+                    },
+                    "attribution": "bbc_one"
+                },
+                "release_date": "2 Apr 2026",
+                "related_links": [],
+                "original_title": "Episode 1",
+                "programme_type": "narrative",
+                "slice_subtitle": "Episode 1",
+                "audio_described": true,
+                "parent_position": 1,
+                "preview_clip_id": "p0nbzktv",
+                "requires_sign_in": true,
+                "release_date_time": "2026-04-02T00:00:00.000Z",
+                "editorial_subtitle": "New episodes every Thursday",
+                "lexical_sort_letter": "R",
+                "requires_tv_licence": true,
+                "numeric_tleo_position": 49
+            },
+            {
+                "id": "m002qkrz",
+                "live": false,
+                "type": "episode",
+                "title": "Amandaland",
+                "images": {
+                    "type": "image",
+                    "portrait": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0ngwx07.jpg",
+                    "standard": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0nh9gl0.jpg",
+                    "promotional": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0ngwxk2.jpg",
+                    "promotional_with_logo": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0ngwx5n.jpg"
+                },
+                "labels": {
+                    "category": "Comedy"
+                },
+                "signed": false,
+                "status": "available",
+                "tleo_id": "m0024pyy",
+                "guidance": true,
+                "slice_id": "m0024pyy-structural-2-m002qkrq",
+                "subtitle": "Series 2: 1. Careers Week",
+                "synopses": {
+                    "small": "Amanda uses a school careers talk to prove she\u2019s not shallow.",
+                    "medium": "Amanda meets Mal\u2019s ex Abs for the first time and then discovers that Abs found her shallow. So she decides to use a school careers talk to prove her wrong.",
+                    "editorial": "She came, she saw, she gentrified. Amanda has more ambition, less money, and zero shame",
+                    "programme_small": "Amanda is still living in Soha, juggling teenagers, her online brand and her co-lab."
+                },
+                "versions": [
+                    {
+                        "hd": true,
+                        "id": "m002qkry",
+                        "hdr": false,
+                        "uhd": false,
+                        "kind": "original",
+                        "type": "version",
+                        "events": [
+                            {
+                                "name": "started",
+                                "offset": 30,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "ended",
+                                "offset": 1621,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 1567,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "dax"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 1567,
+                                "system": "dax"
+                            }
+                        ],
+                        "download": true,
+                        "duration": {
+                            "text": "29 mins",
+                            "value": "PT29M1.160S"
+                        },
+                        "guidance": {
+                            "id": "L1",
+                            "text": {
+                                "large": "Contains some strong language.",
+                                "small": "Has guidance",
+                                "medium": "Contains some strong language."
+                            }
+                        },
+                        "availability": {
+                            "end": "2027-05-06T05:00:00Z",
+                            "start": "2026-05-06T05:00:00Z",
+                            "remaining": {
+                                "text": "Available for 11 months"
+                            }
+                        },
+                        "credits_start": 1714,
+                        "first_broadcast": "9pm 6 May 2026",
+                        "first_broadcast_date_time": "2026-05-06T20:00:00.000Z"
+                    },
+                    {
+                        "hd": false,
+                        "id": "p0nhnq6c",
+                        "hdr": false,
+                        "uhd": false,
+                        "kind": "audio-described",
+                        "type": "version",
+                        "events": [
+                            {
+                                "name": "started",
+                                "offset": 30,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "ended",
+                                "offset": 1621,
+                                "system": "uas"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 1567,
+                                "system": "optimizely"
+                            },
+                            {
+                                "name": "iplxp-ep-started",
+                                "offset": 30,
+                                "system": "dax"
+                            },
+                            {
+                                "name": "iplxp-ep-watched",
+                                "offset": 1567,
+                                "system": "dax"
+                            }
+                        ],
+                        "download": false,
+                        "duration": {
+                            "text": "29 mins",
+                            "value": "PT29M1.040S"
+                        },
+                        "availability": {
+                            "end": "2027-05-06T05:00:00Z",
+                            "start": "2026-05-06T05:00:00Z",
+                            "remaining": {
+                                "text": "Available for 11 months"
+                            }
+                        },
+                        "first_broadcast": "6 May 2026",
+                        "first_broadcast_date_time": "2026-05-06T00:00:00.000Z"
+                    }
+                ],
+                "childrens": false,
+                "parent_id": "m002qkrq",
+                "tleo_type": "brand",
+                "categories": [
+                    "audio-described",
+                    "comedy"
+                ],
+                "preview_id": "p0njwm8v",
+                "has_credits": true,
+                "requires_ab": [
+                    "u16",
+                    "u18",
+                    "o18"
+                ],
+                "master_brand": {
+                    "id": "bbc_one",
+                    "titles": {
+                        "large": "BBC One",
+                        "small": "BBC One",
+                        "medium": "BBC One"
+                    },
+                    "attribution": "bbc_one"
+                },
+                "release_date": "6 May 2026",
+                "related_links": [],
+                "original_title": "Careers Week",
+                "programme_type": "narrative",
+                "slice_subtitle": "1. Careers Week",
+                "audio_described": true,
+                "parent_position": 1,
+                "preview_clip_id": "p0njwm8n",
+                "requires_sign_in": true,
+                "release_date_time": "2026-05-06T00:00:00.000Z",
+                "editorial_subtitle": "All episodes available now",
+                "lexical_sort_letter": "A",
+                "requires_tv_licence": true,
+                "numeric_tleo_position": 10
+            }
+        ]
+    }
+}

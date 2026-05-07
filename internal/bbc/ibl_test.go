@@ -1,10 +1,13 @@
 package bbc
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func TestIBLSearch(t *testing.T) {
@@ -219,5 +222,291 @@ func TestParseSubtitleNumbers_BareDateReturnsZero(t *testing.T) {
 	series, episode := parseSubtitleNumbers("22/03/2026")
 	if series != 0 || episode != 0 {
 		t.Errorf("parseSubtitleNumbers(\"22/03/2026\") = (%d, %d), want (0, 0)", series, episode)
+	}
+}
+
+func TestSearchCtx_RespectsCancellation(t *testing.T) {
+	// A server that hangs forever should be aborted by ctx cancellation.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := ibl.SearchCtx(ctx, "anything", 1)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected cancellation error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("SearchCtx did not honour ctx; elapsed=%v want <2s", elapsed)
+	}
+}
+
+func TestListEpisodesCtx_RespectsCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := ibl.ListEpisodesCtx(ctx, "b0071b63")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected cancellation error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("ListEpisodesCtx did not honour ctx; elapsed=%v want <2s", elapsed)
+	}
+}
+
+func TestGroupEpisodes_ParsesElements(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/groups_popular.json")
+	if err != nil {
+		t.Fatalf("load fixture: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.GroupEpisodes(context.Background(), "popular", 3)
+	if err != nil {
+		t.Fatalf("GroupEpisodes: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 element parsed, got 0")
+	}
+	for i, r := range results {
+		if r.PID == "" {
+			t.Errorf("element %d: empty PID", i)
+		}
+		if r.Title == "" {
+			t.Errorf("element %d: empty title", i)
+		}
+	}
+	hasDuration := false
+	for _, r := range results {
+		if r.Duration > 0 {
+			hasDuration = true
+			break
+		}
+	}
+	if !hasDuration {
+		t.Error("no element had Duration > 0; iblElementToResult did not parse versions[0].duration")
+	}
+}
+
+func TestGroupEpisodes_RequestShape(t *testing.T) {
+	var got *http.Request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r
+		w.Write([]byte(`{"group_episodes":{"page":1,"per_page":3,"count":0,"elements":[]}}`))
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	if _, err := ibl.GroupEpisodes(context.Background(), "m001bm54", 50); err != nil {
+		t.Fatalf("GroupEpisodes: %v", err)
+	}
+	if got == nil {
+		t.Fatal("server never received a request")
+	}
+	if want := "/groups/m001bm54/episodes"; got.URL.Path != want {
+		t.Errorf("path = %q, want %q", got.URL.Path, want)
+	}
+	if want := "50"; got.URL.Query().Get("per_page") != want {
+		t.Errorf("per_page = %q, want %q", got.URL.Query().Get("per_page"), want)
+	}
+	if q := got.URL.Query(); len(q) != 1 {
+		t.Errorf("unexpected query params: %v", q)
+	}
+}
+
+func TestGroupEpisodes_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	_, err := ibl.GroupEpisodes(context.Background(), "popular", 3)
+	if err == nil {
+		t.Fatal("expected error for 500, got nil")
+	}
+}
+
+func TestBrowseFresh_MergesAllThree(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[{"id":"pid_search_1","type":"episode","title":"S1"},{"id":"pid_search_2","type":"episode","title":"S2"}]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"pid_pop_1","type":"episode","title":"P1"},{"id":"pid_pop_2","type":"episode","title":"P2"}]}}`))
+		case "/groups/m001bm54/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"pid_trend_1","type":"episode","title":"T1"}]}}`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.BrowseFresh(context.Background())
+	if err != nil {
+		t.Fatalf("BrowseFresh: %v", err)
+	}
+	if got, want := len(results), 5; got != want {
+		t.Errorf("merged length = %d, want %d", got, want)
+	}
+}
+
+func TestBrowseFresh_DedupesByPID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[{"id":"pid_dup","type":"episode","title":"FromSearch"}]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"pid_dup","type":"episode","title":"FromPopular"}]}}`))
+		case "/groups/m001bm54/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"pid_dup","type":"episode","title":"FromTrending"}]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.BrowseFresh(context.Background())
+	if err != nil {
+		t.Fatalf("BrowseFresh: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 deduped result, got %d", len(results))
+	}
+	// Priority order: m001bm54 first, so the curated metadata wins.
+	if results[0].Title != "FromTrending" {
+		t.Errorf("dedupe winner Title = %q, want %q (m001bm54 should win)", results[0].Title, "FromTrending")
+	}
+}
+
+func TestBrowseFresh_OrderingPriority(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[{"id":"S","type":"episode","title":"S"}]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"P","type":"episode","title":"P"}]}}`))
+		case "/groups/m001bm54/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"T","type":"episode","title":"T"}]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.BrowseFresh(context.Background())
+	if err != nil {
+		t.Fatalf("BrowseFresh: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+	gotOrder := []string{results[0].PID, results[1].PID, results[2].PID}
+	wantOrder := []string{"T", "P", "S"}
+	if !reflect.DeepEqual(gotOrder, wantOrder) {
+		t.Errorf("ordering = %v, want %v", gotOrder, wantOrder)
+	}
+}
+
+func TestBrowseFresh_FailsSoftPerPool(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/groups/m001bm54/episodes":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[{"id":"S","type":"episode","title":"S"}]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"P","type":"episode","title":"P"}]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.BrowseFresh(context.Background())
+	if err != nil {
+		t.Fatalf("BrowseFresh returned error despite 2/3 success: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 results from surviving pools, got %d", len(results))
+	}
+}
+
+func TestBrowseFresh_AllFailReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	_, err := ibl.BrowseFresh(context.Background())
+	if err == nil {
+		t.Fatal("expected error when all 3 pools fail, got nil")
+	}
+}
+
+func TestBrowseFresh_RespectsContextTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// All three pools hang.
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, _ = ibl.BrowseFresh(ctx)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("BrowseFresh did not honour ctx; elapsed=%v want <2s", elapsed)
 	}
 }

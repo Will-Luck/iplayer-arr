@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Editorial-pool merging in RSS sync.** `t=tvsearch` and `t=search` requests with no query now fan out across BBC's `/groups/popular` (~150 items) and `/groups/m001bm54` ("New & Trending", ~45 items) editorial pools alongside the existing `q="BBC"` browse, deduped by PID and capped to 50 unique PIDs per response (×2 qualities = 100 items, matching the advertised Newznab cap). Sonarr's RSS sync now picks up high-profile and popular new drops without waiting for the per-show scheduled search. Per-show searches and tvdbid-resolved searches are unchanged. Probe phase is bounded by a 5s deadline derived from the request context to stay inside Sonarr's 30s budget. Pool failures are fail-soft per-pool (logged via `slog.Warn`, partial results still emit).
+
 ### Fixed
 
 - **Country-tag disambiguation in name matching ([#37](https://github.com/Will-Luck/iplayer-arr/issues/37)).** TVDB / Skyhook returns titles like `The Apprentice (UK)` to disambiguate same-named shows across territories, but BBC programme names are bare (`The Apprentice`). The `nameMatches` comparison filtered every BBC episode out, leaving Sonarr with no results. `bareName` now strips trailing `(UK)`, `(US)`, `(AU)`, `(CA)`, `(NZ)`, `(IE)` country tags alongside the existing year-suffix strip. Non-country two-letter parens like `(XY)` are preserved.

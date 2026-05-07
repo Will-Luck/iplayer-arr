@@ -1,6 +1,7 @@
 package newznab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -14,6 +15,25 @@ import (
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
+// Wildcard-browse constants. Exposed via tests, not config.
+const (
+	// browseCapPIDs is the maximum number of unique PIDs returned from
+	// BrowseFresh after dedupe. With per-PID quality cap of 2, the
+	// emitted RSS contains ≤ browseCapPIDs * 2 = 100 items, matching
+	// the advertised Newznab cap (caps.go max=100 default=50).
+	browseCapPIDs = 50
+
+	// browseQualitiesPerPID is the per-PID quality emission cap in
+	// wildcard mode. heightsToTags returns highest-first, so trimming
+	// keeps the best two qualities per PID.
+	browseQualitiesPerPID = 2
+
+	// browseProbeDeadline bounds the quality prober's wall time on
+	// wildcard browse so first-run misses fall through to safe
+	// fallback heights without exceeding Sonarr's 30s.
+	browseProbeDeadline = 5 * time.Second
+)
+
 func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if h.ibl == nil {
 		writeEmptyRSS(w)
@@ -21,18 +41,22 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query().Get("q")
-	filterName := q // captured before the BBC fallback so wildcard browses don't apply a filter
-	if q == "" {
-		q = "BBC" // default query for RSS feed and Sonarr test
-	}
+	filterName := q
+	isWildcard := q == ""
 
-	results, err := h.ibl.Search(q, 1)
+	var results []bbc.IBLResult
+	var err error
+	if isWildcard {
+		results, err = h.wildcardBrowse(r.Context())
+	} else {
+		results, err = h.ibl.Search(q, 1)
+	}
 	if err != nil {
 		writeEmptyRSS(w)
 		return
 	}
 
-	h.writeResultsRSS(w, r, results, 0, 0, "", filterName, 0, "")
+	h.writeResultsRSS(w, r, results, 0, 0, "", filterName, 0, "", isWildcard)
 }
 
 func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
@@ -100,11 +124,18 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	// tvdbid → Skyhook lookup) BEFORE the BBC fallback so the wildcard
 	// browse path doesn't accidentally inherit a filter.
 	filterName := q
-	if q == "" {
-		q = "BBC"
-	}
+	isWildcard := q == "" && tvdbid == ""
 
-	results, err := h.ibl.Search(q, 1)
+	var results []bbc.IBLResult
+	var err error
+	if isWildcard {
+		results, err = h.wildcardBrowse(r.Context())
+	} else {
+		if q == "" {
+			q = "BBC"
+		}
+		results, err = h.ibl.Search(q, 1)
+	}
 	if err != nil {
 		writeEmptyRSS(w)
 		return
@@ -121,7 +152,7 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	// so detect the daily shape and filter by air date instead.
 	filterDate := parseDailySearchDate(seasonStr, epStr)
 
-	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName, filterYear, tvdbid)
+	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName, filterYear, tvdbid, isWildcard)
 }
 
 // parseDailySearchDate returns YYYY-MM-DD when season looks like a 4-digit
@@ -150,7 +181,7 @@ func parseDailySearchDate(seasonStr, epStr string) string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, mm, dd)
 }
 
-func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid string) {
+func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid string, wildcardBrowse bool) {
 	var items []string
 	wantName := strings.TrimSpace(filterName)
 
@@ -218,7 +249,13 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 
 	var probedHeights map[string][]int
 	if h.prober != nil && len(probeItems) > 0 {
-		probedHeights = h.prober.PrefetchPIDs(r.Context(), probeItems)
+		probeCtx := r.Context()
+		if wildcardBrowse {
+			var cancel context.CancelFunc
+			probeCtx, cancel = context.WithTimeout(r.Context(), browseProbeDeadline)
+			defer cancel()
+		}
+		probedHeights = h.prober.PrefetchPIDs(probeCtx, probeItems)
 	}
 
 	for _, it := range filtered {
@@ -245,6 +282,10 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		} else {
 			// Safe fallback: only what BBC universally delivers.
 			qualities = []string{"720p", "540p"}
+		}
+
+		if wildcardBrowse && len(qualities) > browseQualitiesPerPID {
+			qualities = qualities[:browseQualitiesPerPID]
 		}
 
 		for _, qual := range qualities {
@@ -475,4 +516,25 @@ func matchesSearchFilter(prog *store.Programme, wantName, filterDate string, fil
 		return false
 	}
 	return true
+}
+
+// wildcardBrowse runs the BrowseFresh fan-out and applies the
+// browseCapPIDs cap before returning. Used by handleSearch and
+// handleTVSearch when their respective wildcard conditions hold.
+func (h *Handler) wildcardBrowse(ctx context.Context) ([]bbc.IBLResult, error) {
+	results, err := h.ibl.BrowseFresh(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return capBrowseResults(results, browseCapPIDs), nil
+}
+
+// capBrowseResults trims the merged BrowseFresh slice to at most n
+// entries, preserving the m001bm54 → popular → search-BBC ordering
+// established in BrowseFresh.
+func capBrowseResults(results []bbc.IBLResult, n int) []bbc.IBLResult {
+	if len(results) <= n {
+		return results
+	}
+	return results[:n]
 }

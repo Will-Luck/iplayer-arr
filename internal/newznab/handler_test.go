@@ -3,6 +3,7 @@ package newznab
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
@@ -115,6 +117,15 @@ func (m *mockProber) PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) ma
 		}
 	}
 	return out
+}
+
+// hangingProber blocks until ctx fires, then returns nil. Used by the
+// browse-mode probe-deadline test.
+type hangingProber struct{}
+
+func (h *hangingProber) PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) map[string][]int {
+	<-ctx.Done()
+	return nil
 }
 
 const eastendersOneEpisodePayload = `{
@@ -929,5 +940,279 @@ func TestMatchesSearchFilter_CasualtyPositionBasedAcceptsSeasonOne(t *testing.T)
 	// And a mismatching episode should still be rejected.
 	if matchesSearchFilter(prog, "Casualty", "", 1, 4) {
 		t.Errorf("matchesSearchFilter wrongly accepted ep=4 for Casualty E3 item; prog=%+v", prog)
+	}
+}
+
+func TestHandleSearch_RSSSyncUsesBrowseFresh(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/groups/m001bm54/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"trend1","type":"episode","title":"FromTrending","subtitle":"Series 1: 1. Pilot"}]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"pop1","type":"episode","title":"FromPopular","subtitle":"Series 1: 2. Episode"}]}}`))
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[{"id":"search1","type":"episode","title":"FromSearch","subtitle":"Series 1: 3. Episode"}]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	h := newHandlerWithBBC(t, "")
+	h.ibl.BaseURL = srv.URL
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=search", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	for _, want := range []string{"FromTrending", "FromPopular", "FromSearch"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("RSS body missing %q; body:\n%s", want, body)
+		}
+	}
+}
+
+func TestHandleTVSearch_RSSSyncUsesBrowseFresh(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/groups/m001bm54/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"trend1","type":"episode","title":"FromTrending","subtitle":"Series 1: 1. Pilot"}]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"pop1","type":"episode","title":"FromPopular","subtitle":"Series 1: 2. Episode"}]}}`))
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[{"id":"search1","type":"episode","title":"FromSearch","subtitle":"Series 1: 3. Episode"}]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	h := newHandlerWithBBC(t, "")
+	h.ibl.BaseURL = srv.URL
+
+	// t=tvsearch with no q and no tvdbid is the RSS-sync case.
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	for _, want := range []string{"FromTrending", "FromPopular", "FromSearch"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("RSS body missing %q; body:\n%s", want, body)
+		}
+	}
+}
+
+func TestWildcardRoute_PerPIDQualityCap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/groups/m001bm54/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"a","type":"episode","title":"A","subtitle":"Series 1: 1. Pilot"}]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"b","type":"episode","title":"B","subtitle":"Series 1: 2. Two"}]}}`))
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[{"id":"c","type":"episode","title":"C","subtitle":"Series 1: 3. Three"}]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	heights := []int{1080, 720, 540, 396}
+	prober := &mockProber{results: map[string][]int{
+		"a": heights,
+		"b": heights,
+		"c": heights,
+		"x": heights,
+	}}
+	h := newHandlerWithBBCProber(t, "", prober)
+	h.ibl.BaseURL = srv.URL
+
+	// Wildcard route: 3 PIDs × ≤ 2 qualities = ≤ 6 items.
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	wildcardItems := strings.Count(rr.Body.String(), "<item>")
+	if wildcardItems != 6 {
+		t.Errorf("wildcard items = %d, want 6 (3 PIDs × 2 qualities)", wildcardItems)
+	}
+
+	// Targeted route with q != "": 1 PID (whichever Search returns) × 4 qualities.
+	// Reset srv to return a Search payload the targeted path will use.
+	srvTargeted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"new_search":{"results":[{"id":"x","type":"episode","title":"X","subtitle":"Series 1: 1. One"}]}}`))
+	}))
+	defer srvTargeted.Close()
+	h.ibl.BaseURL = srvTargeted.URL
+
+	req = httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=X", nil)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	targetedItems := strings.Count(rr.Body.String(), "<item>")
+	if targetedItems != 4 {
+		t.Errorf("targeted items = %d, want 4 (1 PID × 4 qualities)", targetedItems)
+	}
+}
+
+func TestWildcardRoute_ProbeDeadlineEnforced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/groups/m001bm54/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[{"id":"a","type":"episode","title":"A","subtitle":"Series 1: 1. P"}]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[]}}`))
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	h := newHandlerWithBBCProber(t, "", &hangingProber{})
+	h.ibl.BaseURL = srv.URL
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+	rr := httptest.NewRecorder()
+
+	start := time.Now()
+	h.ServeHTTP(rr, req)
+	elapsed := time.Since(start)
+
+	if elapsed > 6*time.Second {
+		t.Errorf("wildcard route did not honour probe deadline; elapsed=%v want ≤ 6s", elapsed)
+	}
+	body := rr.Body.String()
+	// Even with the prober hanging, safe-fallback heights should produce
+	// items for the merged PIDs.
+	if !strings.Contains(body, "720p") && !strings.Contains(body, "540p") {
+		t.Errorf("expected safe-fallback heights in body when prober hangs; body:\n%s", body)
+	}
+}
+
+func TestWildcardRoute_TotalItemCeiling(t *testing.T) {
+	// Build 60 unique PIDs distributed across the three pools so the
+	// browseCapPIDs=50 cap clips 10. With per-PID quality cap of 2,
+	// the resulting RSS body should contain exactly 100 items.
+	mkElements := func(prefix string, n int) string {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(fmt.Sprintf(`{"id":"%s_%d","type":"episode","title":"%s%d","subtitle":"Series 1: %d. E"}`, prefix, i, prefix, i, i+1))
+		}
+		return b.String()
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/groups/m001bm54/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[` + mkElements("trend", 30) + `]}}`))
+		case "/groups/popular/episodes":
+			w.Write([]byte(`{"group_episodes":{"elements":[` + mkElements("pop", 20) + `]}}`))
+		case "/new-search":
+			w.Write([]byte(`{"new_search":{"results":[` + mkElements("search", 10) + `]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	heights := []int{1080, 720, 540, 396}
+	results := make(map[string][]int, 60)
+	for _, prefix := range []string{"trend", "pop", "search"} {
+		for i := 0; i < 30; i++ {
+			results[fmt.Sprintf("%s_%d", prefix, i)] = heights
+		}
+	}
+	prober := &mockProber{results: results}
+	h := newHandlerWithBBCProber(t, "", prober)
+	h.ibl.BaseURL = srv.URL
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	gotItems := strings.Count(body, "<item>")
+	if gotItems > 100 {
+		t.Errorf("RSS items = %d, want ≤ 100 (50 PIDs × 2 qualities)", gotItems)
+	}
+	if gotItems != 100 {
+		t.Errorf("RSS items = %d, want exactly 100", gotItems)
+	}
+	// First emitted item should come from the m001bm54 'trend' pool,
+	// locking down priority ordering after cap-clipping. Skip the
+	// channel-level <title>; find the first <item> then look at its
+	// title. (GUIDs are base64-encoded so substring matching there
+	// doesn't work.)
+	itemStart := strings.Index(body, "<item>")
+	if itemStart == -1 {
+		t.Fatalf("no <item> elements in RSS body")
+	}
+	titleOpen := strings.Index(body[itemStart:], "<title>")
+	titleClose := strings.Index(body[itemStart:], "</title>")
+	if titleOpen == -1 || titleClose == -1 {
+		t.Fatalf("first item has no <title> element")
+	}
+	firstTitle := body[itemStart+titleOpen : itemStart+titleClose]
+	if !strings.Contains(firstTitle, "trend") {
+		t.Errorf("first item title = %q, want a 'trend' program (m001bm54 priority)", firstTitle)
+	}
+}
+
+func TestHandleTVSearch_TargetedDoesNotBrowse(t *testing.T) {
+	var groupHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/groups/") {
+			groupHits++
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(`{"new_search":{"results":[{"id":"x","type":"episode","title":"X","subtitle":"Series 1: 1. E"}]}}`))
+	}))
+	defer srv.Close()
+
+	h := newHandlerWithBBC(t, "")
+	h.ibl.BaseURL = srv.URL
+
+	// Per-show search.
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=Apprentice", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if groupHits != 0 {
+		t.Errorf("per-show tvsearch hit /groups/ %d times, want 0", groupHits)
+	}
+
+	// tvdbid-resolved search.
+	groupHits = 0
+	req = httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=12345&season=1&ep=1", nil)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if groupHits != 0 {
+		t.Errorf("tvdbid tvsearch hit /groups/ %d times, want 0", groupHits)
+	}
+}
+
+func TestHandleSearch_TargetedDoesNotBrowse(t *testing.T) {
+	var groupHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/groups/") {
+			groupHits++
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(`{"new_search":{"results":[]}}`))
+	}))
+	defer srv.Close()
+
+	h := newHandlerWithBBC(t, "")
+	h.ibl.BaseURL = srv.URL
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=Foo", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if groupHits != 0 {
+		t.Errorf("targeted search hit /groups/ %d times, want 0", groupHits)
 	}
 }
