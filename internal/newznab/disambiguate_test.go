@@ -41,6 +41,43 @@ func TestBareName_NonYearSuffixPreserved(t *testing.T) {
 	}
 }
 
+func TestBareName_CountryTagUK(t *testing.T) {
+	// Skyhook returns TVDB-style country disambiguation like
+	// "The Apprentice (UK)" but BBC programme names are bare.
+	// See issue #37.
+	if got := bareName("The Apprentice (UK)"); got != "The Apprentice" {
+		t.Errorf("bareName(\"The Apprentice (UK)\") = %q, want %q", got, "The Apprentice")
+	}
+}
+
+func TestBareName_CountryTagUS(t *testing.T) {
+	if got := bareName("The Office (US)"); got != "The Office" {
+		t.Errorf("bareName(\"The Office (US)\") = %q, want %q", got, "The Office")
+	}
+}
+
+func TestBareName_CountryTagAU(t *testing.T) {
+	if got := bareName("Top Gear (AU)"); got != "Top Gear" {
+		t.Errorf("bareName(\"Top Gear (AU)\") = %q, want %q", got, "Top Gear")
+	}
+}
+
+func TestBareName_NonCountryParenPreserved(t *testing.T) {
+	// Two-letter parens that aren't real country codes stay put.
+	if got := bareName("Show (XY)"); got != "Show (XY)" {
+		t.Errorf("bareName(\"Show (XY)\") = %q, want it preserved", got)
+	}
+}
+
+func TestNameMatches_CountryTagInWantName(t *testing.T) {
+	// Issue #37: BBC returns prog.Name="The Apprentice" but Sonarr's
+	// Skyhook lookup feeds wantName="The Apprentice (UK)". The match
+	// must succeed after country-tag stripping.
+	if !nameMatches("The Apprentice", "The Apprentice (UK)") {
+		t.Error("nameMatches(\"The Apprentice\", \"The Apprentice (UK)\") = false, want true")
+	}
+}
+
 // --- extractYearRange ---
 
 func TestExtractYearRange_NoSuffix(t *testing.T) {

@@ -19,17 +19,31 @@ var reYearSuffix = regexp.MustCompile(`\s*\((\d{4})(?:[-\x{2013}]\d{4})?\)\s*$`)
 // year suffix. Returns nil if there is no suffix.
 var reYearRange = regexp.MustCompile(`\((\d{4})(?:[-\x{2013}](\d{4}))?\)\s*$`)
 
-// bareName strips a trailing year suffix from a programme name. Returns
-// the input unchanged if there is no year suffix. Non-year suffixes
-// like "(Special Edition)" are preserved.
+// reCountryTag matches a trailing country disambiguator like "(UK)" or
+// "(US)" appended by TVDB/Skyhook to disambiguate same-named shows
+// across territories. BBC programme names are bare (e.g. "The
+// Apprentice"), so stripping the tag lets cross-name comparison
+// succeed. See issue #37. Only ISO-style 2-letter codes that TVDB
+// actually uses for disambiguation are recognised; arbitrary parens
+// like "(XY)" are preserved.
+var reCountryTag = regexp.MustCompile(`\s*\((?:UK|US|AU|CA|NZ|IE)\)\s*$`)
+
+// bareName strips trailing year and country-tag suffixes from a
+// programme name for cross-name comparison. Returns the input
+// unchanged when neither pattern matches. Non-year/non-country
+// parenthesised suffixes like "(Special Edition)" are preserved.
 //
-//	bareName("Doctor Who")                 -> "Doctor Who"
-//	bareName("Doctor Who (2005)")          -> "Doctor Who"
-//	bareName("Doctor Who (1963-1996)")     -> "Doctor Who"
+//	bareName("Doctor Who")                  -> "Doctor Who"
+//	bareName("Doctor Who (2005)")           -> "Doctor Who"
+//	bareName("Doctor Who (1963-1996)")      -> "Doctor Who"
 //	bareName("Doctor Who (1963\u20131996)") -> "Doctor Who"  (en-dash)
+//	bareName("The Apprentice (UK)")         -> "The Apprentice"
+//	bareName("The Office (US)")             -> "The Office"
 //	bareName("Newsround (Special Edition)") -> "Newsround (Special Edition)"
 func bareName(s string) string {
-	return reYearSuffix.ReplaceAllString(s, "")
+	s = reYearSuffix.ReplaceAllString(s, "")
+	s = reCountryTag.ReplaceAllString(s, "")
+	return s
 }
 
 // extractYearRange parses the year suffix from a programme title.

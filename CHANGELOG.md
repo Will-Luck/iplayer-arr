@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Country-tag disambiguation in name matching ([#37](https://github.com/Will-Luck/iplayer-arr/issues/37)).** TVDB / Skyhook returns titles like `The Apprentice (UK)` to disambiguate same-named shows across territories, but BBC programme names are bare (`The Apprentice`). The `nameMatches` comparison filtered every BBC episode out, leaving Sonarr with no results. `bareName` now strips trailing `(UK)`, `(US)`, `(AU)`, `(CA)`, `(NZ)`, `(IE)` country tags alongside the existing year-suffix strip. Non-country two-letter parens like `(XY)` are preserved.
+
 ## [1.2.0] - 2026-05-04
 
 ### Added
