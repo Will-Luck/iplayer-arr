@@ -307,7 +307,9 @@ func (m *Manager) downloadSubtitles(subURL, outputDir, title string) {
 		return
 	}
 
-	srtPath := filepath.Join(outputDir, sanitiseFilename(title)+".srt")
+	// Tag as English so Plex/Jellyfin label the track correctly. BBC iPlayer
+	// only ships English captions on this CDN, so a fixed code is safe.
+	srtPath := filepath.Join(outputDir, sanitiseFilename(title)+".en.srt")
 	if err := os.WriteFile(srtPath, srt, 0o644); err != nil {
 		log.Printf("subtitle write failed (continuing): %v", err)
 		return

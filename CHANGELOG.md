@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Subtitle sidecar filenames now include the `.en` language tag (#38)**: BBC TTML captions are written as `<title>.en.srt` instead of `<title>.srt`. Plex and Jellyfin do pick up untagged `.srt` files but label them as "Unknown" language until you set it manually; the explicit code matches the [documented convention](https://support.plex.tv/articles/200471133-adding-local-subtitles-to-your-media/) and lets the player tag the track as English on first scan. BBC iPlayer only ships English captions on the captions CDN, so a fixed code is safe.
+
 ## [1.3.0] - 2026-05-07
 
 ### Added
