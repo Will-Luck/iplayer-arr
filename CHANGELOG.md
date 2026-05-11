@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-11
+
 ### Added
 
 - **Cancel button on active and queued downloads ([#27](https://github.com/Will-Luck/iplayer-arr/issues/27)).** The dashboard's Active downloads and Queue cards now show a red close icon next to each row, gated by a confirmation dialog. Click it and the worker context is cancelled (so any in-flight `ffmpeg` exits cleanly), the row is moved straight to history, and a toast confirms the cancel. Backed by a new `DELETE /api/downloads/:id` route on the internal API; the existing SABnzbd `mode=queue&name=delete` path Sonarr uses is unchanged.
