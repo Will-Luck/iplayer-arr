@@ -86,6 +86,11 @@ export interface DirectoryEntry {
 
 export const QUALITY_OPTIONS = ["1080p", "720p", "540p", "396p"] as const;
 
+// QUALITY_CEILING_OPTIONS is the dropdown used by the Maximum quality
+// config setting. "any" means no ceiling (Sonarr can request whatever
+// the BBC delivers); the named heights cap what the indexer advertises.
+export const QUALITY_CEILING_OPTIONS = ["any", "1080p", "720p", "540p", "396p"] as const;
+
 export interface HistoryPage {
   items: Download[];
   total: number;

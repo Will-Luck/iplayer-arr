@@ -76,6 +76,24 @@ func newHandlerWithBBCProber(t *testing.T, payload string, prober qualityProber)
 	return NewHandler(ibl, nil, nil, prober)
 }
 
+// newHandlerWithBBCProberAndStore wires both a prober and a real
+// BoltDB store. Used by tests that exercise config-driven behaviour
+// (e.g. the configured quality ceiling).
+func newHandlerWithBBCProberAndStore(t *testing.T, payload string, prober qualityProber) (*Handler, *store.Store) {
+	t.Helper()
+	srv := fakeBBCSearchServer(t, payload)
+	ibl := bbc.NewIBL(bbc.NewClient())
+	ibl.BaseURL = srv.URL
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "newznab-test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	return NewHandler(ibl, st, nil, prober), st
+}
+
 // newHandlerWithBBCAndStore is a variant of newHandlerWithBBC that
 // also wires a real BoltDB store so tests can pre-populate
 // SeriesMapping records for cache-warm-path assertions. Used by the
@@ -1214,5 +1232,72 @@ func TestHandleSearch_TargetedDoesNotBrowse(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if groupHits != 0 {
 		t.Errorf("targeted search hit /groups/ %d times, want 0", groupHits)
+	}
+}
+
+// TestSearch_ConfiguredQualityCeiling_FiltersHigher exercises issue #28:
+// the Default quality config value should act as a ceiling on the heights
+// emitted to Sonarr. When config quality is 720p and the prober reports
+// {1080,720,540}, the RSS body must drop 1080p so Sonarr cannot request it.
+func TestSearch_ConfiguredQualityCeiling_FiltersHigher(t *testing.T) {
+	prober := &mockProber{results: map[string][]int{"m002ttg5": {1080, 720, 540}}}
+	h, st := newHandlerWithBBCProberAndStore(t, eastendersOneEpisodePayload, prober)
+	if err := st.SetConfig("quality", "720p"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	qualities := itemQualities(t, w.Body.String())
+	if countQuality(qualities, "1080p") != 0 {
+		t.Fatalf("expected no 1080p items (capped at 720p), got %v", qualities)
+	}
+	if countQuality(qualities, "720p") != 1 || countQuality(qualities, "540p") != 1 {
+		t.Fatalf("expected exactly [720p 540p], got %v", qualities)
+	}
+}
+
+// TestSearch_ConfiguredQualityAny_NoCeiling verifies the explicit
+// opt-out value: when config quality is "any", every probed height is
+// emitted just like before the ceiling existed.
+func TestSearch_ConfiguredQualityAny_NoCeiling(t *testing.T) {
+	prober := &mockProber{results: map[string][]int{"m002ttg5": {1080, 720, 540}}}
+	h, st := newHandlerWithBBCProberAndStore(t, eastendersOneEpisodePayload, prober)
+	if err := st.SetConfig("quality", "any"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	qualities := itemQualities(t, w.Body.String())
+	if countQuality(qualities, "1080p") == 0 {
+		t.Fatalf("expected 1080p when ceiling is 'any', got %v", qualities)
+	}
+}
+
+// TestSearch_QualityCeilingAppliesToFallback verifies the no-probe
+// fallback path (qualities = [720p,540p]) is also clamped: a 540p
+// ceiling must drop the 720p fallback item.
+func TestSearch_QualityCeilingAppliesToFallback(t *testing.T) {
+	prober := &mockProber{results: map[string][]int{"m002ttg5": nil}}
+	h, st := newHandlerWithBBCProberAndStore(t, eastendersOneEpisodePayload, prober)
+	if err := st.SetConfig("quality", "540p"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	qualities := itemQualities(t, w.Body.String())
+	if countQuality(qualities, "720p") != 0 {
+		t.Fatalf("expected no 720p fallback item (capped at 540p), got %v", qualities)
+	}
+	if countQuality(qualities, "540p") != 1 {
+		t.Fatalf("expected single 540p item, got %v", qualities)
 	}
 }

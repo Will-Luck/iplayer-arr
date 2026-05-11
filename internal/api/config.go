@@ -9,7 +9,7 @@ import (
 var configKeys = []string{"api_key", "quality", "max_workers", "download_dir", "auto_cleanup"}
 
 var configDefaults = map[string]string{
-	"quality":      "720p",
+	"quality":      "any",
 	"max_workers":  "4",
 	"download_dir": "/downloads",
 	"auto_cleanup": "false",

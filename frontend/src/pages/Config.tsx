@@ -1,6 +1,6 @@
 import { createSignal, onMount, Show, For } from "solid-js";
 import type { ConfigResponse } from "../types";
-import { QUALITY_OPTIONS } from "../types";
+import { QUALITY_CEILING_OPTIONS } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
 import { getSonarrSetup } from "../lib/sonarr-setup";
@@ -10,7 +10,10 @@ import { Button } from "../ui/Button";
 import { Select } from "../ui/Select";
 import { Icon } from "../ui/icons";
 
-const QUALITY_SELECT_OPTIONS = QUALITY_OPTIONS.map((q) => ({ value: q, label: q }));
+const QUALITY_SELECT_OPTIONS = QUALITY_CEILING_OPTIONS.map((q) => ({
+  value: q,
+  label: q === "any" ? "Any (no cap)" : q,
+}));
 const WORKER_OPTIONS = ["1", "2", "3", "5", "10", "15", "20"];
 
 function maskKey(key: string): string {
@@ -137,15 +140,19 @@ export default function Config() {
                 class="text-sm text-text-secondary sm:pt-2"
                 for="cfg-quality"
               >
-                Default quality
+                Maximum quality
               </label>
-              <div>
+              <div class="flex flex-col gap-1">
                 <Select
                   value={config()!.quality}
                   onChange={(v) => updateConfig("quality", v)}
                   options={QUALITY_SELECT_OPTIONS}
-                  ariaLabel="Default download quality"
+                  ariaLabel="Maximum quality offered to Sonarr"
                 />
+                <p class="text-xs text-text-tertiary">
+                  Caps what the indexer advertises. Sonarr cannot request
+                  anything higher than this.
+                </p>
               </div>
 
               <label

@@ -276,12 +276,13 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			override, _ = h.store.GetOverride(prog.Name)
 		}
 
+		ceiling := h.qualityCeilingHeight()
 		var qualities []string
 		if probedHeights[res.PID] != nil {
-			qualities = heightsToTags(probedHeights[res.PID])
+			qualities = heightsToTags(capHeights(probedHeights[res.PID], ceiling))
 		} else {
 			// Safe fallback: only what BBC universally delivers.
-			qualities = []string{"720p", "540p"}
+			qualities = capQualityTags([]string{"720p", "540p"}, ceiling)
 		}
 
 		if wildcardBrowse && len(qualities) > browseQualitiesPerPID {
@@ -443,6 +444,59 @@ func lookupTVDBShow(tvdbid string) (title string, year int, err error) {
 	}
 	log.Printf("[tvsearch] resolved TVDB %s -> %q (year %d)", tvdbid, title, year)
 	return title, year, nil
+}
+
+// qualityCeilingHeight returns the maximum video height (pixels) the
+// indexer should advertise to Sonarr, honouring the "quality" config
+// value. Empty string, "any", or any value that doesn't parse as a
+// Newznab quality tag (e.g. "1080p" -> 1080) means no ceiling and
+// returns 0; callers treat 0 as "do not filter". Issue #28.
+func (h *Handler) qualityCeilingHeight() int {
+	if h.store == nil {
+		return 0
+	}
+	v, _ := h.store.GetConfig("quality")
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" || v == "any" {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(v, "p"))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// capHeights drops any heights strictly greater than ceiling. A ceiling
+// of 0 disables filtering and returns heights unchanged. Issue #28.
+func capHeights(heights []int, ceiling int) []int {
+	if ceiling <= 0 {
+		return heights
+	}
+	out := make([]int, 0, len(heights))
+	for _, h := range heights {
+		if h <= ceiling {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// capQualityTags clamps the fallback quality-tag slice (e.g. ["720p","540p"])
+// to those whose height is <= ceiling. A ceiling of 0 disables filtering.
+// Issue #28.
+func capQualityTags(tags []string, ceiling int) []string {
+	if ceiling <= 0 {
+		return tags
+	}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		n, err := strconv.Atoi(strings.TrimSuffix(t, "p"))
+		if err != nil || n <= ceiling {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // heightsToTags converts a descending list of heights to Newznab quality
