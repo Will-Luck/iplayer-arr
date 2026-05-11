@@ -181,3 +181,27 @@ func (h *Handler) handleManualDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
 }
+
+// handleCancelDownload serves DELETE /api/downloads/:id. It cancels the
+// worker context (when a manager is wired) so any running ffmpeg exits,
+// then moves the row to history so the UI stops showing it as active.
+// Idempotent: unknown IDs return 200 because the caller has no way to
+// distinguish "already finished" from "never existed". Same trust model
+// as handleDeleteHistory and handleDeleteDirectory: the dashboard surface
+// is unauthenticated. Issue #27.
+func (h *Handler) handleCancelDownload(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
+	id = strings.TrimSuffix(id, "/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		return
+	}
+	if h.mgr != nil {
+		_ = h.mgr.CancelDownload(id)
+	} else {
+		if err := h.store.MoveToHistory(id); err != nil {
+			h.store.DeleteDownload(id)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"cancelled": true})
+}

@@ -67,6 +67,7 @@ export const api = {
   listDownloads: () => get<Download[]>("/api/downloads"),
   manualDownload: (pid: string, quality: string, title: string, category: string) =>
     post<{ id: string }>("/api/download", { pid, quality, title, category }),
+  cancelDownload: (id: string) => del(`/api/downloads/${encodeURIComponent(id)}`),
 
   // History
   listHistory: (params?: Record<string, string>) => get<HistoryPage>("/api/history", params),

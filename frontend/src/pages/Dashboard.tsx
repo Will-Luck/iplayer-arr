@@ -3,6 +3,7 @@ import type { Download, StatusResponse, SystemInfo, HistoryStats } from "../type
 import { api } from "../api";
 import { connectSSE } from "../sse";
 import { confirmDialog } from "../confirm";
+import { addToast } from "../toast";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge, type BadgeVariant } from "../ui/Badge";
@@ -190,6 +191,25 @@ export default function Dashboard() {
       }
     } catch {
       // silently fail
+    }
+  }
+
+  async function cancelDownload(dl: Download) {
+    const ok = await confirmDialog({
+      title: "Cancel download?",
+      message: `Stop downloading "${dl.title || dl.pid}"? Any partial file will be cleaned up.`,
+      confirmLabel: "Cancel download",
+      cancelLabel: "Keep",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.cancelDownload(dl.id);
+      setActive((prev) => prev.filter((d) => d.id !== dl.id));
+      setQueue((prev) => prev.filter((d) => d.id !== dl.id));
+      addToast("success", `Cancelled ${dl.title || dl.pid}`);
+    } catch (e) {
+      addToast("error", e instanceof Error ? e.message : "Failed to cancel download");
     }
   }
 
@@ -412,7 +432,17 @@ export default function Dashboard() {
                       <span class="truncate text-sm font-medium">
                         {dl.title || dl.pid}
                       </span>
-                      <Badge variant={statusVariant(dl)}>{statusLabel(dl)}</Badge>
+                      <div class="flex shrink-0 items-center gap-2">
+                        <Badge variant={statusVariant(dl)}>{statusLabel(dl)}</Badge>
+                        <IconButton
+                          icon="cross"
+                          tone="danger"
+                          size="sm"
+                          aria-label={`Cancel ${dl.title || dl.pid}`}
+                          title="Cancel download"
+                          onClick={() => cancelDownload(dl)}
+                        />
+                      </div>
                     </div>
                     <Progress
                       value={Math.min(dl.progress, 100)}
@@ -457,7 +487,17 @@ export default function Dashboard() {
                       <span class="truncate text-sm font-medium">
                         {dl.title || dl.pid}
                       </span>
-                      <Badge variant="pending">pending</Badge>
+                      <div class="flex shrink-0 items-center gap-2">
+                        <Badge variant="pending">pending</Badge>
+                        <IconButton
+                          icon="cross"
+                          tone="danger"
+                          size="sm"
+                          aria-label={`Cancel ${dl.title || dl.pid}`}
+                          title="Cancel download"
+                          onClick={() => cancelDownload(dl)}
+                        />
+                      </div>
                     </div>
                     <div class="flex gap-3 text-xs text-text-secondary">
                       <span>{dl.quality}</span>

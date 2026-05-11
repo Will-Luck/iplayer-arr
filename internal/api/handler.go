@@ -115,6 +115,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleListDirectory(w, r)
 	case strings.HasPrefix(path, "/api/downloads/directory/") && r.Method == "DELETE":
 		h.handleDeleteDirectory(w, r)
+	case strings.HasPrefix(path, "/api/downloads/") && r.Method == "DELETE":
+		h.handleCancelDownload(w, r)
 	case path == "/api/pause" && r.Method == "POST":
 		h.mgr.Pause()
 		writeJSON(w, http.StatusOK, map[string]bool{"paused": true})
