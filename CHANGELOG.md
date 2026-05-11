@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cancel button on active and queued downloads ([#27](https://github.com/Will-Luck/iplayer-arr/issues/27)).** The dashboard's Active downloads and Queue cards now show a red close icon next to each row, gated by a confirmation dialog. Click it and the worker context is cancelled (so any in-flight `ffmpeg` exits cleanly), the row is moved straight to history, and a toast confirms the cancel. Backed by a new `DELETE /api/downloads/:id` route on the internal API; the existing SABnzbd `mode=queue&name=delete` path Sonarr uses is unchanged.
+
 ### Changed
 
 - **Subtitle sidecar filenames now include the `.en` language tag (#38)**: BBC TTML captions are written as `<title>.en.srt` instead of `<title>.srt`. Plex and Jellyfin do pick up untagged `.srt` files but label them as "Unknown" language until you set it manually; the explicit code matches the [documented convention](https://support.plex.tv/articles/200471133-adding-local-subtitles-to-your-media/) and lets the player tag the track as English on first scan. BBC iPlayer only ships English captions on the captions CDN, so a fixed code is safe.
+
+- **`Default quality` config setting now caps what the indexer advertises to Sonarr ([#28](https://github.com/Will-Luck/iplayer-arr/issues/28)).** The setting was previously persisted but never read by the download or indexer path, so a value of `720p` had no effect on Sonarr-driven downloads. It now acts as a ceiling on the RSS `tvsearch` output: probed heights above the configured cap are dropped before `heightsToTags` runs, and the no-probe `[720p, 540p]` fallback is clamped too. The UI label has been renamed to **Maximum quality** with an explanatory hint, and a new `any` option opts out of the cap entirely. The store default ships as `any` so existing installs see no change until the operator explicitly picks a ceiling.
+
+- **Downloads stage in an `incomplete/` subdirectory and atomic-move on completion ([#29](https://github.com/Will-Luck/iplayer-arr/issues/29)).** `ffmpeg` now writes to `<downloadDir>/incomplete/<safeTitle>/` and the worker performs an `os.Rename` to `<downloadDir>/<safeTitle>/` only once probe, reconcile and subtitles all succeed. The SABnzbd history `storage`/`path` field reports the final path. Watch-folder import flows will no longer see partial `.mp4` files mid-download. The dashboard's Downloads page hides the `incomplete/` directory from its folder listing.
 
 ## [1.3.0] - 2026-05-07
 

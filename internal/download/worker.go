@@ -220,7 +220,15 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		m.downloadSubtitles(streams.SubtitleURL, dl.OutputDir, dl.Title)
 	}
 
-	// 10. Complete -- move straight to history. The SABnzbd history endpoint
+	// 10. Atomic-rename the staging directory out of incomplete/ so the
+	// final folder appears only when everything succeeded. Failure leaves
+	// the file in incomplete/ and is logged; the SAB history slot will
+	// then point at the staging path rather than fail import. Issue #29.
+	if err := m.finaliseDownload(dl); err != nil {
+		log.Printf("download %s: finalise failed, leaving file in incomplete/: %v", dl.ID, err)
+	}
+
+	// 11. Complete -- move straight to history. The SABnzbd history endpoint
 	// returns these as Completed so Sonarr can see them and trigger import.
 	// Previously we slept 90s in the downloads bucket, but Sonarr's delete
 	// request would race and wipe the record before MoveToHistory ran.

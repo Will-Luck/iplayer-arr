@@ -41,6 +41,11 @@ func (h *Handler) handleListDirectory(w http.ResponseWriter, r *http.Request) {
 		if !entry.IsDir() {
 			continue
 		}
+		// Hide the incomplete/ staging dir used by the download worker
+		// so it doesn't render as a confusing "unknown" folder. Issue #29.
+		if entry.Name() == "incomplete" {
+			continue
+		}
 		fullPath := filepath.Join(downloadDir, entry.Name())
 
 		files, err := os.ReadDir(fullPath)

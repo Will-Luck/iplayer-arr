@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -107,7 +108,12 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 	if safeTitle == "" || safeTitle == "." || safeTitle == ".." {
 		safeTitle = pid
 	}
-	outputDir := filepath.Join(m.downloadDir, safeTitle)
+	// Stage downloads in <downloadDir>/incomplete/<safeTitle>/ so partial
+	// ffmpeg output is never visible to watch-folder import flows. The
+	// final atomic rename to <downloadDir>/<safeTitle>/ runs in
+	// finaliseDownload after the file has been probed and reconciled.
+	// Issue #29.
+	outputDir := filepath.Join(m.downloadDir, "incomplete", safeTitle)
 
 	dl := &store.Download{
 		ID:        id,
@@ -166,4 +172,46 @@ func generateNzoID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return "iparr_" + hex.EncodeToString(b)
+}
+
+// finaliseDownload performs the post-completion atomic rename: the
+// download's working directory under `<downloadDir>/incomplete/` is
+// moved up to `<downloadDir>/<safeTitle>` so the file is only visible
+// in its final location once ffmpeg, reconcile and subtitles are all
+// done. dl.OutputDir and dl.OutputFile are updated to the new paths so
+// the SABnzbd history slot reports a truthful storage path. Issue #29.
+//
+// Idempotent: if dl.OutputDir is already at its final location (e.g. a
+// pre-issue-29 row reprocessed) this is a no-op. If the target already
+// exists, returns an error and leaves the incomplete dir in place so
+// the caller can decide how to recover.
+func (m *Manager) finaliseDownload(dl *store.Download) error {
+	base := filepath.Base(dl.OutputDir)
+	finalDir := filepath.Join(m.downloadDir, base)
+	if finalDir == dl.OutputDir {
+		return nil
+	}
+
+	if err := os.MkdirAll(m.downloadDir, 0o755); err != nil {
+		return fmt.Errorf("ensure download dir: %w", err)
+	}
+
+	if _, err := os.Stat(finalDir); err == nil {
+		return fmt.Errorf("finalise: target %s already exists", finalDir)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat target: %w", err)
+	}
+
+	if err := os.Rename(dl.OutputDir, finalDir); err != nil {
+		return fmt.Errorf("rename %s -> %s: %w", dl.OutputDir, finalDir, err)
+	}
+
+	parent := filepath.Dir(dl.OutputDir) // the now-empty incomplete/ dir
+	_ = os.Remove(parent)                // best-effort, only succeeds if empty
+
+	if dl.OutputFile != "" {
+		dl.OutputFile = filepath.Join(finalDir, filepath.Base(dl.OutputFile))
+	}
+	dl.OutputDir = finalDir
+	return nil
 }
