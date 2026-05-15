@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
@@ -98,6 +99,29 @@ func TestMigrateQualityConfig(t *testing.T) {
 func TestMigrateQualityConfig_NilStore(t *testing.T) {
 	if migrateQualityConfig(nil) {
 		t.Error("migrateQualityConfig(nil) returned true, want false")
+	}
+}
+
+func TestWaitWithTimeout_Completes(t *testing.T) {
+	done := false
+	ok := waitWithTimeout(func() {
+		time.Sleep(50 * time.Millisecond)
+		done = true
+	}, 500*time.Millisecond)
+	if !ok {
+		t.Error("waitWithTimeout returned false for a fn that completes in time")
+	}
+	if !done {
+		t.Error("fn did not run before waitWithTimeout returned")
+	}
+}
+
+func TestWaitWithTimeout_Exceeds(t *testing.T) {
+	ok := waitWithTimeout(func() {
+		time.Sleep(500 * time.Millisecond)
+	}, 100*time.Millisecond)
+	if ok {
+		t.Error("waitWithTimeout returned true for a fn that exceeded its deadline")
 	}
 }
 
