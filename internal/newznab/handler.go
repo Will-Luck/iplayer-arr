@@ -44,6 +44,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	t := r.URL.Query().Get("t")
 
+	// t=caps is the only operation that stays unauthenticated. Newznab
+	// clients (Sonarr) probe caps to learn the server's supported
+	// parameters BEFORE attaching the apikey. Every other operation
+	// handles content and must be guarded so anyone on the LAN can't
+	// enumerate programmes or pull NZBs without the key.
+	if t != "caps" && !h.authenticate(r) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><error code="100" description="Invalid API Key"/>`))
+		return
+	}
+
 	switch t {
 	case "caps":
 		w.Header().Set("Content-Type", "application/xml")
@@ -58,4 +70,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><error code="202" description="No such function"/>`))
 	}
+}
+
+// authenticate compares the request's apikey query param or
+// Authorization: Bearer header to the value persisted in the store.
+// A nil store, or a stored key that hasn't been seeded yet, short-
+// circuits to true. Production main.go seeds the api_key on every
+// startup before the HTTP server begins accepting connections, so
+// the unseeded case is only ever hit in tests that build a real
+// store but don't bother to write the key. Defence: the operator
+// should never see an unseeded key in production logs.
+func (h *Handler) authenticate(r *http.Request) bool {
+	if h.store == nil {
+		return true
+	}
+	storedKey, _ := h.store.GetConfig("api_key")
+	if storedKey == "" {
+		return true
+	}
+	if key := r.URL.Query().Get("apikey"); key != "" && key == storedKey {
+		return true
+	}
+	auth := r.Header.Get("Authorization")
+	if len(auth) > 7 && auth[:7] == "Bearer " {
+		return auth[7:] == storedKey
+	}
+	return false
 }

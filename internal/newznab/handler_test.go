@@ -1301,3 +1301,65 @@ func TestSearch_QualityCeilingAppliesToFallback(t *testing.T) {
 		t.Fatalf("expected single 540p item, got %v", qualities)
 	}
 }
+
+// TestServeHTTP_AuthRequired verifies that any operation other than
+// t=caps refuses requests without a valid apikey when the store has
+// one seeded.
+func TestServeHTTP_AuthRequired(t *testing.T) {
+	h, st := newHandlerWithBBCAndStore(t, eastendersOneEpisodePayload)
+	if err := st.SetConfig("api_key", "test-key-123"); err != nil {
+		t.Fatalf("seed api_key: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		url        string
+		header     string
+		wantStatus int
+	}{
+		{"caps without key allowed", "/newznab/api?t=caps", "", http.StatusOK},
+		{"search without key denied", "/newznab/api?t=search&q=foo", "", http.StatusUnauthorized},
+		{"tvsearch without key denied", "/newznab/api?t=tvsearch&q=foo", "", http.StatusUnauthorized},
+		{"get without key denied", "/newznab/api?t=get&id=abc", "", http.StatusUnauthorized},
+		{"search wrong key denied", "/newznab/api?t=search&q=foo&apikey=wrong", "", http.StatusUnauthorized},
+		{"search right key allowed", "/newznab/api?t=search&q=foo&apikey=test-key-123", "", http.StatusOK},
+		{"search bearer wrong denied", "/newznab/api?t=search&q=foo", "Bearer nope", http.StatusUnauthorized},
+		{"search bearer right allowed", "/newznab/api?t=search&q=foo", "Bearer test-key-123", http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tc.url, nil)
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d. body: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestServeHTTP_AuthError100Body verifies the Newznab-style error
+// envelope on auth failure: error code 100 with description.
+func TestServeHTTP_AuthError100Body(t *testing.T) {
+	h, st := newHandlerWithBBCAndStore(t, eastendersOneEpisodePayload)
+	st.SetConfig("api_key", "test-key-abc")
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=anything", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `code="100"`) {
+		t.Errorf("body missing error code 100: %s", body)
+	}
+	if !strings.Contains(body, "Invalid API Key") {
+		t.Errorf("body missing Invalid API Key description: %s", body)
+	}
+}

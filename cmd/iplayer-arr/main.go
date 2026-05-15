@@ -174,7 +174,13 @@ func main() {
 
 	go func() {
 		log.Printf("iplayer-arr listening on :%s", port)
-		log.Printf("API key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
+		// Log only a short prefix as a configuration-presence breadcrumb
+		// rather than a key-recovery hint. The full key is delivered via
+		// the SPA's Settings page (which the operator can authenticate
+		// to over LAN). Logs are served unauthenticated at /api/logs, so
+		// leaking the suffix as well would reveal 25% of the secret to
+		// any LAN visitor. Item 8 / Codex C2 follow-on.
+		log.Printf("API key configured (prefix=%s...)", apiKey[:4])
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatalf("listen: %v", err)
 		}
