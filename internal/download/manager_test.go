@@ -192,6 +192,13 @@ func TestSanitiseFilename(t *testing.T) {
 		{"Title: With Colon", "Title - With Colon"},
 		{"Title/With/Slashes", "Title-With-Slashes"},
 		{"Bad<>Chars|Here", "BadCharsHere"},
+		// Leading-dot strip (item 23): no dot-prefixed dirs.
+		{".ssh", "ssh"},
+		{"..hidden", "hidden"},
+		{"...triple", "triple"},
+		{".", ""},
+		// Dots in the middle stay.
+		{"My.Show.S01E01", "My.Show.S01E01"},
 	}
 	for _, tt := range tests {
 		got := sanitiseFilename(tt.in)

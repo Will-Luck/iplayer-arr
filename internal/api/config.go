@@ -31,11 +31,19 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	// Cap the request body so a malformed or hostile client can't OOM
+	// the process by streaming megabytes of payload. 64 KiB is well
+	// above any legitimate config-update size (key + value, both
+	// short strings). DisallowUnknownFields rejects payloads that
+	// try to wedge extra keys past the JSON decoder. Audit item 22.
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
 	var req struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := dec.Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
