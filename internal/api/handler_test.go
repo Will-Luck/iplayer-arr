@@ -633,3 +633,55 @@ func TestClearAllHistory(t *testing.T) {
 		t.Errorf("history should be empty, got %d", len(all))
 	}
 }
+
+// TestCSRF_OriginCheck verifies that mutating methods (POST/PUT/DELETE)
+// refuse cross-origin browser requests but allow same-origin browsers
+// and origin-less clients (curl, Sonarr).
+func TestCSRF_OriginCheck(t *testing.T) {
+	h, _ := testAPI(t)
+
+	cases := []struct {
+		name       string
+		method     string
+		origin     string
+		host       string
+		wantStatus int
+	}{
+		{"GET no origin allowed", "GET", "", "iplayer-arr.lan:62001", http.StatusOK},
+		{"GET cross-origin allowed (safe method)", "GET", "https://attacker.com", "iplayer-arr.lan:62001", http.StatusOK},
+		{"DELETE no origin allowed", "DELETE", "", "iplayer-arr.lan:62001", http.StatusOK},
+		{"DELETE same origin allowed", "DELETE", "http://iplayer-arr.lan:62001", "iplayer-arr.lan:62001", http.StatusOK},
+		{"DELETE cross-origin refused", "DELETE", "https://attacker.com", "iplayer-arr.lan:62001", http.StatusForbidden},
+		{"PUT cross-origin refused", "PUT", "https://attacker.com", "iplayer-arr.lan:62001", http.StatusForbidden},
+		{"POST cross-origin refused", "POST", "https://attacker.com", "iplayer-arr.lan:62001", http.StatusForbidden},
+		{"DELETE different port refused", "DELETE", "http://iplayer-arr.lan:9999", "iplayer-arr.lan:62001", http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// /api/history is a real DELETE-able route; we use it to exercise CSRF
+			// without needing the route to do anything destructive in this test.
+			var target string
+			switch tc.method {
+			case "GET":
+				target = "/api/status"
+			case "POST":
+				target = "/api/pause"
+			case "PUT":
+				target = "/api/config"
+			case "DELETE":
+				target = "/api/history"
+			}
+			req := httptest.NewRequest(tc.method, target, strings.NewReader(`{}`))
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d. body: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
+	}
+}
