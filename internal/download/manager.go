@@ -180,6 +180,13 @@ func (m *Manager) CancelDownload(nzoID string) error {
 		log.Printf("CancelDownload %s: cleanup %s: %v", nzoID, outputDir, err)
 	}
 
+	// Clear the cancelled-set entry. Without this the map grows by one
+	// per cancel for the lifetime of the process; processDownload
+	// only clears it when the worker observes the cancel mid-flight,
+	// which doesn't fire on pending or already-released cancels.
+	// Audit finding item 10.
+	m.clearCancelled(nzoID)
+
 	return m.store.DeleteDownload(nzoID)
 }
 
