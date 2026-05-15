@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-05-15
+
+### Fixed
+
+- **Release titles with accented characters survive sanitisation (item 16).** `sanitiseForTitle` previously stripped every non-ASCII letter via an ASCII-only regex, so titles like "Beyoncé Live" or "Hôtel du Nord" emerged as "Beyonc.Live" or "Htel.du.Nord" and Sonarr failed to name-match. Adds a Unicode-fold pass for ~70 common Western-European characters (Latin ligatures, accented vowels, smart quotes, en/em dashes) before reUnsafe runs.
+- **HTTP server gains slowloris and idle-timeout protection (item 14).** `ReadHeaderTimeout: 10s` and `IdleTimeout: 120s` are now set explicitly. `WriteTimeout` stays 0 because `/api/events` is a long-lived SSE stream.
+- **Shutdown order corrected and bounded (item 13).** `srv.Shutdown` now runs before worker cancellation so no new requests are accepted while workers drain. `mgr.Stop` is wrapped in a 15s `waitWithTimeout` so a hung ffmpeg cannot block the container from exiting indefinitely.
+- **`CancelDownload` clears its cancelled-map entry (item 10).** Previously the map grew one entry per cancel for the lifetime of the process. The synchronous wait introduced in v1.4.1 already closed the rezombie window the flag protected against, so the entry only needs to live during the short worker-shutdown handshake.
+- **Newznab GUIDs survive a colon in the iBL version field (item 17).** `EncodeGUID` now packs `(pid, quality, version)` through `url.Values` inside base64 instead of a colon-separated layout. Legacy colon-format GUIDs still decode so Sonarr's NZB cache from earlier versions keeps resolving.
+- **`finaliseDownload` falls back to copy+remove on EXDEV (item 9).** `os.Rename` raises EXDEV when `incomplete/` and the final `downloadDir` sit on different filesystems (tmpfs staging, NFS sub-mounts, bind-mounts to separate volumes). Cross-device renames now copy the file across and remove the source, preserving the v1.4.0 incomplete/complete folder promise on those layouts.
+- **PUT `/api/config` caps request body at 64 KiB and rejects unknown fields (item 22).** Defends against an OOM via a megabyte payload and rejects extra keys that try to wedge past the JSON decoder.
+- **`sanitiseFilename` strips leading dots from titles (item 23).** A title like `.ssh` can no longer produce a dot-prefixed (hidden) directory under `<downloadDir>/incomplete/`. Mid-string dots stay (e.g. `My.Show.S01E01`).
+- **Country-tag whitelist widened (item 19).** The v1.4.0 fixed list (UK/US/AU/CA/NZ/IE) missed GB, IN, ZA, and other ISO codes TVDB uses for disambiguation. Now covers ~30 common country and region codes; arbitrary 2-letter parens like `(XY)` still survive.
+
+### Known issues remaining from the audit
+
+Items 11 (ffmpeg SIGTERM grace before SIGKILL), 12 (`bbc.Client` non-context retry path), 15 (SSE Hub close race), 18 (BrowseFresh deadline + errors.Join), 20 (SAB-shim cancel routing), 21 (Enqueue concurrency lock), 24 (caps `limit` query param honour), 25 (worker pool resize + panic recovery) are tracked for a follow-up cleanup release. Phase 4 frontend polish (items 26-34) and Phase 5 hygiene (items 35-40) are also outstanding.
+
 ## [1.5.0] - 2026-05-15
 
 ### Added
