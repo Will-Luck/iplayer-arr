@@ -14,6 +14,41 @@ var (
 	reSpecialMarker = regexp.MustCompile(`(?i)\b(special|christmas|easter|new year|halloween|bonfire)\b`)
 	reUnsafe        = regexp.MustCompile(`[^a-zA-Z0-9.\- ]`)
 	reMultiDot      = regexp.MustCompile(`\.{2,}`)
+
+	// titleTransliterator folds common Western-European Unicode characters
+	// to their ASCII equivalents BEFORE reUnsafe runs, so titles like
+	// "Beyoncé Live" or "Hotel Du Nord" stop losing every accented letter
+	// to the ASCII-only character class. Typographic punctuation (smart
+	// quotes, en/em dashes) is normalised to ASCII analogues so year-
+	// range titles like "Doctor Who (1963 to 1996)" come through with
+	// the hyphen preserved. Audit finding at item 16.
+	titleTransliterator = strings.NewReplacer(
+		// Typographic quotes drop, they only add noise.
+		"‘", "", "’", "", "“", "", "”", "",
+		"´", "", "`", "",
+		// Dashes go to ASCII hyphen so year ranges survive.
+		"–", "-", "—", "-", "−", "-",
+		// Latin ligatures.
+		"ß", "ss", "Æ", "AE", "æ", "ae",
+		"Œ", "OE", "œ", "oe",
+		"Ø", "O", "ø", "o", "Þ", "Th", "þ", "th",
+		// Latin-1 accented vowels (upper).
+		"À", "A", "Á", "A", "Â", "A", "Ã", "A", "Ä", "A", "Å", "A",
+		"È", "E", "É", "E", "Ê", "E", "Ë", "E",
+		"Ì", "I", "Í", "I", "Î", "I", "Ï", "I",
+		"Ò", "O", "Ó", "O", "Ô", "O", "Õ", "O", "Ö", "O",
+		"Ù", "U", "Ú", "U", "Û", "U", "Ü", "U",
+		"Ý", "Y",
+		// Latin-1 accented vowels (lower).
+		"à", "a", "á", "a", "â", "a", "ã", "a", "ä", "a", "å", "a",
+		"è", "e", "é", "e", "ê", "e", "ë", "e",
+		"ì", "i", "í", "i", "î", "i", "ï", "i",
+		"ò", "o", "ó", "o", "ô", "o", "õ", "o", "ö", "o",
+		"ù", "u", "ú", "u", "û", "u", "ü", "u",
+		"ý", "y", "ÿ", "y",
+		// Consonants.
+		"Ç", "C", "ç", "c", "Ñ", "N", "ñ", "n",
+	)
 	// reDateSubtitle matches a bare date subtitle in DD/MM/YYYY (or .  / -)
 	// form, used by BBC daily soaps where the iPlayer subtitle is just the
 	// air date and there is no real series/episode numbering.
@@ -157,8 +192,13 @@ func buildManualTitle(name, episode, quality string) string {
 
 // sanitiseForTitle converts a human-readable string into a dot-separated,
 // filesystem-safe title fragment suitable for use in a release name.
+// Unicode folding runs first (see titleTransliterator) so accented
+// characters become their ASCII analogue before reUnsafe strips
+// everything outside the ASCII-letter / digit / dot / hyphen / space
+// set.
 func sanitiseForTitle(s string) string {
 	s = strings.TrimSpace(s)
+	s = titleTransliterator.Replace(s)
 	s = strings.ReplaceAll(s, "&", "and")
 	s = strings.ReplaceAll(s, "'", "")
 	s = reUnsafe.ReplaceAllString(s, "")

@@ -224,6 +224,21 @@ func TestSanitiseTitle(t *testing.T) {
 		{"It's a test!", "Its.a.test"},
 		{"  spaces  ", "spaces"},
 		{"BBC: News & More", "BBC.News.and.More"},
+		// Unicode transliteration (item 16). Without folding, every
+		// non-ASCII letter was silently dropped by reUnsafe, turning
+		// "Beyoncé" into "Beyonc" and breaking Sonarr name-match.
+		{"Beyoncé Live", "Beyonce.Live"},
+		{"Hôtel du Nord", "Hotel.du.Nord"},
+		{"Pôld", "Pold"},
+		{"Crème Brûlée", "Creme.Brulee"},
+		{"Doctor Who 1963–1996", "Doctor.Who.1963-1996"},
+		{"Title — Subtitle", "Title.-.Subtitle"},
+		{"It’s Time", "Its.Time"},
+		{"Hello “World”", "Hello.World"},
+		{"Æthelred the Unready", "AEthelred.the.Unready"},
+		{"Façade", "Facade"},
+		{"Año Nuevo", "Ano.Nuevo"},
+		{"Über Alles", "Uber.Alles"},
 	}
 	for _, tt := range tests {
 		got := sanitiseForTitle(tt.in)
