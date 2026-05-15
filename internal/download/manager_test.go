@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -469,5 +470,186 @@ func TestEnqueueDedupSurvivesActualQualityUpdate_ActivePath(t *testing.T) {
 	}
 	if hit.ID != id1 {
 		t.Errorf("active row ID mismatch: got %q, want %q", hit.ID, id1)
+	}
+}
+
+// TestCancelDownload_RemovesIncompleteDir verifies that cancelling an
+// enqueued (pending) download with an existing incomplete/ output dir
+// also wipes the directory, so a cancel doesn't leak partial mp4s on
+// the NFS mount.
+func TestCancelDownload_RemovesIncompleteDir(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+
+	downloadDir := filepath.Join(dir, "downloads")
+	m := NewManager(st, downloadDir, 2, nil, nil, nil, nil)
+
+	id, err := m.Enqueue("p0cancel", "720p", "Cancel.Test.S01E01.720p", "sonarr")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	dl, _ := st.GetDownload(id)
+	if dl == nil {
+		t.Fatal("download not in store after Enqueue")
+	}
+	// Create the incomplete dir on disk so we can assert the cleanup.
+	if err := os.MkdirAll(dl.OutputDir, 0o755); err != nil {
+		t.Fatalf("mkdir incomplete: %v", err)
+	}
+	partial := filepath.Join(dl.OutputDir, "Cancel.Test.S01E01.720p.partial.mp4")
+	if err := os.WriteFile(partial, []byte("not really mp4"), 0o644); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+
+	if err := m.CancelDownload(id); err != nil {
+		t.Fatalf("CancelDownload: %v", err)
+	}
+
+	// DB row must be gone.
+	if got, _ := st.GetDownload(id); got != nil {
+		t.Errorf("download still in store after cancel: %+v", got)
+	}
+	// Output dir must be gone.
+	if _, err := os.Stat(dl.OutputDir); !os.IsNotExist(err) {
+		t.Errorf("incomplete dir %s still present after cancel: %v", dl.OutputDir, err)
+	}
+}
+
+// TestCancelDownload_PreservesFinalisedDir verifies that if a worker
+// already moved OutputDir out of incomplete/ to its final location,
+// CancelDownload deletes the DB row but does NOT delete the completed
+// file from disk.
+func TestCancelDownload_PreservesFinalisedDir(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+
+	downloadDir := filepath.Join(dir, "downloads")
+	m := NewManager(st, downloadDir, 2, nil, nil, nil, nil)
+
+	id, err := m.Enqueue("p0fina", "720p", "Final.Test.S01E01.720p", "sonarr")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	// Simulate finaliseDownload having moved OutputDir to the post-rename path.
+	finalDir := filepath.Join(downloadDir, "Final.Test.S01E01.720p")
+	if err := os.MkdirAll(finalDir, 0o755); err != nil {
+		t.Fatalf("mkdir final: %v", err)
+	}
+	finalFile := filepath.Join(finalDir, "Final.Test.S01E01.720p.mp4")
+	if err := os.WriteFile(finalFile, []byte("complete"), 0o644); err != nil {
+		t.Fatalf("write final: %v", err)
+	}
+	dl, _ := st.GetDownload(id)
+	dl.OutputDir = finalDir
+	dl.OutputFile = finalFile
+	if err := st.PutDownload(dl); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	if err := m.CancelDownload(id); err != nil {
+		t.Fatalf("CancelDownload: %v", err)
+	}
+
+	if got, _ := st.GetDownload(id); got != nil {
+		t.Errorf("download still in store after cancel: %+v", got)
+	}
+	if _, err := os.Stat(finalFile); err != nil {
+		t.Errorf("completed file removed by cancel (should be preserved): %v", err)
+	}
+}
+
+// TestCancelDownload_WaitsForActiveWorker verifies that when a worker
+// holds an active claim, CancelDownload polls until the worker
+// releases. We don't run a real worker — we register a manual claim
+// and release it after a short delay.
+func TestCancelDownload_WaitsForActiveWorker(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+
+	downloadDir := filepath.Join(dir, "downloads")
+	m := NewManager(st, downloadDir, 2, nil, nil, nil, nil)
+
+	id, err := m.Enqueue("p0wait", "720p", "Wait.Test.S01E01.720p", "sonarr")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Pretend a worker is processing this download.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelObserved := make(chan struct{})
+	wrappedCancel := func() {
+		close(cancelObserved)
+		cancel()
+	}
+	if !m.claim(id, wrappedCancel) {
+		t.Fatal("claim failed")
+	}
+
+	// Release the claim after 300ms — long enough that the poll has
+	// to iterate at least once, short enough that the test runs fast.
+	go func() {
+		<-cancelObserved
+		time.Sleep(300 * time.Millisecond)
+		m.release(id)
+	}()
+
+	start := time.Now()
+	if err := m.CancelDownload(id); err != nil {
+		t.Fatalf("CancelDownload: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if elapsed < 250*time.Millisecond {
+		t.Errorf("CancelDownload returned in %v, expected >=250ms (it should have waited for release)", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("CancelDownload took %v, expected <2s (polling backed up)", elapsed)
+	}
+	if got, _ := st.GetDownload(id); got != nil {
+		t.Errorf("download still in store after cancel: %+v", got)
+	}
+	_ = ctx
+}
+
+// TestCleanupIncompleteDir_PathGuards verifies that the cleanup helper
+// refuses paths outside <downloadDir>/incomplete/.
+func TestCleanupIncompleteDir_PathGuards(t *testing.T) {
+	dir := t.TempDir()
+	downloadDir := filepath.Join(dir, "downloads")
+	m := NewManager(nil, downloadDir, 0, nil, nil, nil, nil)
+
+	if err := m.cleanupIncompleteDir(""); err != nil {
+		t.Errorf("empty path should return nil, got %v", err)
+	}
+	// Path inside incomplete/ — happy path, dir doesn't exist but
+	// RemoveAll on missing path is fine.
+	good := filepath.Join(downloadDir, "incomplete", "Some.Title")
+	if err := m.cleanupIncompleteDir(good); err != nil {
+		t.Errorf("incomplete subdir: unexpected error %v", err)
+	}
+	// Path outside incomplete/ — finalised case, returns nil (not an error).
+	final := filepath.Join(downloadDir, "Some.Title")
+	if err := m.cleanupIncompleteDir(final); err != nil {
+		t.Errorf("finalised dir should return nil, got %v", err)
+	}
+	// Refuses the incomplete root itself.
+	root := filepath.Join(downloadDir, "incomplete")
+	if err := m.cleanupIncompleteDir(root); err == nil {
+		t.Error("cleaning the incomplete root itself should error, got nil")
+	}
+	// Refuses traversal: outside the downloadDir entirely.
+	escape := filepath.Join(downloadDir, "incomplete", "..", "..", "etc")
+	if err := m.cleanupIncompleteDir(escape); err != nil {
+		t.Errorf("escape path should return nil (not an error), got %v", err)
+	}
+	// The escape MUST NOT actually delete /etc. The path test was just
+	// that the function doesn't error — but the safety check is that
+	// the path resolves outside incomplete/ so RemoveAll never runs.
+	if _, err := os.Stat("/etc"); err != nil {
+		t.Fatalf("/etc disappeared during test — path-guard regression: %v", err)
 	}
 }

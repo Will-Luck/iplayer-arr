@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,13 @@ import (
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
+
+// cancelWaitTimeout is the maximum time CancelDownload waits for an active
+// worker to release its claim after the context is cancelled. Reached only
+// if ffmpeg ignores SIGKILL or the worker hangs in an unrelated step; in
+// that case CancelDownload proceeds with cleanup anyway so the user isn't
+// blocked waiting on a stuck worker.
+const cancelWaitTimeout = 15 * time.Second
 
 // EventBroadcaster sends real-time events to connected clients (e.g. SSE hub).
 type EventBroadcaster interface {
@@ -135,14 +143,71 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 
 func (m *Manager) CancelDownload(nzoID string) error {
 	m.MarkCancelled(nzoID)
-	// If a worker is processing this download, cancel its context to kill ffmpeg
-	m.claimMu.Lock()
-	if cancel, ok := m.claimed[nzoID]; ok {
-		cancel()
+
+	// Snapshot OutputDir before signalling cancel so the worker can't
+	// rewrite it (finaliseDownload mutates the field) in between.
+	var outputDir string
+	if dl, _ := m.store.GetDownload(nzoID); dl != nil {
+		outputDir = dl.OutputDir
 	}
+
+	// If a worker is processing this download, cancel its context to kill
+	// ffmpeg, then wait for the worker to release the claim. Polling on
+	// the claimed map avoids restructuring the claim/release contract; the
+	// worker calls m.release after processDownload returns.
+	m.claimMu.Lock()
+	cancel, active := m.claimed[nzoID]
 	m.claimMu.Unlock()
-	m.store.DeleteDownload(nzoID)
-	return nil
+	if active {
+		cancel()
+		deadline := time.Now().Add(cancelWaitTimeout)
+		for time.Now().Before(deadline) {
+			m.claimMu.Lock()
+			_, stillActive := m.claimed[nzoID]
+			m.claimMu.Unlock()
+			if !stillActive {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	// Remove the orphaned partial mp4 + parent dir so a cancel doesn't
+	// leak disk on the NFS mount. Refuses to clean anything outside
+	// <downloadDir>/incomplete/. A completed download whose OutputDir
+	// has already been moved out of incomplete/ is preserved.
+	if err := m.cleanupIncompleteDir(outputDir); err != nil {
+		log.Printf("CancelDownload %s: cleanup %s: %v", nzoID, outputDir, err)
+	}
+
+	return m.store.DeleteDownload(nzoID)
+}
+
+// cleanupIncompleteDir removes outputDir on disk only when it sits under
+// <downloadDir>/incomplete/. Returns nil for empty input or when the
+// path has already been finalised (outside incomplete/). Refuses any
+// path that would escape the incomplete/ root via "..".
+func (m *Manager) cleanupIncompleteDir(outputDir string) error {
+	if outputDir == "" {
+		return nil
+	}
+	incompleteRoot := filepath.Join(m.downloadDir, "incomplete")
+	rel, err := filepath.Rel(incompleteRoot, outputDir)
+	if err != nil {
+		return fmt.Errorf("rel: %w", err)
+	}
+	// rel == "." would mean outputDir IS the incomplete root; refuse.
+	if rel == "." || rel == "" {
+		return fmt.Errorf("refusing to clean incomplete root itself: %s", outputDir)
+	}
+	// rel starts with ".." (or contains a ".." segment) means the path
+	// escapes the incomplete/ root. Completed downloads whose OutputDir
+	// has been finalised to <downloadDir>/<title>/ also produce a "../"
+	// rel — that's the correct refusal path.
+	if strings.HasPrefix(rel, "..") || strings.Contains(rel, string(filepath.Separator)+"..") {
+		return nil // not an error: post-finalise downloads land here
+	}
+	return os.RemoveAll(outputDir)
 }
 
 func (m *Manager) MarkCancelled(id string) {

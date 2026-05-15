@@ -58,6 +58,11 @@ func main() {
 		st.SetConfig("api_key", apiKey)
 	}
 
+	// Normalise legacy "quality" config values to "any" so the v1.4.0
+	// ceiling logic doesn't clamp upgraders whose persisted value is no
+	// longer a valid option. See GH#39.
+	migrateQualityConfig(st)
+
 	// Persist the resolved DOWNLOAD_DIR to the config store on every start.
 	// The writer side (download.Manager) uses this value injected directly;
 	// the reader side (api/directory.go and sabnzbd/handler.go) reads it
@@ -271,6 +276,42 @@ func envIntDefault(key string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+// validQualityValues mirrors QUALITY_CEILING_OPTIONS in frontend/src/types.ts.
+// migrateQualityConfig normalises any persisted "quality" value that isn't
+// one of these to "any". Keep in sync with the frontend constant.
+var validQualityValues = map[string]bool{
+	"any":   true,
+	"1080p": true,
+	"720p":  true,
+	"540p":  true,
+	"396p":  true,
+}
+
+// migrateQualityConfig normalises legacy or unrecognised "quality" config
+// values to "any" so the v1.4.0 ceiling logic in
+// internal/newznab/search.go::qualityCeilingHeight does not clamp the RSS
+// fallback to a single quality variant per PID for upgraders. Empty values
+// are left alone — configDefaults["quality"] = "any" applies at read time.
+// Returns true when the value was rewritten. Resolves GH#39.
+func migrateQualityConfig(st *store.Store) bool {
+	if st == nil {
+		return false
+	}
+	v, _ := st.GetConfig("quality")
+	if v == "" {
+		return false
+	}
+	if validQualityValues[strings.ToLower(strings.TrimSpace(v))] {
+		return false
+	}
+	log.Printf("migrating legacy quality config %q -> \"any\" (GH#39)", v)
+	if err := st.SetConfig("quality", "any"); err != nil {
+		log.Printf("migrate quality config: %v", err)
+		return false
+	}
+	return true
 }
 
 func configuredMaxWorkers(st *store.Store) int {

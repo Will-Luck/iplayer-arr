@@ -28,7 +28,24 @@ export default function Config() {
   const sonarrSetup = () => getSonarrSetup(window.location);
 
   onMount(async () => {
-    setConfig(await api.getConfig());
+    const cfg = await api.getConfig();
+    // Defensive: if the stored quality value isn't one of our current
+    // options, normalise it to "any" so the Select trigger doesn't
+    // render blank. The backend startup migration handles this too
+    // (cmd/iplayer-arr/main.go::migrateQualityConfig); this is a
+    // belt-and-braces fallback for upgrade ordering. GH#39.
+    const validQualities = QUALITY_CEILING_OPTIONS as readonly string[];
+    if (cfg.quality && !validQualities.includes(cfg.quality)) {
+      try {
+        await api.putConfig("quality", "any");
+        setConfig(await api.getConfig());
+        return;
+      } catch {
+        // Fall through and let the UI render with the legacy value so
+        // the user can still see and change it.
+      }
+    }
+    setConfig(cfg);
   });
 
   async function copyField(value: string, key: string) {

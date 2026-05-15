@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-05-15
+
+### Fixed
+
+- **Sonarr indexer regression after v1.4.0 upgrade ([#39](https://github.com/Will-Luck/iplayer-arr/issues/39)).** v1.4.0 reused the existing `quality` config key but flipped its meaning from "download quality picker" to "max quality advertised to Sonarr". Upgraders whose persisted value was no longer in the option set (legacy labels like `Default`, or any non-current value) had their RSS fallback set silently clamped to one quality variant per PID, starving Sonarr's discovery pass. A new startup migration (`migrateQualityConfig` in `cmd/iplayer-arr/main.go`) normalises any persisted `quality` value that isn't in `QUALITY_CEILING_OPTIONS` (`any`, `1080p`, `720p`, `540p`, `396p`) to `any`. Empty values are left alone so the defaults table applies at read time. Idempotent; runs once per process start. The Config page also self-corrects on mount as a belt-and-braces fallback for stale state.
+- **Cancel button left orphan partial files and raced the worker.** `CancelDownload` previously called `cancel()` on the worker context then `DeleteDownload` immediately, returning before ffmpeg had exited. The DB row vanished while the worker was still mid-write to `incomplete/<title>/*.mp4`, accumulating partial mp4s on the NFS mount on every cancel. Cancel now polls until the worker releases its claim (up to 15s) and then removes the output directory, but only when it sits under `<downloadDir>/incomplete/`. A completed download whose dir was already moved by `finaliseDownload` is preserved.
+
 ## [1.4.0] - 2026-05-11
 
 ### Added
