@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
@@ -275,15 +278,119 @@ func (m *Manager) finaliseDownload(dl *store.Download) error {
 	}
 
 	if err := os.Rename(dl.OutputDir, finalDir); err != nil {
-		return fmt.Errorf("rename %s -> %s: %w", dl.OutputDir, finalDir, err)
+		// EXDEV ("invalid cross-device link") fires when incomplete/
+		// and the downloadDir are on different filesystems — this
+		// happens when incomplete/ is a tmpfs-backed staging area,
+		// an NFS sub-mount with a separate export, or a bind-mount
+		// pointed at a different volume. Fall back to copy + remove.
+		// Audit item 9.
+		if isCrossDeviceLink(err) {
+			if copyErr := copyDir(dl.OutputDir, finalDir); copyErr != nil {
+				_ = os.RemoveAll(finalDir) // partial copy
+				return fmt.Errorf("rename EXDEV fallback: %w", copyErr)
+			}
+			if rmErr := os.RemoveAll(dl.OutputDir); rmErr != nil {
+				log.Printf("EXDEV fallback: copy succeeded but cleanup of %s failed: %v", dl.OutputDir, rmErr)
+			}
+		} else {
+			return fmt.Errorf("rename %s -> %s: %w", dl.OutputDir, finalDir, err)
+		}
 	}
 
 	parent := filepath.Dir(dl.OutputDir) // the now-empty incomplete/ dir
-	_ = os.Remove(parent)                // best-effort, only succeeds if empty
+	if err := os.Remove(parent); err != nil && !os.IsNotExist(err) && !isNotEmptyError(err) {
+		// non-empty parent is expected (other in-flight downloads);
+		// any other error is worth a warn so a stale .DS_Store /
+		// lockfile doesn't silently rot the incomplete/ root.
+		log.Printf("finalise: cleanup parent %s: %v", parent, err)
+	}
 
 	if dl.OutputFile != "" {
 		dl.OutputFile = filepath.Join(finalDir, filepath.Base(dl.OutputFile))
 	}
 	dl.OutputDir = finalDir
 	return nil
+}
+
+// isCrossDeviceLink returns true when err wraps a syscall.EXDEV
+// (invalid cross-device link), which os.Rename raises when source
+// and destination live on different filesystems. Lets the caller
+// fall back to a copy + remove for the EXDEV case while still
+// surfacing other errors.
+func isCrossDeviceLink(err error) bool {
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return errors.Is(linkErr.Err, syscall.EXDEV)
+	}
+	return errors.Is(err, syscall.EXDEV)
+}
+
+// isNotEmptyError returns true when err is the standard "directory
+// not empty" message for the platform. Used by the post-rename
+// parent cleanup to distinguish "expected, other downloads in the
+// same incomplete/ root" from real errors worth logging.
+func isNotEmptyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, syscall.ENOTEMPTY) ||
+		strings.Contains(err.Error(), "not empty") ||
+		strings.Contains(err.Error(), "directory not empty")
+}
+
+// copyDir recursively copies a directory tree, preserving file
+// modes. Used as the EXDEV fallback when os.Rename refuses a
+// cross-filesystem move. Not safe against concurrent writers — the
+// caller must have stopped writing to src before invoking.
+func copyDir(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if !srcInfo.IsDir() {
+		return fmt.Errorf("copyDir: %s is not a directory", src)
+	}
+	if err := os.MkdirAll(dst, srcInfo.Mode().Perm()); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyFile(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyFile copies one file, preserving mode.
+func copyFile(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
 }
