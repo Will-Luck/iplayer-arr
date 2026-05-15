@@ -78,6 +78,19 @@ func NewHandler(st *store.Store, hub *Hub, mgr *download.Manager, ibl *bbc.IBL, 
 
 // ServeHTTP routes requests to the appropriate handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Cross-origin browser CSRF defence on state-changing methods.
+	// A non-browser client (curl, Sonarr) sends no Origin header and
+	// passes through. A browser on the same origin sends a matching
+	// Origin and passes through. A malicious page on a different
+	// origin sends a mismatched Origin and is refused. This is
+	// defence-in-depth, not a substitute for the apikey-based auth
+	// that proper /api/* protection (v1.6.0 setup wizard rework)
+	// will introduce.
+	if isMutatingMethod(r.Method) && !sameOriginRequest(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request refused"})
+		return
+	}
+
 	path := strings.TrimSuffix(r.URL.Path, "/")
 
 	switch {
@@ -181,4 +194,38 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// isMutatingMethod returns true for HTTP methods that change server
+// state. GET / HEAD / OPTIONS are safe and bypass the CSRF check.
+func isMutatingMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+// sameOriginRequest returns true when the request's Origin header is
+// either absent (non-browser client) or matches the request's Host.
+// A browser-issued cross-origin request always sets Origin to the
+// scheme+host of the initiating page, so a mismatch is a strong CSRF
+// signal. We don't fall back to Referer because some browsers strip
+// it under privacy modes; relying on it would create false positives
+// for legitimate same-origin requests.
+func sameOriginRequest(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	// Parse the origin's host component. "http://foo:62001" -> "foo:62001".
+	idx := strings.Index(origin, "://")
+	if idx < 0 {
+		return false
+	}
+	originHost := origin[idx+3:]
+	if i := strings.IndexByte(originHost, '/'); i >= 0 {
+		originHost = originHost[:i]
+	}
+	return originHost == r.Host
 }

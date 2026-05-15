@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-05-15
+
+### Added
+
+- **Newznab apikey enforcement.** Every Newznab operation except `t=caps` (which Sonarr probes before attaching the key) now requires a valid `apikey` query param or `Authorization: Bearer` header. Wrong or absent key returns a 401 with a Newznab-standard `<error code="100" description="Invalid API Key"/>` envelope. Closes the still-open Codex C3 finding from 2026-04-04.
+- **CSRF origin check on mutating `/api/*` routes.** State-changing methods (`POST`, `PUT`, `PATCH`, `DELETE`) now compare the request `Origin` header to the listening host and refuse cross-origin browser requests. Same-origin browsers, origin-less clients (`curl`, Sonarr, SABnzbd), and safe methods (`GET`, `HEAD`, `OPTIONS`) pass through unchanged. This is defence-in-depth against browser CSRF; full apikey-based protection on `/api/*` is tracked for v1.6.0.
+
+### Changed
+
+- **API key startup log no longer leaks the secret suffix.** Previously every startup logged `apiKey[:4] + "..." + apiKey[-4:]` (8 of 32 hex chars, 25% of the secret). Since `/api/logs` is served without authentication, that gave any LAN visitor a quarter of the key on read. The log now emits only `prefix=<first 4 chars>` as a configuration-presence breadcrumb. Closes the Codex C2 follow-on log-leak.
+
+### Known issues
+
+- **`/api/*` is still unauthenticated for read endpoints.** Wiring the existing `authenticate()` helper into every route requires a frontend setup wizard rework so the SPA can capture, persist, and send the apikey on every request. Tracked as a v1.6.0 backlog item. The CSRF Origin check above is the interim mitigation for browser-based attackers; LAN-direct API attackers are still gated by the host-level UFW rules.
+- **`/api/config` GET still includes `api_key`.** The frontend `Settings` page renders the key for the operator to copy into Sonarr's indexer config. Removing it depends on the SPA being able to authenticate against a separate apikey endpoint, which is the same v1.6.0 setup-wizard work.
+
 ## [1.4.1] - 2026-05-15
 
 ### Fixed
