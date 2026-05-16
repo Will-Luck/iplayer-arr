@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-05-16
+
+Phase 5 hygiene from the audit-driven cleanup chain. The v1.4.0 audit
+flagged six items here; one (item 35, retention-bucket "doc drift")
+turned out to be a false positive (the comment is correct historical
+context for why the 90 s sleep was removed) and was rejected after a
+validation read. The remaining five are small but real.
+
+### Fixed
+
+- **BBC client rotates its User-Agent per request (item 36).** `bbc.Client` previously picked a UA once at `NewClient()` and reused it for every request the process ever made. With nine UAs in the pool, the rotation could only happen via process restart. The `userAgent` field is removed; `doWithRetryCtx`, `HeadCtx`, and the FHD probe now call `RandomUserAgent()` at request-build time. Test coverage adds `TestClientRotatesUserAgent` (50 requests, asserts at least 2 distinct UAs seen).
+- **Log SSE broadcasts are now token-bucketed (item 37).** `RingBuffer.Add` used to broadcast every entry synchronously, so a noisy startup (worker init, BBC playlist resolves, Watchtower polling) could fan out hundreds of `log:line` events to every subscribed dashboard in a single tick. A 20-events-per-second token bucket caps the broadcast rate; excess entries still land in the ring (consumers can replay via GET /api/logs) but they do not flood the SSE stream. Bucket refills at the start of each one-second window. Two new tests cover the burst cap and the refill semantics.
+- **Rebuild workflow verifies the VPN scaffold survived a base bump (item 38).** `.github/workflows/rebuild.yml` previously rebuilt and pushed whenever `ghcr.io/hotio/base:alpinevpn` advanced its digest, with no smoke check on the resulting image. A new step pulls the freshly-pushed tag and asserts that `openvpn` and `wg` are both present in `PATH`; if either is missing, the workflow fails before the stored digest advances, so the next nightly run will rebuild and recheck instead of pinning a no-VPN image as latest.
+- **`incomplete/` staging dir name centralised in `internal/download` (item 39).** Both the producer (`Manager.Enqueue` writes to `<downloadDir>/incomplete/<title>`) and the consumer (`/api/directory` hides any top-level entry called `incomplete`) referenced the literal `"incomplete"` independently. Either side could rename without breaking compilation, but the UI would then leak partial files into the dashboard. The new `download.IncompleteDirName` constant binds both sides, and `directory.go` imports the download package to consume it. Tests intentionally keep the literal `"incomplete"` so they catch an accidental rename of the constant.
+- **Claim is released even if `processDownload` panics (item 40).** Audit item 25 (v1.5.2) wrapped `processNext` in `safeProcessNext` with a `defer recover`, but the recover sits two frames up from `processDownload`, past the `dlCancel()` and `m.release(dl.ID)` cleanup lines. A panic inside the download pipeline therefore left an entry pinned in `m.claimed`, and the next `CancelDownload` for that id wasted the full 15 s `cancelWaitTimeout` polling for a release that would never happen. The claimed window is now wrapped in an anonymous function whose `defer` calls `dlCancel + release` first, so the panic still propagates to `safeProcessNext` but the worker state is consistent before it does. New `TestClaimReleasedOnInnerPanic` regression-anchors the pattern.
+
+### Rejected
+
+- **Item 35** (retention-bucket doc drift, LOW). The comment at `worker.go:251-254` explains why the 90 s `downloads` bucket sleep was removed (a `MoveToHistory` race against Sonarr's `mode=queue&name=delete`). The audit framed this as drift between memory and code; a validation read confirmed the comment is correctly marked as historical context and is exactly the kind of "answers a non-obvious WHY" comment the project keeps. Closed as a false positive.
+
 ## [1.5.3] - 2026-05-16
 
 Phase 4 frontend polish from the audit-driven cleanup chain. Nine
