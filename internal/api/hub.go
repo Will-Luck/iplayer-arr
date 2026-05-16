@@ -30,11 +30,17 @@ func (h *Hub) Subscribe() chan Event {
 	return ch
 }
 
-// Unsubscribe removes a client and closes its channel.
+// Unsubscribe removes a client. Does NOT close the channel: the
+// subscriber goroutine owns the receive end and is responsible for
+// exiting its read loop on its own signal (e.g. SSE request context).
+// Closing here would race a concurrent Broadcast that already snapshot
+// the channel pointer under RLock and is about to do a non-blocking
+// send; with no close, an Unsubscribed channel is simply unreachable
+// from the map and the runtime GCs it once the subscriber's reference
+// drops. Audit item 15.
 func (h *Hub) Unsubscribe(ch chan Event) {
 	h.mu.Lock()
 	delete(h.clients, ch)
-	close(ch)
 	h.mu.Unlock()
 }
 
