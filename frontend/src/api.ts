@@ -21,42 +21,84 @@ function buildURL(path: string, params?: Record<string, string>): string {
   return url.toString();
 }
 
+/**
+ * Options accepted by every api.* helper. `signal` lets the caller
+ * abort an in-flight request (used by Search to drop superseded
+ * queries, audit item 30). `timeoutMs` overrides the 30 s default
+ * client-side ceiling, which guards against silently hung requests
+ * when the server never responds (audit item 32).
+ */
+export type ApiOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
   params?: Record<string, string>,
+  options?: ApiOptions,
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (body) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(buildURL(path, params), {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? res.statusText);
+
+  // Compose the external signal (if any) with an internal timeout
+  // controller so we get cancellation on either trigger. AbortSignal.any
+  // would be cleaner but lacks support in the older Chromium/WebKit
+  // versions the SPA still targets, so we wire the link manually.
+  const controller = new AbortController();
+  const external = options?.signal;
+  let externalListener: (() => void) | undefined;
+  if (external) {
+    if (external.aborted) {
+      controller.abort(external.reason);
+    } else {
+      externalListener = () => controller.abort(external.reason);
+      external.addEventListener("abort", externalListener, { once: true });
+    }
   }
-  return res.json() as Promise<T>;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(new DOMException("request timed out", "TimeoutError")), timeoutMs);
+
+  try {
+    const res = await fetch(buildURL(path, params), {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? res.statusText);
+    }
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timer);
+    if (external && externalListener) {
+      external.removeEventListener("abort", externalListener);
+    }
+  }
 }
 
-async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
-  return request<T>("GET", path, undefined, params);
+async function get<T>(path: string, params?: Record<string, string>, options?: ApiOptions): Promise<T> {
+  return request<T>("GET", path, undefined, params, options);
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  return request<T>("POST", path, body);
+async function post<T>(path: string, body: unknown, options?: ApiOptions): Promise<T> {
+  return request<T>("POST", path, body, undefined, options);
 }
 
-async function put<T>(path: string, body: unknown): Promise<T> {
-  return request<T>("PUT", path, body);
+async function put<T>(path: string, body: unknown, options?: ApiOptions): Promise<T> {
+  return request<T>("PUT", path, body, undefined, options);
 }
 
-async function del(path: string): Promise<void> {
-  await request<unknown>("DELETE", path);
+async function del(path: string, options?: ApiOptions): Promise<void> {
+  await request<unknown>("DELETE", path, undefined, undefined, options);
 }
 
 export const api = {
@@ -87,8 +129,11 @@ export const api = {
   deleteOverride: (showName: string) =>
     del(`/api/overrides/${encodeURIComponent(showName)}`),
 
-  // Search
-  search: (q: string) => get<SearchResult[]>("/api/search", { q }),
+  // Search. `options` lets the caller plumb in an AbortSignal so a
+  // superseded query can be cancelled and not race the latest one
+  // into the result list. Audit item 30.
+  search: (q: string, options?: ApiOptions) =>
+    get<SearchResult[]>("/api/search", { q }, options),
 
   // Directory
   listDirectory: () => get<DirectoryEntry[]>("/api/downloads/directory"),
