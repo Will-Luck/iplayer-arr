@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-05-16
+
+Phase 3 tail of the audit-driven cleanup chain. Eight backend items
+that did not fit in v1.5.1's window; no frontend or release-shape
+changes here, those are Phase 4 (v1.5.x train continues).
+
+### Fixed
+
+- **ffmpeg shutdown gains a SIGTERM grace and progress watchdog (item 11).** `os/exec.CommandContext` defaults to SIGKILL on cancel, which truncates the MP4 mid-write and leaves an unplayable moov-less file behind. `cmd.Cancel` now sends SIGTERM, then `WaitDelay: 5s` escalates to SIGKILL if ffmpeg ignores the soft signal. A new progress watchdog cancels the run if no progress line appears for 60 s (ffmpeg normally emits one every 1 to 3 s on a healthy HLS pull), so a CDN-stalled ffmpeg cannot block a worker indefinitely.
+- **Download workers survive a panic (item 25).** Each tick's `processNext` is now wrapped in `safeProcessNext` with a `defer recover`. A panic in the download pipeline (a nil deref, a third-party library bug) is logged with a stack trace and the worker continues with the next job, instead of silently dying and underprovisioning the manager until restart. `max_workers` is documented as start-time-only; resizing the pool at runtime is out of scope for v1.5.x.
+- **`bbc.Client.Get` and `Head` now route through their context-aware variants (item 12).** `doWithRetry` was a duplicate of `doWithRetryCtx` that ignored caller cancellation. `Get` and `Head` now delegate to `GetCtx` and `HeadCtx` with `context.Background()`, removing ~40 lines of duplication and letting any future call site swap to the Ctx form without behaviour change.
+- **SSE Hub no longer closes channels on `Unsubscribe` (item 15).** Closing a channel that another goroutine might still hold a reference to is a Go anti-pattern; the RWMutex serialised the map mutation correctly but a misbehaving subscriber could in principle race the close. `Unsubscribe` now just deletes from the map and lets the runtime reclaim the channel once the subscriber drops its own reference.
+- **`BrowseFresh` deadline back to 5 s and `errors.Join` on total failure (item 18).** The v1.3.0 changelog committed to a 5 s deadline derived from the request context. The code had drifted to 10 s, eating a third of Sonarr's 30 s RSS budget on a slow pool. Restored. When all three editorial pools fail, the handler now returns `errors.Join` of every pool's error rather than only the lowest-priority slot, so the caller can distinguish a deadline (all three time out at once) from a single-pool 404 or an upstream-wide outage.
+- **SAB delete preserves the cancelled row in history (item 20).** The `mode=queue&name=delete` path called `Manager.CancelDownload` (which since v1.4.1 ends with `DeleteDownload`) and then `MoveToHistory`, which always failed because the row was already gone. The fallback `DeleteDownload` was a no-op and Sonarr never saw the entry in history, so it kept rediscovering the same release on every RSS sync. The handler now snapshots the row before the cancel and writes the snapshot to history with `Status=failed` afterwards so Sonarr can mark it as a rejected grab and move on.
+- **`Enqueue` gains a mutex over its lookup and insert window (item 21).** Sonarr's RSS sync plus an interactive search firing the same release in under 1 ms could both observe "no existing row" and both insert, producing duplicate downloads pointing at the same `incomplete/` directory. `enqueueMu` serialises the `FindDownload` + `FindHistory` + `PutDownload` sequence; uncontended in steady state, only matters under search-storm conditions.
+- **Newznab handler honours Sonarr's `limit=N` query parameter (item 24).** The caps XML advertises `max="100"` but the server previously returned whatever the filter and probe pipeline produced (up to ~100 items), leaving Sonarr to truncate on its end. `parseLimitParam` validates `?limit=N`, clamps to the advertised 100, and `writeResultsRSS` trims the rendered item list before emit.
+
+### Known issues remaining from the audit
+
+Phase 4 frontend polish (items 26 to 34) and Phase 5 hygiene (items
+35 to 40) remain outstanding for the v1.5.x train. Codex Criticals 4
+(wire `authenticate()` into all `/api/*` routes) and 5 (remove
+`api_key` from `/api/config` GET response) are deferred to v1.6.0
+because both depend on a SPA setup-wizard rework to capture and persist
+the apikey in localStorage.
+
 ## [1.5.1] - 2026-05-15
 
 ### Fixed
