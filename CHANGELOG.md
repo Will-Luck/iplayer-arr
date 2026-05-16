@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-05-16
+
+Two GitHub bug reports filed against the v1.5.4 train. Both fixes
+small, both with regression coverage.
+
+### Fixed
+
+- **Subtitle timestamps now canonicalise to strict SRT (GitHub issue #41).** `bbc.toSRTTime` previously did a single `strings.Replace(".", ",", 1)` to convert TTML timestamps to SRT form. BBC's TTML drops the `.000` fractional part when milliseconds are exactly zero, so a cue like `<p begin="00:00:01" end="00:00:02">` emitted `00:00:01 --> 00:00:02` (no comma, no milliseconds) instead of the strict `00:00:01,000 --> 00:00:02,000`. Strict SRT parsers (some embedded renderers, certain Plex/Jellyfin paths) reject the bare form, and if it lands on the first cue the whole file fails to render. The function now handles all three TTML shapes (period-based, frame-based, bare HH:MM:SS) and always emits canonical `HH:MM:SS,mmm` with exactly three digits. Tests cover bare timestamps, zero/short/long fractions, frame-based input, and an end-to-end TTML → SRT round-trip.
+- **ffmpeg exit-status errors now carry stderr context (GitHub issue #40).** When ffmpeg died with a bare `exit status 251` (Linux's `EIO` wrapping is the common cause on Docker/WSL2 with mismatched bind-mount permissions), the actual diagnostic line ffmpeg wrote to stderr was discarded by the progress scanner. Users got an opaque exit code with nothing to act on. The scanner now keeps a ring of the most recent 8 non-progress stderr lines and attaches them to the returned error, so failures surface as `ffmpeg: exit status 251 | stderr: [hls @ 0x55] HTTP error 403 Forbidden | ...`. Loglevel bumped from `fatal` to `error` so non-fatal-but-failed events also reach stderr. The behaviour-change is additive; a clean exit returns the same `nil` as before. Regression anchor: `TestAppendDiagLine_TailsAndTrims`.
+
 ## [1.5.4] - 2026-05-16
 
 Phase 5 hygiene from the audit-driven cleanup chain. The v1.4.0 audit
