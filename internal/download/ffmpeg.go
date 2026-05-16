@@ -11,7 +11,27 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
 )
+
+// progressWatchdogTimeout is the maximum gap allowed between ffmpeg
+// progress emissions before the watchdog cancels the run. ffmpeg
+// normally prints a progress line every 1-3 seconds while pulling HLS
+// segments, so 60 s of silence is well past any healthy backoff.
+// Audit item 11.
+const progressWatchdogTimeout = 60 * time.Second
+
+// progressWatchdogInterval is the watchdog's tick period. Short enough
+// to detect a stall within ~progressWatchdogTimeout + this, long
+// enough to keep the goroutine cheap.
+const progressWatchdogInterval = 15 * time.Second
+
+// ffmpegShutdownGrace is how long os/exec waits after sending SIGTERM
+// before escalating to SIGKILL. ffmpeg uses this window to flush
+// trailing frames + moov atom so the resulting MP4 is playable.
+const ffmpegShutdownGrace = 5 * time.Second
 
 // min returns the smaller of a and b.
 func min(a, b int) int {
@@ -167,7 +187,27 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 		job.OutputPath,
 	}
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	// Derive a cancellable child context so the progress watchdog (and
+	// the parent ctx) can both trigger cmd.Cancel via os/exec. Caller
+	// cancellation still propagates through ctx.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	cmd := exec.CommandContext(runCtx, "ffmpeg", args...)
+
+	// Send SIGTERM on cancel rather than the os/exec default SIGKILL,
+	// giving ffmpeg a brief grace window to flush its remaining input
+	// buffers and write the MP4 moov atom. WaitDelay then escalates to
+	// SIGKILL after ffmpegShutdownGrace so a process that ignores the
+	// soft signal cannot block worker shutdown. Audit item 11.
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = ffmpegShutdownGrace
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("stderr pipe: %w", err)
@@ -177,12 +217,40 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 		return fmt.Errorf("start ffmpeg: %w", err)
 	}
 
+	// Progress watchdog. ffmpeg can hang on a segment fetch retry against
+	// an unresponsive CDN without exiting; the os/exec context covers
+	// caller cancel but not internal stalls. Track the wall time of the
+	// last parsed progress line and cancel runCtx if it ages past the
+	// threshold. atomic.Int64 keeps the scanner goroutine lock-free.
+	var lastProgressNanos atomic.Int64
+	lastProgressNanos.Store(time.Now().UnixNano())
+	go func() {
+		ticker := time.NewTicker(progressWatchdogInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+				since := time.Since(time.Unix(0, lastProgressNanos.Load()))
+				if since > progressWatchdogTimeout {
+					log.Printf("ffmpeg watchdog: no progress in %s; cancelling", since.Round(time.Second))
+					cancelRun()
+					return
+				}
+			}
+		}
+	}()
+
 	scanner := bufio.NewScanner(stderr)
 	scanner.Split(scanFFmpegLines)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if prog, ok := parseProgress(line); ok && job.OnProgress != nil {
-			job.OnProgress(prog)
+		if prog, ok := parseProgress(line); ok {
+			lastProgressNanos.Store(time.Now().UnixNano())
+			if job.OnProgress != nil {
+				job.OnProgress(prog)
+			}
 		}
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
