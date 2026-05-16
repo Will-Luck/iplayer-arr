@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Will-Luck/iplayer-arr/internal/newznab"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
@@ -112,14 +113,27 @@ func (h *Handler) handleQueue(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	if name == "delete" {
 		value := r.URL.Query().Get("value")
+		// Snapshot the row BEFORE routing through CancelDownload. The
+		// manager's CancelDownload (introduced in v1.4.1 for audit item
+		// 3) ends with DeleteDownload, after which MoveToHistory would
+		// always fail. Sonarr's SAB protocol expects to see deleted
+		// entries in history with a terminal status so it can move on
+		// to the next release; without this preservation Sonarr keeps
+		// rediscovering the same release on every RSS sync. Audit item
+		// 20.
+		snapshot, _ := h.store.GetDownload(value)
 		if h.starter != nil {
 			h.starter.CancelDownload(value)
 		}
-		// Move to history instead of hard-deleting so Sonarr can still
-		// see the Completed entry. If the download is already gone
-		// (e.g. worker moved it first), just delete from both buckets.
-		if err := h.store.MoveToHistory(value); err != nil {
-			h.store.DeleteDownload(value)
+		if snapshot != nil {
+			snapshot.Status = store.StatusFailed
+			if snapshot.Error == "" {
+				snapshot.Error = "cancelled via SAB API"
+			}
+			snapshot.CompletedAt = time.Now()
+			if err := h.store.PutHistory(snapshot); err != nil {
+				log.Printf("[sabnzbd] queue delete: put history %s: %v", value, err)
+			}
 		}
 		writeJSON(w, map[string]interface{}{"status": true})
 		return

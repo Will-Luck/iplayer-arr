@@ -35,7 +35,11 @@ type EventBroadcaster interface {
 type Manager struct {
 	store       *store.Store
 	downloadDir string
-	maxWorkers  int
+	// maxWorkers is read once during Start() and is effectively
+	// immutable for the lifetime of the manager. Resizing the worker
+	// pool at runtime is out of scope for v1.5.x; restart the process
+	// to apply a new max_workers value. Audit item 25.
+	maxWorkers int
 
 	client   *bbc.Client
 	playlist *bbc.PlaylistResolver
@@ -50,6 +54,14 @@ type Manager struct {
 
 	cancelled   map[string]struct{}
 	cancelledMu sync.Mutex
+
+	// enqueueMu serialises the FindDownload + FindHistory + PutDownload
+	// sequence so two concurrent Enqueue callers for the same
+	// (pid, quality) can never both insert. Without this, Sonarr's RSS
+	// sync + an interactive search firing the same release in <1ms can
+	// produce duplicate downloads pointing at the same incomplete/
+	// directory. Audit item 21.
+	enqueueMu sync.Mutex
 }
 
 func NewManager(st *store.Store, downloadDir string, maxWorkers int,
@@ -104,6 +116,15 @@ func (m *Manager) Resume() {
 func (m *Manager) IsPaused() bool { return m.paused.Load() }
 
 func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) {
+	// Hold the enqueue lock across the lookup+insert window. The store
+	// itself uses Bolt's single-writer txn for the actual PutDownload,
+	// but the Find* calls run in read-only txns; two concurrent
+	// Enqueue callers can both observe "no existing row" and then both
+	// race to insert. The lock is uncontended in the steady state and
+	// only matters under search-storm conditions. Audit item 21.
+	m.enqueueMu.Lock()
+	defer m.enqueueMu.Unlock()
+
 	existing, _ := m.store.FindDownloadByPIDQuality(pid, quality)
 	if existing != nil {
 		return existing.ID, nil

@@ -260,6 +260,88 @@ func TestSABnzbdLogSanitisesAPIKey(t *testing.T) {
 	}
 }
 
+// TestQueueDelete_PreservesHistory exercises audit item 20. SAB
+// delete (mode=queue&name=delete) must leave the cancelled row in
+// history so Sonarr can see a terminal status and stop re-discovering
+// the same release. Before v1.5.2 the handler called MoveToHistory
+// after the manager's CancelDownload had already removed the row from
+// the downloads bucket, so MoveToHistory always failed and the
+// fallback DeleteDownload erased the entry without trace.
+func TestQueueDelete_PreservesHistory(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.SetConfig("api_key", "test-key")
+	t.Cleanup(func() { st.Close() })
+
+	// Seed a download row representing an active Sonarr-driven grab.
+	const nzoID = "iparr_b001_720p"
+	dl := &store.Download{
+		ID:       nzoID,
+		PID:      "b001",
+		Quality:  "720p",
+		Title:    "Test.Show.S01E01",
+		Category: "sonarr",
+		Status:   store.StatusDownloading,
+	}
+	if err := st.PutDownload(dl); err != nil {
+		t.Fatalf("PutDownload: %v", err)
+	}
+
+	// Use a starter whose CancelDownload simulates the manager: it
+	// deletes the row from the downloads bucket so the test exercises
+	// the same ordering as production.
+	starter := &deletingStarter{st: st}
+	h := NewHandler(st, starter)
+
+	url := fmt.Sprintf("/sabnzbd/api?mode=queue&name=delete&value=%s&apikey=test-key", nzoID)
+	req := httptest.NewRequest("GET", url, nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	// Row must be gone from the active downloads bucket.
+	if got, _ := st.GetDownload(nzoID); got != nil {
+		t.Errorf("expected download cleared, got %+v", got)
+	}
+
+	// Row must now be in history with a failed/cancelled status and a
+	// non-empty Error so Sonarr's history scrape can surface it.
+	hist, err := st.GetHistory(nzoID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if hist == nil {
+		t.Fatal("expected history entry, got nil")
+	}
+	if hist.Status != store.StatusFailed {
+		t.Errorf("history Status = %q, want %q", hist.Status, store.StatusFailed)
+	}
+	if !strings.Contains(strings.ToLower(hist.Error), "cancelled") {
+		t.Errorf("history Error should mention cancelled, got %q", hist.Error)
+	}
+}
+
+// deletingStarter simulates Manager.CancelDownload: removes the row
+// from the downloads bucket. Used by TestQueueDelete_PreservesHistory
+// to exercise the production ordering.
+type deletingStarter struct {
+	st *store.Store
+}
+
+func (d *deletingStarter) StartDownload(pid, quality, title, category string) (string, error) {
+	return "", nil
+}
+func (d *deletingStarter) CancelDownload(nzoID string) error {
+	return d.st.DeleteDownload(nzoID)
+}
+func (d *deletingStarter) IsPaused() bool { return false }
+
 func TestSabnzbdGetConfig_UsesEnvDownloadDir(t *testing.T) {
 	h, _ := testHandler(t)
 	h.DownloadDir = "/data"

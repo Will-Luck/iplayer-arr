@@ -56,7 +56,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeResultsRSS(w, r, results, 0, 0, "", filterName, 0, "", isWildcard)
+	h.writeResultsRSS(w, r, results, 0, 0, "", filterName, 0, "", isWildcard, parseLimitParam(r))
 }
 
 func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +152,29 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	// so detect the daily shape and filter by air date instead.
 	filterDate := parseDailySearchDate(seasonStr, epStr)
 
-	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName, filterYear, tvdbid, isWildcard)
+	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName, filterYear, tvdbid, isWildcard, parseLimitParam(r))
+}
+
+// parseLimitParam reads Sonarr's `limit=N` query parameter, the
+// advertised pagination cap (caps.go advertises max=100). Returns 0
+// when absent or invalid (callers treat 0 as "no client-side cap").
+// Clamps any requested value to the advertised max so a hostile or
+// misconfigured client cannot demand more items than the indexer
+// claims to support. Audit item 24.
+func parseLimitParam(r *http.Request) int {
+	s := r.URL.Query().Get("limit")
+	if s == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	const advertisedMax = 100 // matches caps.go <limits max="100" .../>
+	if n > advertisedMax {
+		return advertisedMax
+	}
+	return n
 }
 
 // parseDailySearchDate returns YYYY-MM-DD when season looks like a 4-digit
@@ -181,7 +203,7 @@ func parseDailySearchDate(seasonStr, epStr string) string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, mm, dd)
 }
 
-func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid string, wildcardBrowse bool) {
+func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid string, wildcardBrowse bool, limit int) {
 	var items []string
 	wantName := strings.TrimSpace(filterName)
 
@@ -335,6 +357,16 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			item += "\n    </item>"
 			items = append(items, item)
 		}
+	}
+
+	// Honour Sonarr's `limit=N` query parameter. The cap was already
+	// clamped to the advertised max=100 in parseLimitParam; here we
+	// trim the rendered item list so the RSS body matches the client's
+	// request. Without this, a tvsearch with limit=50 could return up
+	// to ~100 items (browseCapPIDs * browseQualitiesPerPID), forcing
+	// Sonarr to discard the overflow on the client side. Audit item 24.
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
 	}
 
 	w.Header().Set("Content-Type", "application/xml")

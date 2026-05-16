@@ -3,6 +3,7 @@ package bbc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -222,17 +223,22 @@ func (ibl *IBL) GroupEpisodes(ctx context.Context, groupID string, perPage int) 
 
 // BrowseFresh runs the wildcard RSS browse fan-out: SearchCtx("BBC")
 // plus two editorial group pools, in parallel. Results are merged
-// in priority order (m001bm54 → popular → search) and deduped by PID,
+// in priority order (m001bm54 -> popular -> search) and deduped by PID,
 // so curated metadata wins when a PID appears in multiple pools.
 //
 // Per-pool failures are logged via slog and dropped (fail-soft). If
-// all three pools fail the last error is returned so the handler can
-// emit empty RSS rather than wedge.
+// all three pools fail every per-pool error is returned via errors.Join
+// so the handler can decide whether to emit empty RSS or surface the
+// failure mode; previously only the lowest-priority pool's error was
+// reported, hiding the trending and popular failures. Audit item 18.
 //
-// A 10s deadline is derived from the parent ctx to bound the slowest
-// pool against Sonarr's 30s default RSS timeout.
+// A 5s deadline is derived from the parent ctx to bound the slowest
+// pool against Sonarr's 30s default RSS timeout. Matches the v1.3.0
+// changelog spec ("5s deadline derived from the request context"); the
+// v1.4.0-era drift to 10s ate half the RSS budget on a slow pool. Audit
+// item 18.
 func (ibl *IBL) BrowseFresh(ctx context.Context) ([]IBLResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	var (
@@ -287,9 +293,10 @@ func (ibl *IBL) BrowseFresh(ctx context.Context) ([]IBLResult, error) {
 	}
 
 	if successCount == 0 {
-		// All three pools failed; return the last error. errs[2] is the
-		// generic search BBC slot, the lowest-priority pool.
-		return nil, errs[2]
+		// All three pools failed. Surface every error via errors.Join so
+		// the caller can distinguish a deadline (every pool times out at
+		// once) from a single-pool 404 from an upstream-wide outage.
+		return nil, errors.Join(errs[0], errs[1], errs[2])
 	}
 
 	// Merge with PID dedupe in priority order.
