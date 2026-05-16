@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -18,9 +19,15 @@ import (
 
 const maxRetries = 3
 
-// worker polls for pending or retryable downloads every second.
+// worker polls for pending or retryable downloads every second. Each
+// tick's processNext is wrapped in safeProcessNext so an unexpected
+// panic inside the download pipeline (a nil deref, a third-party
+// library bug) only kills the current job and not the entire worker.
+// Without this the manager would lose a worker permanently on first
+// panic and silently underprovision until restart. Audit item 25.
 func (m *Manager) worker(ctx context.Context, id int) {
 	log.Printf("worker %d started", id)
+	defer log.Printf("worker %d stopped", id)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -31,10 +38,22 @@ func (m *Manager) worker(ctx context.Context, id int) {
 			return
 		case <-ticker.C:
 			if !m.paused.Load() {
-				m.processNext(ctx, id)
+				m.safeProcessNext(ctx, id)
 			}
 		}
 	}
+}
+
+// safeProcessNext wraps processNext in a panic recover so a panic in
+// the download pipeline does not take down the worker goroutine. The
+// stack is logged for postmortem. Audit item 25.
+func (m *Manager) safeProcessNext(ctx context.Context, workerID int) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("worker %d: panic recovered: %v\n%s", workerID, r, debug.Stack())
+		}
+	}()
+	m.processNext(ctx, workerID)
 }
 
 // processNext finds the next pending or retryable-failed download and processes it.
