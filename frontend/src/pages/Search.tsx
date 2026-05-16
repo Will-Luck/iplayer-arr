@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, onCleanup, For, Show } from "solid-js";
 import type { SearchResult } from "../types";
 import { QUALITY_OPTIONS } from "../types";
 import { api } from "../api";
@@ -32,28 +32,65 @@ export default function Search() {
   const [loading, setLoading] = createSignal(false);
   const [selectedQuality, setSelectedQuality] = createSignal<Record<string, string>>({});
 
-  let debounceTimer: number;
+  let debounceTimer: number | undefined;
+  // activeController tracks the AbortController for the currently
+  // in-flight search. A new keystroke aborts the previous request so
+  // an older slow query cannot overwrite a fresher result. Audit item
+  // 30.
+  let activeController: AbortController | null = null;
 
   function onInput(e: InputEvent) {
     const val = (e.target as HTMLInputElement).value;
     setQuery(val);
-    clearTimeout(debounceTimer);
+    if (debounceTimer !== undefined) clearTimeout(debounceTimer);
     if (val.length < 2) {
+      // Cancel any pending search so a partial query result does not
+      // land in an empty input.
+      activeController?.abort();
+      activeController = null;
       setResults([]);
+      setLoading(false);
       return;
     }
     debounceTimer = window.setTimeout(async () => {
+      activeController?.abort();
+      const ctl = new AbortController();
+      activeController = ctl;
       setLoading(true);
       try {
-        const res = await api.search(val);
-        setResults(res || []);
+        const res = await api.search(val, { signal: ctl.signal });
+        if (!ctl.signal.aborted) {
+          setResults(res || []);
+        }
       } catch (e) {
-        setResults([]);
-        addToast("error", `Search failed: ${e instanceof Error ? e.message : "unknown error"}`);
+        if (e instanceof DOMException && (e.name === "AbortError" || e.name === "TimeoutError")) {
+          // Superseded by a newer search or hit the request timeout;
+          // do not flash a toast or clear results that belong to the
+          // newer query already in flight.
+          if (e.name === "TimeoutError" && activeController === ctl) {
+            addToast("error", "Search timed out");
+            setResults([]);
+          }
+          return;
+        }
+        if (activeController === ctl) {
+          setResults([]);
+          addToast("error", `Search failed: ${e instanceof Error ? e.message : "unknown error"}`);
+        }
+      } finally {
+        if (activeController === ctl) {
+          activeController = null;
+          setLoading(false);
+        }
       }
-      setLoading(false);
     }, 300);
   }
+
+  onCleanup(() => {
+    if (debounceTimer !== undefined) clearTimeout(debounceTimer);
+    activeController?.abort();
+    activeController = null;
+  });
 
   async function startDownload(r: SearchResult) {
     const quality = selectedQuality()[r.PID] || "720p";
