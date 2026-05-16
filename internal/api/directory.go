@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Will-Luck/iplayer-arr/internal/download"
 )
 
 type directoryFile struct {
@@ -43,7 +45,7 @@ func (h *Handler) handleListDirectory(w http.ResponseWriter, r *http.Request) {
 		}
 		// Hide the incomplete/ staging dir used by the download worker
 		// so it doesn't render as a confusing "unknown" folder. Issue #29.
-		if entry.Name() == "incomplete" {
+		if entry.Name() == download.IncompleteDirName {
 			continue
 		}
 		fullPath := filepath.Join(downloadDir, entry.Name())

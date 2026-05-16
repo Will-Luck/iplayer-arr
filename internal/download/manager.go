@@ -27,6 +27,14 @@ import (
 // blocked waiting on a stuck worker.
 const cancelWaitTimeout = 15 * time.Second
 
+// IncompleteDirName is the on-disk staging subdirectory under the
+// download root that holds partially-fetched files. The producer side
+// (Enqueue and cleanupIncompleteDir) and the consumer side (the
+// directory listing API that hides this folder from the UI) both
+// reference this constant so the two sides cannot silently drift.
+// Audit item 39.
+const IncompleteDirName = "incomplete"
+
 // EventBroadcaster sends real-time events to connected clients (e.g. SSE hub).
 type EventBroadcaster interface {
 	Broadcast(eventType string, data interface{})
@@ -145,7 +153,7 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 	// final atomic rename to <downloadDir>/<safeTitle>/ runs in
 	// finaliseDownload after the file has been probed and reconciled.
 	// Issue #29.
-	outputDir := filepath.Join(m.downloadDir, "incomplete", safeTitle)
+	outputDir := filepath.Join(m.downloadDir, IncompleteDirName, safeTitle)
 
 	dl := &store.Download{
 		ID:        id,
@@ -222,7 +230,7 @@ func (m *Manager) cleanupIncompleteDir(outputDir string) error {
 	if outputDir == "" {
 		return nil
 	}
-	incompleteRoot := filepath.Join(m.downloadDir, "incomplete")
+	incompleteRoot := filepath.Join(m.downloadDir, IncompleteDirName)
 	rel, err := filepath.Rel(incompleteRoot, outputDir)
 	if err != nil {
 		return fmt.Errorf("rel: %w", err)
