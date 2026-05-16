@@ -145,6 +145,17 @@ export default function Dashboard() {
   const [currentPage, setCurrentPage] = createSignal(1);
   const perPage = 20;
 
+  // Tracks downloads with an in-flight cancel request so a fast
+  // double-click cannot fire a second confirm dialog or a duplicate
+  // API call, and so the cancel button can render in a disabled
+  // state while we wait. Audit items 26, 27.
+  const [cancelling, setCancelling] = createSignal<Set<string>>(new Set());
+
+  // Tracks setTimeout handles created by SSE event handlers so
+  // onCleanup can clear them on unmount, preventing a deferred
+  // setActive after the component has been destroyed. Audit item 34.
+  const pendingTimers = new Set<number>();
+
   const sinceOptions: SelectOption[] = [
     { value: SINCE_ALL, label: "All time" },
     { value: todayISO(), label: "Today" },
@@ -175,8 +186,10 @@ export default function Dashboard() {
       setPaused(st.paused);
       splitDownloads(downloads);
       setSystem(sys);
-    } catch {
-      // API may not be available yet
+    } catch (e) {
+      // Background refresh: log for debug, do not toast on every mount
+      // when the server is still starting up. Audit item 29.
+      console.error("dashboard: loadData failed", e);
     }
   }
 
@@ -189,12 +202,20 @@ export default function Dashboard() {
         await api.pause();
         setPaused(true);
       }
-    } catch {
-      // silently fail
+    } catch (e) {
+      // User-initiated action: surface the failure so the user knows
+      // the button click did not take effect. Audit item 29.
+      addToast(
+        "error",
+        e instanceof Error ? e.message : "Failed to toggle pause state",
+      );
     }
   }
 
   async function cancelDownload(dl: Download) {
+    // Guard against a fast double-click reopening the confirm dialog
+    // or firing a duplicate DELETE. Audit item 26.
+    if (cancelling().has(dl.id)) return;
     const ok = await confirmDialog({
       title: "Cancel download?",
       message: `Stop downloading "${dl.title || dl.pid}"? Any partial file will be cleaned up.`,
@@ -203,13 +224,44 @@ export default function Dashboard() {
       danger: true,
     });
     if (!ok) return;
+
+    // Mark as cancelling so the button renders disabled and a second
+    // click is rejected at the guard above. Audit items 26, 27.
+    setCancelling((prev) => {
+      const next = new Set(prev);
+      next.add(dl.id);
+      return next;
+    });
+
+    // Optimistic removal so the row visibly disappears the instant the
+    // user confirms. If the API call fails we restore canonical state
+    // by reloading from the server (cheaper than threading the
+    // pre-removal snapshots back through every setter). Audit item 27.
+    setActive((prev) => prev.filter((d) => d.id !== dl.id));
+    setQueue((prev) => prev.filter((d) => d.id !== dl.id));
+
     try {
       await api.cancelDownload(dl.id);
-      setActive((prev) => prev.filter((d) => d.id !== dl.id));
-      setQueue((prev) => prev.filter((d) => d.id !== dl.id));
+      // Drop the speed sample for this id so the map does not leak
+      // entries for completed/cancelled downloads over a long session.
+      // Audit item 33.
+      speedMap.delete(dl.id);
       addToast("success", `Cancelled ${dl.title || dl.pid}`);
     } catch (e) {
-      addToast("error", e instanceof Error ? e.message : "Failed to cancel download");
+      addToast(
+        "error",
+        e instanceof Error ? e.message : "Failed to cancel download",
+      );
+      // Revert the optimistic removal by refetching the canonical
+      // downloads list; the row will reappear if the server still has
+      // it. Audit item 27.
+      loadData();
+    } finally {
+      setCancelling((prev) => {
+        const next = new Set(prev);
+        next.delete(dl.id);
+        return next;
+      });
     }
   }
 
@@ -269,20 +321,31 @@ export default function Dashboard() {
         setHistoryItems(page.items);
         setTotalCount(page.total);
       })
-      .catch(() => {});
+      .catch((e) => {
+        // Background refresh: log for debug only. The history card has
+        // an empty-state fallback that renders fine on stale data, so a
+        // toast here would be noise. Audit item 29.
+        console.error("dashboard: listHistory failed", e);
+      });
 
     api
       .getHistoryStats(sinceFilter() === SINCE_ALL ? undefined : sinceFilter())
       .then(setStats)
-      .catch(() => {});
+      .catch((e) => {
+        console.error("dashboard: getHistoryStats failed", e);
+      });
   }
 
   async function deleteHistoryItem(id: string) {
     try {
       await api.deleteHistory(id);
       refreshHistory();
-    } catch {
-      // silently fail
+    } catch (e) {
+      // User-initiated row delete: surface the failure. Audit item 29.
+      addToast(
+        "error",
+        e instanceof Error ? e.message : "Failed to delete history entry",
+      );
     }
   }
 
@@ -295,14 +358,18 @@ export default function Dashboard() {
     });
     if (!ok) return;
     try {
+      // The clear-all endpoint is the only correct path: the previous
+      // per-row fallback only deleted the visible page, producing a
+      // misleading "succeeded" experience while leaving older history
+      // intact. Audit item 31.
       await api.clearAllHistory();
-    } catch {
-      const items = historyItems();
-      for (const dl of items) {
-        try { await api.deleteHistory(dl.id); } catch { /* continue */ }
-      }
+      refreshHistory();
+    } catch (e) {
+      addToast(
+        "error",
+        e instanceof Error ? e.message : "Failed to clear history",
+      );
     }
-    refreshHistory();
   }
 
   createEffect(() => {
@@ -337,6 +404,9 @@ export default function Dashboard() {
       "download:complete": (data) => {
         const dl = data as Download;
         setActive((prev) => prev.filter((d) => d.id !== dl.id));
+        // Drop the per-id speed sample so the map stays bounded
+        // across long sessions. Audit item 33.
+        speedMap.delete(dl.id);
         refreshHistory();
       },
       "pause:changed": (data) => {
@@ -354,14 +424,30 @@ export default function Dashboard() {
           }
           return prev;
         });
-        setTimeout(() => {
+        // Track the setTimeout handle so onCleanup can clear it if the
+        // user navigates away during the 3 s grace window. Without
+        // this, the deferred setActive runs on an unmounted component.
+        // Audit item 34. Also drops the speedMap entry on fire (audit
+        // item 33) so failed-then-removed downloads do not leak.
+        const t = window.setTimeout(() => {
+          pendingTimers.delete(t);
           setActive((prev) => prev.filter((d) => d.id !== dl.id));
+          speedMap.delete(dl.id);
           refreshHistory();
         }, 3000);
+        pendingTimers.add(t);
       },
     });
 
-    onCleanup(cleanup);
+    onCleanup(() => {
+      cleanup();
+      // Cancel any deferred download:failed handlers still in flight.
+      // Audit item 34.
+      for (const t of pendingTimers) {
+        clearTimeout(t);
+      }
+      pendingTimers.clear();
+    });
   });
 
   return (
@@ -439,7 +525,8 @@ export default function Dashboard() {
                           tone="danger"
                           size="sm"
                           aria-label={`Cancel ${dl.title || dl.pid}`}
-                          title="Cancel download"
+                          title={cancelling().has(dl.id) ? "Cancelling..." : "Cancel download"}
+                          disabled={cancelling().has(dl.id)}
                           onClick={() => cancelDownload(dl)}
                         />
                       </div>
@@ -494,7 +581,8 @@ export default function Dashboard() {
                           tone="danger"
                           size="sm"
                           aria-label={`Cancel ${dl.title || dl.pid}`}
-                          title="Cancel download"
+                          title={cancelling().has(dl.id) ? "Cancelling..." : "Cancel download"}
+                          disabled={cancelling().has(dl.id)}
                           onClick={() => cancelDownload(dl)}
                         />
                       </div>
