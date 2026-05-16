@@ -105,6 +105,29 @@ jobs:
           cache-from: type=gha,scope=rebuild
           cache-to: type=gha,scope=rebuild,mode=max
 
+      # Smoke the rebuilt image: hotio's alpinevpn base ships openvpn +
+      # wireguard tooling, and our kill-switch design relies on those
+      # binaries being present so the entrypoint's iptables rules can
+      # bind to the VPN interface. If upstream ever swaps the alpinevpn
+      # tag to a thinner image, we want CI to fail loud rather than
+      # publish a no-VPN container under the same tag. Audit item 38.
+      - name: Verify VPN tooling present in rebuilt image
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          docker pull ghcr.io/will-luck/iplayer-arr:latest
+          missing=""
+          for bin in openvpn wg; do
+            if ! docker run --rm --entrypoint sh ghcr.io/will-luck/iplayer-arr:latest -c "command -v $bin >/dev/null 2>&1"; then
+              missing="$missing $bin"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::VPN tooling missing from rebuilt image:$missing"
+            echo "::error::Base image ghcr.io/hotio/base:alpinevpn may have dropped its VPN scaffold; refusing to advance digest."
+            exit 1
+          fi
+          echo "VPN tooling present: openvpn, wg"
+
       - name: Update stored digest
         if: steps.check.outputs.changed == 'true' && steps.current.outputs.digest != steps.stored.outputs.digest
         run: |
