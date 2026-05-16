@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 // LogEntry is a single structured log line.
@@ -13,6 +14,18 @@ type LogEntry struct {
 	Message   string `json:"message"`
 }
 
+const (
+	// broadcastBudget caps how many log:line SSE events RingBuffer.Add
+	// is allowed to emit per broadcastWindow. A noisy startup burst
+	// (worker init, BBC playlist resolves, Watchtower polling) would
+	// otherwise flood every subscribed dashboard with hundreds of
+	// rapid-fire events. The ring still receives every entry, and a
+	// reconnecting client can replay history via GET /api/logs.
+	// Audit item 37.
+	broadcastBudget = 20
+	broadcastWindow = time.Second
+)
+
 // RingBuffer is a fixed-capacity FIFO buffer for log entries.
 type RingBuffer struct {
 	mu      sync.Mutex
@@ -20,6 +33,11 @@ type RingBuffer struct {
 	cap     int
 	start   int // index of oldest entry
 	count   int // number of valid entries
+
+	// Broadcast token bucket. Excess events are dropped from the SSE
+	// stream but remain queryable via GET /api/logs.
+	bcastTokens     int
+	bcastWindowFrom time.Time
 }
 
 // NewRingBuffer returns a RingBuffer with the given capacity.
@@ -30,9 +48,24 @@ func NewRingBuffer(capacity int) *RingBuffer {
 	}
 }
 
+// takeBroadcastToken returns true when a log:line broadcast is allowed
+// for `now`. Refills the bucket at the start of each window. Caller
+// MUST hold rb.mu.
+func (rb *RingBuffer) takeBroadcastToken(now time.Time) bool {
+	if rb.bcastWindowFrom.IsZero() || now.Sub(rb.bcastWindowFrom) >= broadcastWindow {
+		rb.bcastWindowFrom = now
+		rb.bcastTokens = broadcastBudget
+	}
+	if rb.bcastTokens <= 0 {
+		return false
+	}
+	rb.bcastTokens--
+	return true
+}
+
 // Add appends a log entry. When the buffer is full, the oldest entry is
 // overwritten. After storing, the entry is broadcast as a log:line SSE event
-// if a hub is provided.
+// if a hub is provided and the broadcast budget allows it.
 func (rb *RingBuffer) Add(e LogEntry, hub *Hub) {
 	rb.mu.Lock()
 	idx := (rb.start + rb.count) % rb.cap
@@ -43,9 +76,10 @@ func (rb *RingBuffer) Add(e LogEntry, hub *Hub) {
 		// overwrite oldest -- advance start pointer
 		rb.start = (rb.start + 1) % rb.cap
 	}
+	shouldBroadcast := rb.takeBroadcastToken(time.Now())
 	rb.mu.Unlock()
 
-	if hub != nil {
+	if hub != nil && shouldBroadcast {
 		hub.Broadcast("log:line", e)
 	}
 }

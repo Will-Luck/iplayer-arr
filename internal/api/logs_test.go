@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // --- RingBuffer unit tests ---
@@ -88,6 +89,64 @@ func TestRingBufferSSEBroadcast(t *testing.T) {
 		}
 	default:
 		t.Error("expected SSE event but channel was empty")
+	}
+}
+
+// TestRingBufferBroadcastThrottle exercises audit item 37: a burst of
+// log lines should fan out at most `broadcastBudget` SSE events in a
+// single window. Every entry still lands in the ring (a reconnecting
+// dashboard can refetch via GET /api/logs), but the SSE consumer is
+// not flooded.
+func TestRingBufferBroadcastThrottle(t *testing.T) {
+	hub := NewHub()
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	rb := NewRingBuffer(200)
+	burst := broadcastBudget * 3
+	for i := 0; i < burst; i++ {
+		rb.Add(LogEntry{Level: "info", Message: fmt.Sprintf("burst-%d", i)}, hub)
+	}
+
+	delivered := 0
+drain:
+	for {
+		select {
+		case <-ch:
+			delivered++
+		case <-time.After(20 * time.Millisecond):
+			break drain
+		}
+	}
+
+	if delivered != broadcastBudget {
+		t.Errorf("delivered = %d, want %d (burst was %d events into one window)", delivered, broadcastBudget, burst)
+	}
+
+	// Ring must still hold every entry: throttling is a fan-out
+	// concern, not a retention one.
+	if got := len(rb.Entries()); got != burst {
+		t.Errorf("ring entries = %d, want %d (throttle dropped from buffer instead of broadcast)", got, burst)
+	}
+}
+
+// TestRingBufferBroadcastRefill verifies that the bucket refills at
+// the start of a new window so steady-state logging still streams.
+func TestRingBufferBroadcastRefill(t *testing.T) {
+	rb := NewRingBuffer(10)
+	base := time.Now()
+	// Drain the bucket entirely within window N.
+	for i := 0; i < broadcastBudget; i++ {
+		if !rb.takeBroadcastToken(base) {
+			t.Fatalf("token %d should be available", i)
+		}
+	}
+	if rb.takeBroadcastToken(base) {
+		t.Fatal("budget should be exhausted within the window")
+	}
+	// Step past the window boundary -- bucket refills.
+	if !rb.takeBroadcastToken(base.Add(broadcastWindow + time.Millisecond)) {
+		t.Fatal("budget should refill after the window expires")
 	}
 }
 
