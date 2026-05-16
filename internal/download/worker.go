@@ -612,7 +612,16 @@ func sanitiseFilename(name string) string {
 		">", "",
 		"|", "",
 	)
-	return replacer.Replace(name)
+	out := replacer.Replace(name)
+	// Strip leading dots so a title like ".ssh" or "..hidden" can't
+	// produce a dot-prefixed directory under <downloadDir>/incomplete/.
+	// On Linux a dot-prefixed dir is hidden from default listings; an
+	// attacker controlling the title (via an iBL injection or a future
+	// API path that takes a title parameter) could use this to stash
+	// files where the user wouldn't notice them. Empty result is
+	// caller-handled (Enqueue falls back to the PID). Audit item 23.
+	out = strings.TrimLeft(out, ".")
+	return out
 }
 
 func abs(x int) int {

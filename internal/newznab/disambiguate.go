@@ -23,10 +23,12 @@ var reYearRange = regexp.MustCompile(`\((\d{4})(?:[-\x{2013}](\d{4}))?\)\s*$`)
 // "(US)" appended by TVDB/Skyhook to disambiguate same-named shows
 // across territories. BBC programme names are bare (e.g. "The
 // Apprentice"), so stripping the tag lets cross-name comparison
-// succeed. See issue #37. Only ISO-style 2-letter codes that TVDB
-// actually uses for disambiguation are recognised; arbitrary parens
-// like "(XY)" are preserved.
-var reCountryTag = regexp.MustCompile(`\s*\((?:UK|US|AU|CA|NZ|IE)\)\s*$`)
+// succeed. See issue #37. Widened from the v1.4.0 fixed list
+// (UK/US/AU/CA/NZ/IE) to cover the country and region codes that
+// TVDB actually uses in title disambiguation. Arbitrary 2-letter
+// parens like "(XY)" that aren't on this list are still preserved
+// (TestBareName_NonCountryParenPreserved). Audit item 19.
+var reCountryTag = regexp.MustCompile(`\s*\((?i:UK|GB|US|AU|CA|NZ|IE|IN|ZA|SA|FR|DE|JP|KR|HK|TW|SG|MX|BR|AR|CH|AT|BE|NL|NO|SE|DK|FI|PL|IT|ES|PT|RU)\)\s*$`)
 
 // bareName strips trailing year and country-tag suffixes from a
 // programme name for cross-name comparison. Returns the input

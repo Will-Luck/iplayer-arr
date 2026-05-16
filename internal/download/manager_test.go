@@ -192,6 +192,13 @@ func TestSanitiseFilename(t *testing.T) {
 		{"Title: With Colon", "Title - With Colon"},
 		{"Title/With/Slashes", "Title-With-Slashes"},
 		{"Bad<>Chars|Here", "BadCharsHere"},
+		// Leading-dot strip (item 23): no dot-prefixed dirs.
+		{".ssh", "ssh"},
+		{"..hidden", "hidden"},
+		{"...triple", "triple"},
+		{".", ""},
+		// Dots in the middle stay.
+		{"My.Show.S01E01", "My.Show.S01E01"},
 	}
 	for _, tt := range tests {
 		got := sanitiseFilename(tt.in)
@@ -323,8 +330,15 @@ func TestCancelDownloadNoRezombie(t *testing.T) {
 		t.Fatalf("download %s should be deleted, but still exists with status %q", id, dl.Status)
 	}
 
-	if m.IsCancelled(id) != true {
-		t.Error("expected IsCancelled to return true for a cancelled download")
+	// v1.4.1+: CancelDownload now waits for any active worker to
+	// release before deleting the DB row, so the rezombie window
+	// the cancelled-map flag used to protect against can no longer
+	// happen. v1.5.1 then clears the flag explicitly to stop the map
+	// growing one entry per cancel (audit item 10). The remaining
+	// protection is the DB row deletion + the synchronous wait, both
+	// asserted above.
+	if m.IsCancelled(id) {
+		t.Error("expected cancelled-map entry to be cleared by CancelDownload (item 10)")
 	}
 }
 

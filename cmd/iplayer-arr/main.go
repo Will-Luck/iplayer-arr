@@ -170,6 +170,15 @@ func main() {
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
+		// ReadHeaderTimeout protects against slowloris: an attacker
+		// keeping a half-open connection by dribbling header bytes.
+		ReadHeaderTimeout: 10 * time.Second,
+		// IdleTimeout closes keep-alive connections that sit idle so
+		// the per-connection goroutine and fd are reclaimed.
+		IdleTimeout: 120 * time.Second,
+		// WriteTimeout intentionally stays 0 because /api/events is a
+		// long-lived SSE stream. Per-route bounds are enforced inside
+		// the handlers that need them.
 	}
 
 	go func() {
@@ -191,13 +200,42 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	workerCancel()
-	mgr.Stop()
+	// Stop accepting new HTTP first so the worker pool isn't fielding
+	// fresh enqueues while it's trying to drain. srv.Shutdown blocks
+	// until in-flight requests complete or the context deadline fires.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("http shutdown: %v", err)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	srv.Shutdown(ctx)
+	// Now cancel worker contexts (kills ffmpeg children via SIGKILL)
+	// and wait for them to release, bounded by waitWithTimeout. A
+	// hung ffmpeg that ignores cancel previously blocked main forever
+	// on m.wg.Wait(); the bounded wait guarantees the container can
+	// exit within ~25s even in that case.
+	workerCancel()
+	if !waitWithTimeout(mgr.Stop, 15*time.Second) {
+		log.Println("warning: download manager did not stop within 15s, exiting anyway")
+	}
 	log.Println("iplayer-arr stopped")
+}
+
+// waitWithTimeout runs fn in a goroutine and waits up to d for it to
+// return. Returns true if fn returned, false on timeout. Used by
+// main's shutdown path to bound the wait on mgr.Stop's wg.Wait().
+func waitWithTimeout(fn func(), d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
 }
 
 // ringBufWriter adapts api.RingBuffer to io.Writer for use with log and slog.
