@@ -77,9 +77,17 @@ func stripTags(s string) string {
 	return reHTMLTag.ReplaceAllString(s, "")
 }
 
-// toSRTTime converts a TTML timestamp to SRT format.
-// TTML uses HH:MM:SS.mmm (period-based) or HH:MM:SS:FF (frame-based at 25fps).
-// SRT uses HH:MM:SS,mmm.
+// toSRTTime converts a TTML timestamp to canonical SRT format
+// (HH:MM:SS,mmm). TTML may use any of:
+//
+//   - period-based HH:MM:SS.mmm
+//   - frame-based  HH:MM:SS:FF (assumed 25 fps)
+//   - bare         HH:MM:SS (BBC's TTML omits the fractional part when
+//     it is exactly zero; strict SRT parsers reject this form)
+//
+// Output is always exactly HH:MM:SS,mmm so downstream players that
+// validate the format strictly (VLC's stricter mode, some embedded
+// renderers) accept every cue. GitHub issue #41.
 func toSRTTime(t string) string {
 	t = strings.TrimSpace(t)
 	if strings.Count(t, ":") == 3 {
@@ -91,6 +99,20 @@ func toSRTTime(t string) string {
 			return fmt.Sprintf("%s:%s:%s,%03d", parts[0], parts[1], parts[2], ms)
 		}
 	}
-	// period-based: HH:MM:SS.mmm -> HH:MM:SS,mmm
-	return strings.Replace(t, ".", ",", 1)
+	// period-based: HH:MM:SS[.mmm] -> HH:MM:SS,mmm. Missing fraction
+	// defaults to zero; short fractions are right-padded; long
+	// fractions are truncated. This is the strict-SRT contract.
+	parts := strings.SplitN(t, ".", 2)
+	ms := "000"
+	if len(parts) == 2 {
+		frac := parts[1]
+		if len(frac) > 3 {
+			frac = frac[:3]
+		}
+		for len(frac) < 3 {
+			frac += "0"
+		}
+		ms = frac
+	}
+	return parts[0] + "," + ms
 }
