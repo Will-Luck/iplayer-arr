@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-05-16
+
+Phase 4 frontend polish from the audit-driven cleanup chain. Nine
+items, all UX-facing: cancel-button safety, SSE reconnect behaviour,
+silent-failure removal, search-race fixes, and a handful of resource
+leaks. Backend untouched. Browser smoke verified on an isolated
+binary (port 63998, empty config) before merge: SPA mounts, all routes
+render, zero console errors or warnings.
+
+### Fixed
+
+- **Cancel button no longer permits double-click + reverts on failure (items 26, 27).** `cancelDownload` tracks an in-flight set keyed by download id. A second click while the cancel is pending is dropped at the guard, and the IconButton renders `disabled` so the user gets visual feedback. The row is optimistically removed from active and queue on confirm; if the DELETE API call throws, the canonical state is refetched via `loadData()` so the row reappears with whatever the server still has. Without the revert, a network blip silently hid a download that was actually still running.
+- **SSE reconnect grows exponentially with jitter (item 28).** The fixed 5 s reconnect delay is replaced with `computeReconnectDelay(attempts)`: 1 s base, doubling per failure to a 30 s cap, with +/- 25 % symmetric jitter. The attempt counter resets on a successful open. Without jitter a fleet of clients synchronises on a server restart and reconnect-storms the SSE endpoint at the 5 s mark; with jitter the herd spreads across the window. Pure function exported and unit-tested.
+- **Silent error catches replaced with appropriate surfacing (item 29).** `togglePause` and `deleteHistoryItem` are user-initiated, so their failures now show a toast. `loadData` and the two `refreshHistory` background fetches log to `console.error` instead, because toasting on every server hiccup during startup is just noise; the page has empty-state fallbacks that render fine on stale data.
+- **Search aborts superseded queries (item 30).** Adds an `AbortController` per debounced search. A new keystroke aborts the previous request and discards its results, so an older slow query cannot race a fresher one into the result list. Clearing the input under the 2-character floor also aborts any in-flight query, and `onCleanup` aborts on unmount. `AbortError` and superseded `TimeoutError` are silently dropped; a `TimeoutError` on the still-active controller surfaces a clear toast.
+- **clearAllHistory no longer pretends to succeed when it could not (item 31).** The previous per-row fallback only iterated the visible 20 rows, so a failure against the bulk endpoint quietly left older history intact while reporting success. Drops the fallback; a failure now surfaces an error toast and the user can retry. The bulk endpoint is the only path going forward.
+- **api.request() gains AbortSignal support + 30 s default timeout (item 32).** Every `api.*` helper accepts an optional `ApiOptions { signal, timeoutMs }`. Internally `request()` composes the external signal with a 30 s timeout `AbortController` so a request never hangs indefinitely when the server never responds. The external signal is also wired so a caller-driven abort propagates into `fetch`.
+- **`speedMap` is bounded across long sessions (item 33).** The module-level speed sample map now drops its entry when a download leaves active state: on a successful cancel, on `download:complete`, and on the `download:failed` removal that fires after the 3 s grace. Previously the map only grew, leaking O(downloads ever seen) entries per browser session.
+- **`download:failed` timer cleared on unmount (item 34).** The 3 s `setTimeout` handle that defers the row removal is now tracked in a `pendingTimers` Set; `onCleanup` clears every pending handle on unmount so no `setActive` runs against an unmounted component when the user navigates away within the grace window.
+
 ## [1.5.2] - 2026-05-16
 
 Phase 3 tail of the audit-driven cleanup chain. Eight backend items
