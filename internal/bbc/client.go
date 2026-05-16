@@ -9,9 +9,8 @@ import (
 )
 
 type Client struct {
-	http      *http.Client
-	userAgent string
-	maxRetry  int
+	http     *http.Client
+	maxRetry int
 }
 
 func NewClient() *Client {
@@ -19,8 +18,7 @@ func NewClient() *Client {
 		http: &http.Client{
 			Timeout: 20 * time.Second,
 		},
-		userAgent: RandomUserAgent(),
-		maxRetry:  3,
+		maxRetry: 3,
 	}
 }
 
@@ -55,7 +53,10 @@ func (c *Client) doWithRetryCtx(ctx context.Context, url string, maxAttempts int
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
-		req.Header.Set("User-Agent", c.userAgent)
+		// Roll a fresh UA per attempt so BBC's anti-bot heuristics don't
+		// see a session-long fingerprint from one client instance. Audit
+		// item 36.
+		req.Header.Set("User-Agent", RandomUserAgent())
 
 		resp, err := c.http.Do(req)
 		if err != nil {
@@ -103,7 +104,7 @@ func (c *Client) HeadCtx(ctx context.Context, url string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", RandomUserAgent())
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, err

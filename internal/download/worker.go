@@ -81,9 +81,20 @@ func (m *Manager) processNext(ctx context.Context, workerID int) {
 		} else {
 			log.Printf("worker %d: retrying failed download %s (%s), attempt %d", workerID, dl.ID, dl.PID, dl.RetryCount+1)
 		}
-		m.processDownload(dlCtx, dl)
-		dlCancel()
-		m.release(dl.ID)
+		// Wrap the claimed-window in a deferred scope so a panic inside
+		// processDownload still cancels the worker context and releases
+		// the claim. Without this, safeProcessNext's recover (added in
+		// audit item 25, v1.5.2) catches the panic two frames up and
+		// the dlCancel/release lines never execute, leaving the entry
+		// pinned in m.claimed so the next CancelDownload waits the full
+		// cancelWaitTimeout for nothing. Audit item 40.
+		func() {
+			defer func() {
+				dlCancel()
+				m.release(dl.ID)
+			}()
+			m.processDownload(dlCtx, dl)
+		}()
 		return
 	}
 }

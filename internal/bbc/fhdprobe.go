@@ -89,7 +89,7 @@ func (c *Client) ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (fhdUR
 	if err != nil {
 		return "", false, fmt.Errorf("build HEAD request: %w", err)
 	}
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", RandomUserAgent())
 
 	resp, err := c.http.Do(req)
 	if err != nil {
