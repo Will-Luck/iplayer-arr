@@ -33,6 +33,29 @@ const progressWatchdogInterval = 15 * time.Second
 // trailing frames + moov atom so the resulting MP4 is playable.
 const ffmpegShutdownGrace = 5 * time.Second
 
+// ffmpegStderrTail caps how many of the most recent non-progress
+// stderr lines we keep around for failure diagnostics. ffmpeg's exit
+// code alone (e.g. "exit status 251") rarely tells the user anything
+// actionable; the tail captures the lines ffmpeg emitted right before
+// it died (Permission denied, HTTP 403, EIO, etc.) and surfaces them
+// in the returned error. GitHub issue #40.
+const ffmpegStderrTail = 8
+
+// appendDiagLine adds a non-empty, trimmed line to a ring-style
+// buffer capped at max entries. Older lines are evicted when the cap
+// is exceeded so callers always see the most recent context.
+func appendDiagLine(diag []string, line string, max int) []string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return diag
+	}
+	diag = append(diag, line)
+	if len(diag) > max {
+		diag = diag[len(diag)-max:]
+	}
+	return diag
+}
+
 // min returns the smaller of a and b.
 func min(a, b int) int {
 	if a < b {
@@ -176,7 +199,12 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 		log.Printf("not HLS, skipping variant resolution: %s", streamURL[:min(len(streamURL), 80)])
 	}
 	args := []string{
-		"-loglevel", "fatal",
+		// "error" is the loudest level that still excludes the per-segment
+		// info chatter. We want HTTP failures, EIO writes, codec rejects,
+		// and any other "ffmpeg gave up" messages to land in stderr so
+		// the diagnostic tail can surface them. Audit-style fix for
+		// GitHub issue #40.
+		"-loglevel", "error",
 		"-stats",
 		"-y",
 		"-i", streamURL,
@@ -242,6 +270,11 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 		}
 	}()
 
+	// diagLines is a tail of the most recent non-progress stderr lines.
+	// When ffmpeg exits non-zero we attach this tail to the error so
+	// the user gets a real cause (e.g. "Permission denied" or an HTTP
+	// 403 from the CDN) instead of a bare exit code. GitHub issue #40.
+	var diagLines []string
 	scanner := bufio.NewScanner(stderr)
 	scanner.Split(scanFFmpegLines)
 	for scanner.Scan() {
@@ -251,13 +284,18 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 			if job.OnProgress != nil {
 				job.OnProgress(prog)
 			}
+			continue
 		}
+		diagLines = appendDiagLine(diagLines, line, ffmpegStderrTail)
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
 		return fmt.Errorf("reading ffmpeg stderr: %w", scanErr)
 	}
 
 	if err := cmd.Wait(); err != nil {
+		if len(diagLines) > 0 {
+			return fmt.Errorf("ffmpeg: %w | stderr: %s", err, strings.Join(diagLines, " | "))
+		}
 		return fmt.Errorf("ffmpeg: %w", err)
 	}
 	return nil
