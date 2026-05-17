@@ -20,6 +20,15 @@ func TestParseFFmpegProgress(t *testing.T) {
 			"size=  123456kB time=00:05:00.00 bitrate=3300.0kbits/s speed=1.2x",
 			300.0, 123456 * 1024, true,
 		},
+		// ffmpeg 8.0.1 stderr (KiB unit), captured from prod.
+		{
+			"frame=37630 fps=684 q=-1.0 size=  680448KiB time=00:12:32.60 bitrate=7406.6kbits/s speed=13.7x",
+			752.60, 680448 * 1024, true,
+		},
+		{
+			"size= 680448 KiB time=00:12:32.60 bitrate=7406.6kbits/s",
+			752.60, 680448 * 1024, true,
+		},
 		{
 			"some random line",
 			0, 0, false,

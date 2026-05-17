@@ -71,7 +71,10 @@ type FFmpegProgress struct {
 
 var (
 	reTime = regexp.MustCompile(`time=(\d+):(\d+):(\d+)\.(\d+)`)
-	reSize = regexp.MustCompile(`size=\s*(\d+)kB`)
+	// ffmpeg 8.x renamed the size unit from kB to KiB. Accept both so
+	// parseProgress keeps matching across the version bump; otherwise
+	// the watchdog sees no progress and cancels at 60 s.
+	reSize = regexp.MustCompile(`size=\s*(\d+)\s*(?:KiB|kB)`)
 )
 
 func parseProgress(line string) (FFmpegProgress, bool) {
