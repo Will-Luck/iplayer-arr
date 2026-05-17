@@ -56,6 +56,23 @@ type Handler struct {
 	// GeoProbe, when non-nil, re-runs the BBC geo check and returns true when
 	// UK access is confirmed.
 	GeoProbe func() bool
+
+	// newznabHandler is the live newznab.Handler so the diag endpoint
+	// (handleDiagSonarrHandshake) can simulate Sonarr's tvsearch+grab
+	// round-trip in-process via httptest.NewRecorder. Set via
+	// SetNewznabHandler from main.go after both handlers exist (the
+	// newznab handler depends on prober which depends on bbcClient,
+	// so it's constructed after the api handler).
+	newznabHandler http.Handler
+}
+
+// SetNewznabHandler wires the live newznab handler in so the
+// /api/diag/sonarr-handshake endpoint can synthesise a Sonarr
+// round-trip against it. Safe to leave unset in tests that don't
+// exercise the diag endpoint; the diag handler short-circuits with
+// a degraded verdict when newznabHandler is nil.
+func (h *Handler) SetNewznabHandler(nzh http.Handler) {
+	h.newznabHandler = nzh
 }
 
 // RecordIndexerRequest records the current time as the most recent Newznab
@@ -142,6 +159,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleSystem(w, r)
 	case path == "/api/system/geo-check" && r.Method == "POST":
 		h.handleGeoCheck(w, r)
+	case path == "/api/diag/sonarr-handshake" && r.Method == "GET":
+		h.handleDiagSonarrHandshake(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}

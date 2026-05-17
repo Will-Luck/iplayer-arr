@@ -154,6 +154,12 @@ func main() {
 	mux := http.NewServeMux()
 	nzHandler := newznab.NewHandler(ibl, st, ms, prober)
 	nzHandler.SetOnRequest(apiHandler.RecordIndexerRequest)
+	// Wire the newznab handler into the api handler so the v1.5.6
+	// /api/diag/sonarr-handshake endpoint can synthesise a Sonarr
+	// round-trip in-process. Ordering matters: apiHandler is built
+	// at line 142 before prober/nzHandler exist, so this is a
+	// post-construction setter rather than a constructor arg.
+	apiHandler.SetNewznabHandler(nzHandler)
 	mux.Handle("/newznab/", nzHandler)
 	sabHandler := sabnzbd.NewHandler(st, mgr)
 	sabHandler.DownloadDir = downloadDir
