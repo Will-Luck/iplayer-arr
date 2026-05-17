@@ -151,6 +151,30 @@ export default function Dashboard() {
   // state while we wait. Audit items 26, 27.
   const [cancelling, setCancelling] = createSignal<Set<string>>(new Set());
 
+  // Generalised in-flight guard for non-cancel mutating actions
+  // (togglePause, deleteHistoryItem, clearAllHistory). Keyed by a
+  // short action namespace so each button can independently render
+  // disabled while its request is outstanding. v1.5.6 audit
+  // follow-up: pre-v1.5.6 only the Cancel button had the guard, so
+  // a fast double-click on Pause or a Delete-History row would fire
+  // two DELETEs.
+  const [pendingActions, setPendingActions] = createSignal<Set<string>>(
+    new Set(),
+  );
+  const isPending = (key: string) => pendingActions().has(key);
+  const markPending = (key: string) =>
+    setPendingActions((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  const unmarkPending = (key: string) =>
+    setPendingActions((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+
   // Tracks setTimeout handles created by SSE event handlers so
   // onCleanup can clear them on unmount, preventing a deferred
   // setActive after the component has been destroyed. Audit item 34.
@@ -194,6 +218,16 @@ export default function Dashboard() {
   }
 
   async function togglePause() {
+    if (isPending("pause")) return;
+    markPending("pause");
+    try {
+      await togglePauseInner();
+    } finally {
+      unmarkPending("pause");
+    }
+  }
+
+  async function togglePauseInner() {
     try {
       if (paused()) {
         await api.resume();
@@ -337,6 +371,9 @@ export default function Dashboard() {
   }
 
   async function deleteHistoryItem(id: string) {
+    const key = "history:" + id;
+    if (isPending(key)) return;
+    markPending(key);
     try {
       await api.deleteHistory(id);
       refreshHistory();
@@ -346,10 +383,13 @@ export default function Dashboard() {
         "error",
         e instanceof Error ? e.message : "Failed to delete history entry",
       );
+    } finally {
+      unmarkPending(key);
     }
   }
 
   async function clearAllHistory() {
+    if (isPending("clear-all")) return;
     const ok = await confirmDialog({
       title: "Clear all history?",
       message: "Delete all history entries? This cannot be undone.",
@@ -357,6 +397,7 @@ export default function Dashboard() {
       danger: true,
     });
     if (!ok) return;
+    markPending("clear-all");
     try {
       // The clear-all endpoint is the only correct path: the previous
       // per-row fallback only deleted the visible page, producing a
@@ -369,6 +410,8 @@ export default function Dashboard() {
         "error",
         e instanceof Error ? e.message : "Failed to clear history",
       );
+    } finally {
+      unmarkPending("clear-all");
     }
   }
 
@@ -493,6 +536,7 @@ export default function Dashboard() {
               size="sm"
               variant={paused() ? "warning" : "secondary"}
               onClick={togglePause}
+              disabled={isPending("pause")}
             >
               {paused() ? "Resume Downloads" : "Pause Downloads"}
             </Button>
@@ -604,7 +648,12 @@ export default function Dashboard() {
         <Card.Header
           title="History"
           actions={
-            <Button variant="danger" size="sm" onClick={clearAllHistory}>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={clearAllHistory}
+              disabled={isPending("clear-all")}
+            >
               Clear all
             </Button>
           }
@@ -708,6 +757,7 @@ export default function Dashboard() {
                           size="sm"
                           aria-label={`Delete ${dl.title || dl.pid}`}
                           onClick={() => deleteHistoryItem(dl.id)}
+                          disabled={isPending("history:" + dl.id)}
                         />
                       </Table.TD>
                     </Table.TR>
