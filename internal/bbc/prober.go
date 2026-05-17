@@ -213,29 +213,48 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) []in
 	// 5. FHD probe (skipped if 1080 already present, or if the best
 	// available resolution is below 720p -- SD-only content never has
 	// hidden 1080p, and skipping saves a master playlist HTTP fetch).
+	//
+	// FHD probe errors are TRANSIENT (429, 5xx, 401/403, transport
+	// failures — see internal/bbc/fhdprobe.go ProbeHiddenFHD doc) and
+	// must NOT discard the heights we already resolved from
+	// mediaselector. Pre-v1.5.6 returned nil on FHD err, wiping out a
+	// perfectly valid 720p/540p quality probe whenever the FHD HEAD
+	// happened to hit a throttle. We keep the existing heights for
+	// this response BUT skip the cache write so the next probe will
+	// retry the FHD HEAD and may discover 1080p once the throttle
+	// clears. Matches both the downloader pattern at
+	// internal/download/ffmpeg.go ~181 (log + fall through to bestURL)
+	// and the caching contract in ProbeHiddenFHD's doc string
+	// ("Callers that cache must NOT cache this branch").
+	fhdProbeTransientErr := false
 	if !containsInt(heights, 1080) && len(heights) > 0 && heights[0] >= 720 {
 		if bestHLS := pickBestHLSURL(streams.Video); bestHLS != "" {
 			_, found, err := p.fhdProber.ProbeHiddenFHD(probeCtx, bestHLS)
-			if err != nil {
-				log.Printf("quality probe failed pid=%s err=%v (fhd)", item.PID, err)
-				return nil
-			}
-			if found {
+			switch {
+			case err != nil:
+				log.Printf("quality probe: fhd transient err pid=%s err=%v (keeping %v, skipping cache)", item.PID, err, heights)
+				fhdProbeTransientErr = true
+			case found:
 				heights = append([]int{1080}, heights...)
 			}
 		}
 	}
 
-	// 6. Persist. PutQualityCache normalises ShowName internally.
-	if err := p.store.PutQualityCache(&store.QualityCache{
-		PID:      item.PID,
-		ShowName: item.ShowName,
-		Heights:  heights,
-		ProbedAt: time.Now(),
-	}); err != nil {
-		log.Printf("quality probe cache write failed pid=%s err=%v", item.PID, err)
-		// Fall through — the result is still usable for this response
-		// even if the cache write failed.
+	// 6. Persist — but skip the cache write when the FHD probe hit a
+	// transient error so the next call retries the FHD HEAD instead
+	// of locking in "no 1080" until the cache TTL expires. The
+	// already-resolved heights are still returned for this response.
+	if !fhdProbeTransientErr {
+		if err := p.store.PutQualityCache(&store.QualityCache{
+			PID:      item.PID,
+			ShowName: item.ShowName,
+			Heights:  heights,
+			ProbedAt: time.Now(),
+		}); err != nil {
+			log.Printf("quality probe cache write failed pid=%s err=%v", item.PID, err)
+			// Fall through — the result is still usable for this response
+			// even if the cache write failed.
+		}
 	}
 
 	// 7. Log success at INFO level via the ring buffer (any existing logger).

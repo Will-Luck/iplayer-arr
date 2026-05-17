@@ -206,7 +206,16 @@ func TestPrefetch_FHDDefinitiveNo_KeepsLowerHeights(t *testing.T) {
 	}
 }
 
-func TestPrefetch_FHDProbeError_ReturnsNilNoCacheWrite(t *testing.T) {
+// TestPrefetch_FHDProbeError_PreservesExistingHeights pins the v1.5.6
+// fix: a transient FHD probe error (429, 5xx, 401/403, transport) must
+// preserve the heights already resolved from mediaselector rather than
+// discard the entire probe result. Pre-v1.5.6 returned nil on FHD err,
+// wiping out a perfectly valid 720p/540p probe whenever the FHD HEAD
+// happened to hit a throttle. We still skip the cache write so the
+// next probe will retry the FHD HEAD and may discover 1080 once the
+// throttle clears — matches the caching contract documented on
+// fhdprobe.go::ProbeHiddenFHD.
+func TestPrefetch_FHDProbeError_PreservesExistingHeights(t *testing.T) {
 	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
 	ms := &fakeMediaSelector{byVPID: map[string]*StreamSet{}}
 	fhd := &fakeFHDProber{err: errors.New("FHD HEAD returned 503")}
@@ -215,11 +224,13 @@ func TestPrefetch_FHDProbeError_ReturnsNilNoCacheWrite(t *testing.T) {
 	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
 	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
 
-	if out["p1"] != nil {
-		t.Errorf("expected nil result on FHD transient error, got %v", out["p1"])
+	// fakeMediaSelector default returns [720, 540]; on FHD err we keep them.
+	got := out["p1"]
+	if len(got) != 2 || got[0] != 720 || got[1] != 540 {
+		t.Errorf("expected preserved heights [720 540] on FHD transient error, got %v", got)
 	}
 	if len(st.data) != 0 {
-		t.Errorf("expected no cache write on transient FHD error, got %d entries", len(st.data))
+		t.Errorf("expected no cache write on transient FHD error (so next probe retries), got %d entries", len(st.data))
 	}
 }
 
