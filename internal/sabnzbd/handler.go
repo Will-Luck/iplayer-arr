@@ -54,13 +54,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mode := r.URL.Query().Get("mode")
 	log.Printf("[sabnzbd] %s %s mode=%s params=%s", r.Method, r.URL.Path, mode, sanitiseQuery(r.URL.RawQuery))
 
+	// mode=version is the only operation that stays unauthenticated.
+	// Sonarr probes version BEFORE attaching the apikey so it can
+	// recognise the SABnzbd dialect — same shape as the Newznab
+	// t=caps probe. Every other mode reads or writes operator state
+	// (download directory, category list, queue, history) and must
+	// be guarded so anyone on the LAN can't enumerate or modify
+	// downloads without the key. See `internal/newznab/handler.go`
+	// for the parallel structure.
+	if mode != "version" {
+		apiKey := r.URL.Query().Get("apikey")
+		storedKey, _ := h.store.GetConfig("api_key")
+		if storedKey != "" && apiKey != storedKey {
+			writeJSON(w, map[string]interface{}{
+				"status": false,
+				"error":  "API Key Incorrect",
+			})
+			return
+		}
+	}
+
 	switch mode {
 	case "version":
 		writeJSON(w, map[string]interface{}{"version": "4.0.0"})
-		return
 	case "get_cats":
 		writeJSON(w, map[string]interface{}{"categories": []string{"sonarr", "tv", "manual"}})
-		return
 	case "get_config":
 		downloadDir := h.ResolveDownloadDir()
 		writeJSON(w, map[string]interface{}{
@@ -75,7 +93,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		})
-		return
 	case "fullstatus":
 		downloadDir := h.ResolveDownloadDir()
 		writeJSON(w, map[string]interface{}{
@@ -83,21 +100,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"completedir": downloadDir,
 			},
 		})
-		return
-	}
-
-	// all other modes require auth
-	apiKey := r.URL.Query().Get("apikey")
-	storedKey, _ := h.store.GetConfig("api_key")
-	if apiKey != storedKey {
-		writeJSON(w, map[string]interface{}{
-			"status": false,
-			"error":  "API Key Incorrect",
-		})
-		return
-	}
-
-	switch mode {
 	case "queue":
 		h.handleQueue(w, r)
 	case "history":

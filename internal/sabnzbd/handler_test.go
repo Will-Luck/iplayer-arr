@@ -151,7 +151,10 @@ func TestHistoryWithDownload(t *testing.T) {
 
 func TestGetConfig(t *testing.T) {
 	h, _ := testHandler(t)
-	req := httptest.NewRequest("GET", "/sabnzbd/api?mode=get_config", nil)
+	// get_config requires apikey from v1.5.6 onwards (audit finding,
+	// closing the parallel unauthenticated-info-leak that v1.5.0 fixed
+	// on the Newznab side but missed on the SAB shim).
+	req := httptest.NewRequest("GET", "/sabnzbd/api?mode=get_config&apikey=test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -176,6 +179,59 @@ func TestGetConfig(t *testing.T) {
 	}
 	if len(resp.Config.Categories) < 1 {
 		t.Error("missing categories")
+	}
+}
+
+// TestAuthRequiredForInfoModes pins the v1.5.6 fix: every mode except
+// `version` must require the apikey query param. Prior to v1.5.6,
+// `get_cats`, `get_config`, and `fullstatus` returned operator state
+// (download directory, category list) over plain HTTP with no auth,
+// so any LAN host could enumerate the configured NFS mount path. The
+// fix moves the apikey check above the mode switch and allow-lists
+// only `version` (which Sonarr probes before attaching the key, same
+// as the Newznab `t=caps` probe).
+func TestAuthRequiredForInfoModes(t *testing.T) {
+	cases := []string{"get_cats", "get_config", "fullstatus"}
+	for _, mode := range cases {
+		t.Run(mode, func(t *testing.T) {
+			h, _ := testHandler(t)
+			req := httptest.NewRequest("GET", "/sabnzbd/api?mode="+mode, nil)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d (want 200, SAB protocol returns 200 with status:false on auth fail)", w.Code)
+			}
+			var resp map[string]interface{}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if resp["status"] != false {
+				t.Errorf("mode=%s: expected status:false on missing apikey, got body %s", mode, w.Body.String())
+			}
+			if errStr, _ := resp["error"].(string); !strings.Contains(errStr, "API Key Incorrect") {
+				t.Errorf("mode=%s: expected API Key Incorrect error, got %q", mode, errStr)
+			}
+		})
+	}
+}
+
+// TestAuthRequiredForInfoModes_WrongKey covers the second half of the
+// v1.5.6 fix: a present-but-wrong apikey must also be rejected. The
+// pre-fix code returned the response body before ever consulting the
+// stored key, so a query like `?mode=get_config&apikey=anything` would
+// succeed. The fix gates all non-`version` modes on a strict equality
+// check.
+func TestAuthRequiredForInfoModes_WrongKey(t *testing.T) {
+	h, _ := testHandler(t)
+	req := httptest.NewRequest("GET", "/sabnzbd/api?mode=get_config&apikey=wrong", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["status"] != false {
+		t.Errorf("expected status:false on wrong apikey, got %s", w.Body.String())
 	}
 }
 
