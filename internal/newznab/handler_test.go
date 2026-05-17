@@ -1363,3 +1363,37 @@ func TestServeHTTP_AuthError100Body(t *testing.T) {
 		t.Errorf("body missing Invalid API Key description: %s", body)
 	}
 }
+
+// Regression for the "Sonarr finds N matches but downloads zero" bug:
+// every link/guid/enclosure in the feed must carry the apikey inline,
+// because Sonarr fetches the grab URL straight from the feed without
+// re-applying its configured key.
+func TestFeedURLsIncludeAPIKey(t *testing.T) {
+	h, st := newHandlerWithBBCProberAndStore(t, eastendersOneEpisodePayload, nil)
+	const seededKey = "test-secret-key"
+	if err := st.SetConfig("api_key", seededKey); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	req := httptest.NewRequest("GET",
+		"/newznab/api?t=tvsearch&q=eastenders&season=2026&ep=04%2F06&apikey="+seededKey, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<item>") {
+		t.Fatalf("expected at least one <item>, got:\n%s", body)
+	}
+
+	wantSuffix := "&amp;apikey=" + seededKey
+	for _, ln := range strings.Split(body, "\n") {
+		for _, marker := range []string{"<guid", "<link>", "<enclosure"} {
+			if strings.Contains(ln, marker) && !strings.Contains(ln, wantSuffix) {
+				t.Errorf("%s line missing apikey suffix:\n  %s", marker, strings.TrimSpace(ln))
+			}
+		}
+	}
+}

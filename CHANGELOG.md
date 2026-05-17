@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sonarr grab now succeeds: RSS feed URLs self-include the apikey.** The Newznab auth gate (added in the v1.1.x security hardening) required an `apikey` query param on every endpoint except `t=caps`, but the `<link>`, `<guid>` and `<enclosure>` URLs published inside the RSS feed by `writeResultsRSS` were never updated to carry one. Sonarr's grab-time HTTP fetch follows the URL straight from the feed without re-injecting credentials from its own indexer config, so every grab attempt hit a `401 Invalid API Key` and every result Sonarr "found" was silently dropped with a `Couldn't add release '<title>' from Indexer iplayer-arr to download queue` log line. To the user this looked like "iplayer-arr disconnects after N matches" because the search succeeded but no download ever started. `writeResultsRSS` now reads the seeded api_key from the store once and appends `&apikey=<key>` to all three published URLs. The empty-store case (used by tests with an unseeded key, which `authenticate()` short-circuits to allow anyway) emits the same key-less URLs as before, so no test or production behaviour is altered when no key is in use. Regression anchor: `TestFeedURLsIncludeAPIKey`.
+
 ## [1.5.5] - 2026-05-16
 
 Two GitHub bug reports filed against the v1.5.4 train. Both fixes

@@ -207,6 +207,16 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	var items []string
 	wantName := strings.TrimSpace(filterName)
 
+	// Sonarr applies its configured apikey to the initial tvsearch but
+	// fetches the grab URL straight from the feed, so every link/guid/
+	// enclosure has to carry the key inline or authenticate() 401s the grab.
+	apiKeyParam := ""
+	if h.store != nil {
+		if apiKey, _ := h.store.GetConfig("api_key"); apiKey != "" {
+			apiKeyParam = "&amp;apikey=" + apiKey
+		}
+	}
+
 	type filteredItem struct {
 		res  bbc.IBLResult
 		prog *store.Programme
@@ -335,15 +345,15 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 
 			item := fmt.Sprintf(`    <item>
       <title>%s</title>
-      <guid isPermaLink="true">%s/newznab/api?t=get&amp;id=%s</guid>
-      <link>%s/newznab/api?t=get&amp;id=%s</link>
+      <guid isPermaLink="true">%s/newznab/api?t=get&amp;id=%s%s</guid>
+      <link>%s/newznab/api?t=get&amp;id=%s%s</link>
       <pubDate>%s</pubDate>
-      <enclosure url="%s/newznab/api?t=get&amp;id=%s" length="%d" type="application/x-nzb" />
+      <enclosure url="%s/newznab/api?t=get&amp;id=%s%s" length="%d" type="application/x-nzb" />
       <newznab:attr name="category" value="%s" />
       <newznab:attr name="size" value="%d" />
       <newznab:attr name="language" value="en" />`,
-				html.EscapeString(title), baseURL(r), guid, baseURL(r), guid, pubDate,
-				baseURL(r), guid, size, cat, size)
+				html.EscapeString(title), baseURL(r), guid, apiKeyParam, baseURL(r), guid, apiKeyParam, pubDate,
+				baseURL(r), guid, apiKeyParam, size, cat, size)
 
 			if tvdbid != "" {
 				item += fmt.Sprintf("\n      <newznab:attr name=\"tvdbid\" value=\"%s\" />", tvdbid)
