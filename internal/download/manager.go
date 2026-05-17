@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
@@ -300,30 +302,42 @@ func (m *Manager) finaliseDownload(dl *store.Download) error {
 		return fmt.Errorf("ensure download dir: %w", err)
 	}
 
-	if _, err := os.Stat(finalDir); err == nil {
+	// v1.5.6 finalise rename: use the relocateNoReplace helper from
+	// worker.go so we get a kernel-atomic move with RENAME_NOREPLACE
+	// (closes the Stat+Rename TOCTOU that pre-v1.5.6 could lose under
+	// two finalises racing on the same safeTitle). The helper falls
+	// back to Stat+Rename on filesystems that don't support
+	// RENAME_NOREPLACE, so behaviour on exotic mounts is unchanged.
+	err := relocateNoReplace(dl.OutputDir, finalDir)
+	switch {
+	case err == nil:
+		// fast path; nothing else to do.
+	case errors.Is(err, unix.EEXIST):
 		return fmt.Errorf("finalise: target %s already exists", finalDir)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat target: %w", err)
-	}
-
-	if err := os.Rename(dl.OutputDir, finalDir); err != nil {
+	case isCrossDeviceLink(err):
 		// EXDEV ("invalid cross-device link") fires when incomplete/
 		// and the downloadDir are on different filesystems — this
 		// happens when incomplete/ is a tmpfs-backed staging area,
 		// an NFS sub-mount with a separate export, or a bind-mount
 		// pointed at a different volume. Fall back to copy + remove.
 		// Audit item 9.
-		if isCrossDeviceLink(err) {
-			if copyErr := copyDir(dl.OutputDir, finalDir); copyErr != nil {
-				_ = os.RemoveAll(finalDir) // partial copy
-				return fmt.Errorf("rename EXDEV fallback: %w", copyErr)
-			}
-			if rmErr := os.RemoveAll(dl.OutputDir); rmErr != nil {
-				log.Printf("EXDEV fallback: copy succeeded but cleanup of %s failed: %v", dl.OutputDir, rmErr)
-			}
-		} else {
-			return fmt.Errorf("rename %s -> %s: %w", dl.OutputDir, finalDir, err)
+		if copyErr := copyDir(dl.OutputDir, finalDir); copyErr != nil {
+			// v1.5.6: cleanup BOTH ends on copy failure. Pre-v1.5.6
+			// only removed `finalDir` (the partial destination) and
+			// left `dl.OutputDir` (the source) in place, so a retry
+			// that re-ran ffmpeg into the same incomplete dir could
+			// then succeed at the move and silently ship a truncated
+			// or mixed-state artefact. Force-clearing both ends
+			// makes a retry start clean.
+			_ = os.RemoveAll(finalDir)
+			_ = os.RemoveAll(dl.OutputDir)
+			return fmt.Errorf("rename EXDEV fallback: %w", copyErr)
 		}
+		if rmErr := os.RemoveAll(dl.OutputDir); rmErr != nil {
+			log.Printf("EXDEV fallback: copy succeeded but cleanup of %s failed: %v", dl.OutputDir, rmErr)
+		}
+	default:
+		return fmt.Errorf("rename %s -> %s: %w", dl.OutputDir, finalDir, err)
 	}
 
 	parent := filepath.Dir(dl.OutputDir) // the now-empty incomplete/ dir

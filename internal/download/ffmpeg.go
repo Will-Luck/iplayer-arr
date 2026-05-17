@@ -44,9 +44,22 @@ const ffmpegStderrTail = 8
 // appendDiagLine adds a non-empty, trimmed line to a ring-style
 // buffer capped at max entries. Older lines are evicted when the cap
 // is exceeded so callers always see the most recent context.
+//
+// Lines that LOOK like ffmpeg progress (start with `frame=`, `size=`,
+// `time=`, `bitrate=`, `out_time=`) are dropped even if parseProgress
+// rejected them. Pre-v1.5.6 a progress line that the regex didn't
+// recognise (e.g. ffmpeg-8.x emitting `time=` without `size=` for an
+// audio-only segment, or a partial flush before the size field
+// materialises) would fall through into diagLines and drown the
+// real error context in the tail. The diagnostic only matters when
+// ffmpeg actually died, so noise that looks like progress is more
+// dangerous here than missing one rare warning.
 func appendDiagLine(diag []string, line string, max int) []string {
 	line = strings.TrimSpace(line)
 	if line == "" {
+		return diag
+	}
+	if looksLikeProgressLine(line) {
 		return diag
 	}
 	diag = append(diag, line)
@@ -54,6 +67,36 @@ func appendDiagLine(diag []string, line string, max int) []string {
 		diag = diag[len(diag)-max:]
 	}
 	return diag
+}
+
+// looksLikeProgressLine reports whether line begins with one of
+// ffmpeg's progress field prefixes. The check is intentionally
+// generous: any line whose first token is a known progress field is
+// treated as progress regardless of whether parseProgress could pull
+// a full set of values from it. Used by appendDiagLine to keep
+// partial-progress noise out of the diagnostic tail. Audit follow-up
+// to GitHub issue #40.
+var progressFieldPrefixes = []string{
+	"frame=",
+	"fps=",
+	"size=",
+	"time=",
+	"bitrate=",
+	"speed=",
+	"out_time=",
+	"out_time_ms=",
+	"out_time_us=",
+	"dup=",
+	"drop=",
+}
+
+func looksLikeProgressLine(line string) bool {
+	for _, prefix := range progressFieldPrefixes {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // min returns the smaller of a and b.

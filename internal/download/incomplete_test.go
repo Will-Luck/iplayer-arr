@@ -91,5 +91,61 @@ func TestFinaliseDownload_MovesIncompleteToFinal(t *testing.T) {
 	}
 }
 
+// TestFinaliseDownload_TargetExists_RefusesToClobber pins the v1.5.6
+// switch from Stat+Rename to relocateNoReplace. Pre-v1.5.6 a Stat then
+// Rename pattern had a race window during which two finalises (same
+// safeTitle from different PIDs) could both see "not exists" and both
+// Rename, with the second silently clobbering the first. The new
+// implementation uses kernel-atomic RENAME_NOREPLACE so the second
+// finalise gets an explicit EEXIST and surfaces "target already
+// exists".
+func TestFinaliseDownload_TargetExists_RefusesToClobber(t *testing.T) {
+	dir := t.TempDir()
+	downloadDir := filepath.Join(dir, "downloads")
+	incompleteDir := filepath.Join(downloadDir, "incomplete", "Episode.S01E01")
+	finalDir := filepath.Join(downloadDir, "Episode.S01E01")
+
+	if err := os.MkdirAll(incompleteDir, 0o755); err != nil {
+		t.Fatalf("mkdir incomplete: %v", err)
+	}
+	// Pre-populate the final dir with someone else's content; the
+	// finalise call must refuse rather than overwrite.
+	if err := os.MkdirAll(finalDir, 0o755); err != nil {
+		t.Fatalf("mkdir final: %v", err)
+	}
+	earlier := filepath.Join(finalDir, "previous-finalise.mp4")
+	if err := os.WriteFile(earlier, []byte("earlier finalise"), 0o644); err != nil {
+		t.Fatalf("seed earlier: %v", err)
+	}
+
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	m := NewManager(st, downloadDir, 1, nil, nil, nil, nil)
+	dl := &store.Download{
+		ID:        "iparr_collide",
+		PID:       "b00col",
+		Title:     "Episode.S01E01",
+		OutputDir: incompleteDir,
+	}
+
+	err = m.finaliseDownload(dl)
+	if err == nil {
+		t.Fatal("finaliseDownload: expected error on existing target, got nil")
+	}
+	// Earlier file must still be there — no clobber.
+	body, readErr := os.ReadFile(earlier)
+	if readErr != nil || string(body) != "earlier finalise" {
+		t.Fatalf("earlier finalise was clobbered: body=%q err=%v", body, readErr)
+	}
+	// Incomplete dir must still be there so caller can decide how to recover.
+	if _, statErr := os.Stat(incompleteDir); statErr != nil {
+		t.Fatalf("incomplete dir was destroyed on conflict: %v", statErr)
+	}
+}
+
 // TestListDirectory_SkipsIncomplete is wired in api/directory_test.go;
 // this placeholder documents the cross-package dependency for issue #29.

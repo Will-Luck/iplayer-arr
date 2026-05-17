@@ -99,3 +99,84 @@ func TestAppendDiagLine_TailsAndTrims(t *testing.T) {
 		}
 	}
 }
+
+// TestAppendDiagLine_SkipsPartialProgressLines pins the v1.5.6 fix:
+// progress-looking lines that parseProgress rejected (because they
+// lack one of the required fields) must NOT pollute the diagnostic
+// tail. Pre-v1.5.6 a `time=` line with no `size=` (audio-only
+// segment, partial-flush before the size field materialises) would
+// fall through into diagLines and drown the real error context.
+func TestAppendDiagLine_SkipsPartialProgressLines(t *testing.T) {
+	const max = 3
+	var diag []string
+
+	// Eight progress-looking lines that the regex would reject because
+	// no single line has both `time=` AND `size=` together. None of
+	// these should land in the diagnostic tail.
+	noiseLines := []string{
+		"time=00:00:01.50 bitrate=128.0kbits/s",
+		"frame=  120 fps=30",
+		"size=N/A time=00:00:02.00",
+		"out_time_us=3000000",
+		"bitrate=  256.0kbits/s",
+		"speed=1.02x",
+		"dup=0 drop=2",
+		"out_time=00:00:04.00",
+	}
+	for _, line := range noiseLines {
+		diag = appendDiagLine(diag, line, max)
+	}
+	if len(diag) != 0 {
+		t.Fatalf("progress-shaped lines polluted tail: %v", diag)
+	}
+
+	// A real error sandwiched between progress noise must survive.
+	for _, line := range []string{
+		"time=00:00:05.00 bitrate=128.0kbits/s",
+		"[hls @ 0x55] HTTP error 403 Forbidden",
+		"size=  512KiB time=00:00:06.00",
+	} {
+		diag = appendDiagLine(diag, line, max)
+	}
+	if len(diag) != 1 || diag[0] != "[hls @ 0x55] HTTP error 403 Forbidden" {
+		t.Errorf("real error lost in progress noise: %v", diag)
+	}
+}
+
+// TestLooksLikeProgressLine_KnownPrefixes locks the prefix list so a
+// future field rename (e.g. ffmpeg 9 adding `out_time_ns=`) is caught
+// here rather than by silently letting noise back into the diag tail.
+func TestLooksLikeProgressLine_KnownPrefixes(t *testing.T) {
+	progress := []string{
+		"frame=120",
+		"fps=29.97",
+		"size= 1024KiB",
+		"time=00:00:01.00",
+		"bitrate=128kbits/s",
+		"speed=1.0x",
+		"out_time=00:00:01.00",
+		"out_time_ms=1000",
+		"out_time_us=1000000",
+		"dup=0",
+		"drop=0",
+	}
+	for _, line := range progress {
+		if !looksLikeProgressLine(line) {
+			t.Errorf("looksLikeProgressLine(%q) = false, want true", line)
+		}
+	}
+
+	notProgress := []string{
+		"[hls @ 0x55] HTTP error 403 Forbidden",
+		"Conversion failed!",
+		"Error opening input file",
+		"Output #0, mp4, to '/downloads/x.mp4':",
+		"",
+		"random text",
+	}
+	for _, line := range notProgress {
+		if looksLikeProgressLine(line) {
+			t.Errorf("looksLikeProgressLine(%q) = true, want false", line)
+		}
+	}
+}
