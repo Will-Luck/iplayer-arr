@@ -18,6 +18,12 @@ permissions:
 jobs:
   check-and-rebuild:
     runs-on: ubuntu-latest
+    # Hard cap: defends against the docker/build-push-action step-11 hang
+    # observed 2026-05-10 (6h05m before user cancel) and 2026-05-17 (~40m
+    # before user cancel). Healthy runs finish in 5-6 min; 25 min gives
+    # generous headroom for legitimate slow builds while bounding a hang
+    # to a single billable instance. See issue #40.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
