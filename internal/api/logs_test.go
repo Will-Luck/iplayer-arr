@@ -130,6 +130,68 @@ drain:
 	}
 }
 
+// TestRingBufferUrgentBypassesBucket pins the v1.5.6 fix: error and
+// fatal level entries broadcast even when the token bucket is empty.
+// Pre-v1.5.6 the panic stack written via log.SetOutput(multiWriter)
+// (cmd/iplayer-arr/main.go) was rate-limited along with chatter, so
+// a startup burst (>20 lines/second) could silently drop the
+// operator's last clue before death.
+func TestRingBufferUrgentBypassesBucket(t *testing.T) {
+	hub := NewHub()
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	rb := NewRingBuffer(200)
+
+	// Exhaust the token bucket with an info burst (these get rate-limited).
+	for i := 0; i < broadcastBudget*2; i++ {
+		rb.Add(LogEntry{Level: "info", Message: fmt.Sprintf("chatter-%d", i)}, hub)
+	}
+
+	// Drain whatever the hub delivered so we can isolate the next batch.
+	drainHub := func() int {
+		n := 0
+		for {
+			select {
+			case <-ch:
+				n++
+			case <-time.After(20 * time.Millisecond):
+				return n
+			}
+		}
+	}
+	_ = drainHub()
+
+	// Now emit an error and a fatal. Bucket is empty, so a metered
+	// entry would NOT be broadcast. These MUST go through.
+	rb.Add(LogEntry{Level: "error", Message: "panic: divide by zero"}, hub)
+	rb.Add(LogEntry{Level: "fatal", Message: "goroutine 1 [running]:"}, hub)
+	rb.Add(LogEntry{Level: "info", Message: "should-be-dropped"}, hub)
+
+	delivered := drainHub()
+	if delivered != 2 {
+		t.Errorf("delivered = %d, want 2 (error + fatal must bypass bucket; info must stay metered)", delivered)
+	}
+}
+
+// TestIsUrgentLevel locks the bypass whitelist. `warn` stays metered
+// because a warn-flood is a known shape (single failing op in a tight
+// retry loop) and dropping the tail is right for that.
+func TestIsUrgentLevel(t *testing.T) {
+	urgent := []string{"error", "fatal", "ERROR", "Fatal"}
+	for _, level := range urgent {
+		if !isUrgentLevel(level) {
+			t.Errorf("isUrgentLevel(%q) = false, want true", level)
+		}
+	}
+	metered := []string{"info", "warn", "warning", "debug", "trace", ""}
+	for _, level := range metered {
+		if isUrgentLevel(level) {
+			t.Errorf("isUrgentLevel(%q) = true, want false", level)
+		}
+	}
+}
+
 // TestRingBufferBroadcastRefill verifies that the bucket refills at
 // the start of a new window so steady-state logging still streams.
 func TestRingBufferBroadcastRefill(t *testing.T) {

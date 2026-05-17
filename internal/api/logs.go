@@ -66,6 +66,13 @@ func (rb *RingBuffer) takeBroadcastToken(now time.Time) bool {
 // Add appends a log entry. When the buffer is full, the oldest entry is
 // overwritten. After storing, the entry is broadcast as a log:line SSE event
 // if a hub is provided and the broadcast budget allows it.
+//
+// `error` and `fatal` level entries BYPASS the broadcast token bucket
+// so that a startup burst (> 20 lines/second) does not silently drop
+// the operator's last clue before death. Pre-v1.5.6 every entry —
+// including the panic stack written via `log.SetOutput(multiWriter)`
+// in cmd/iplayer-arr/main.go — went through the same per-second
+// budget. Audit follow-up.
 func (rb *RingBuffer) Add(e LogEntry, hub *Hub) {
 	rb.mu.Lock()
 	idx := (rb.start + rb.count) % rb.cap
@@ -76,12 +83,26 @@ func (rb *RingBuffer) Add(e LogEntry, hub *Hub) {
 		// overwrite oldest -- advance start pointer
 		rb.start = (rb.start + 1) % rb.cap
 	}
-	shouldBroadcast := rb.takeBroadcastToken(time.Now())
+	urgent := isUrgentLevel(e.Level)
+	shouldBroadcast := urgent || rb.takeBroadcastToken(time.Now())
 	rb.mu.Unlock()
 
 	if hub != nil && shouldBroadcast {
 		hub.Broadcast("log:line", e)
 	}
+}
+
+// isUrgentLevel reports whether a log level should bypass the
+// broadcast token bucket. Conservative whitelist: `error` and
+// `fatal` only. `warn` stays metered because a warn-flood is a
+// known shape (a single failing operation retried in a tight loop)
+// and dropping the tail is the right behaviour for that case.
+func isUrgentLevel(level string) bool {
+	switch strings.ToLower(level) {
+	case "error", "fatal":
+		return true
+	}
+	return false
 }
 
 // Entries returns a copy of all stored log entries in insertion order (oldest
