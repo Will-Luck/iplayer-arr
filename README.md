@@ -5,6 +5,8 @@
 <p align="center">BBC iPlayer download manager that plugs into Sonarr as both an indexer and download client.</p>
 
 [![CI](https://github.com/Will-Luck/iplayer-arr/actions/workflows/ci.yml/badge.svg)](https://github.com/Will-Luck/iplayer-arr/actions/workflows/ci.yml)
+<!-- Gitea is the upstream CI (LAN-only); the badge below only renders inside the maintainer's network. External readers can ignore it. -->
+[![Gitea CI](http://192.168.1.57:62400/GiteaLN/iplayer-arr/actions/workflows/ci.yml/badge.svg)](http://192.168.1.57:62400/GiteaLN/iplayer-arr/actions)
 [![Release](https://img.shields.io/github/v/release/Will-Luck/iplayer-arr)](https://github.com/Will-Luck/iplayer-arr/releases)
 [![Licence](https://img.shields.io/github/license/Will-Luck/iplayer-arr)](LICENSE)
 [![GHCR](https://img.shields.io/badge/ghcr.io-will--luck%2Fiplayer--arr-blue?logo=github)](https://github.com/Will-Luck/iplayer-arr/pkgs/container/iplayer-arr)
@@ -100,6 +102,8 @@ See the [Wiki](https://github.com/Will-Luck/iplayer-arr/wiki) for:
 - [Episode Overrides](https://github.com/Will-Luck/iplayer-arr/wiki/Episode-Overrides) (fixing numbering mismatches)
 - [REST API Reference](https://github.com/Will-Luck/iplayer-arr/wiki/REST-API-Reference)
 - [Troubleshooting](https://github.com/Will-Luck/iplayer-arr/wiki/Troubleshooting)
+
+In-tree: [`docs/testing.md`](docs/testing.md) for the diag endpoints and regression-anchor pattern used in CI.
 
 ## Legal
 

@@ -163,6 +163,7 @@ func main() {
 	mux.Handle("/newznab/", nzHandler)
 	sabHandler := sabnzbd.NewHandler(st, mgr)
 	sabHandler.DownloadDir = downloadDir
+	apiHandler.SetSABHandler(sabHandler)
 	mux.Handle("/sabnzbd/", sabHandler)
 	mux.Handle("/api/", apiHandler)
 

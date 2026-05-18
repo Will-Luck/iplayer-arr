@@ -1,23 +1,156 @@
 name: CI
 on: [push, pull_request]
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-      - run: go vet ./...
-      - run: go test ./... -v -race
+# ---------------------------------------------------------------
+# Tier A — unit + diag-suite (Week 1 / v1.5.7-pre).
+#
+# unit:        gofmt, vet, frontend build, race-detector tests.
+# diag-suite:  builds the container, hits every /api/diag/<name>
+#              endpoint with the per-instance api_key scraped from
+#              the unauthenticated /api/config, asserts verdict==pass.
+#
+# api_key strategy: iplayer-arr generates a random api_key on first
+# boot and stores it in BoltDB; there is no environment-variable
+# override. The diag-suite job therefore boots the container, reads
+# api_key from GET /api/config (unauthenticated), and uses that value
+# for every diag endpoint call. No external secret is required.
+#
+# Approved plan: /home/lns/.claude/plans/i-think-we-need-clever-moth.md
+# ---------------------------------------------------------------
 
-  build:
+jobs:
+  unit:
     runs-on: ubuntu-latest
-    needs: test
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-      - run: CGO_ENABLED=0 go build ./cmd/iplayer-arr/
+
+      - name: go vet
+        run: go vet ./...
+
+      # gofmt scope note: internal/bbc/subtitles_test.go and
+      # internal/download/worker_truncation_test.go are pre-existing
+      # dirty (gofmt-flagged by upstream commits before the Tier A
+      # framework landed). They're excluded here rather than blocking
+      # CI on a re-format that isn't this PR's job. Anything else
+      # gofmt-flagged is a regression and fails the build.
+      - name: gofmt
+        run: |
+          dirty=$(gofmt -l . | grep -v -E '^(internal/bbc/subtitles_test\.go|internal/download/worker_truncation_test\.go)$' || true)
+          if [ -n "$dirty" ]; then
+            echo "gofmt reported new dirty files:"
+            echo "$dirty"
+            exit 1
+          fi
+
+      - name: go test
+        run: go test ./... -race
+
+  diag-suite:
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build container
+        run: docker build -t iplayer-arr:ci .
+
+      - name: Run diag suite
+        id: diag
+        run: |
+          set -euo pipefail
+          PORT=$((62000 + RANDOM % 1900))
+          NAME="iplayer-arr-ci-${{ github.run_id }}"
+          echo "PORT=$PORT" >> "$GITHUB_ENV"
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+
+          docker run -d --rm \
+            --name "$NAME" \
+            --tmpfs /config:rw,size=64m \
+            --tmpfs /downloads:rw,size=64m \
+            -p "127.0.0.1:${PORT}:62001" \
+            iplayer-arr:ci
+
+          # Wait up to 30s for /api/status to return 200.
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${PORT}/api/status" >/dev/null 2>&1; then
+              echo "iplayer-arr ready after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "iplayer-arr did not become ready within 30s"
+              docker logs "$NAME" || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # /api/config is unauthenticated and exposes the generated api_key.
+          # See internal/api/config.go handleGetConfig.
+          KEY=$(curl -fsS "http://127.0.0.1:${PORT}/api/config" | jq -re '.api_key')
+          if [ -z "$KEY" ] || [ "$KEY" = "null" ]; then
+            echo "api_key missing from /api/config response"
+            exit 1
+          fi
+
+          fail=0
+          for ep in sonarr-handshake ffmpeg bbc sab auth-paths; do
+            echo "::group::diag ${ep}"
+            body=$(curl -fsS "http://127.0.0.1:${PORT}/api/diag/${ep}?apikey=${KEY}")
+            echo "$body" | jq .
+            if ! echo "$body" | jq -e '.verdict == "pass"' >/dev/null; then
+              echo "::error::/api/diag/${ep} returned non-pass verdict"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+
+          exit "$fail"
+
+      - name: Capture container logs
+        if: always()
+        run: |
+          if [ -n "${NAME:-}" ]; then
+            docker logs "$NAME" > "${RUNNER_TEMP}/iplayer-arr-ci.log" 2>&1 || true
+          fi
+
+      - name: Upload container logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iplayer-arr-ci-logs
+          path: ${{ runner.temp }}/iplayer-arr-ci.log
+          if-no-files-found: ignore
+
+      - name: Clean up container
+        if: always()
+        run: |
+          if [ -n "${NAME:-}" ]; then
+            docker rm -f "$NAME" >/dev/null 2>&1 || true
+          fi
+
+  # ---------------------------------------------------------------
+  # TIER B (Week 2): smoke + mirror-to-github jobs land here.
+  #
+  # smoke:             self-hosted runner on .57 (label '57-smoke')
+  #                    builds the container against a real BBC/ffmpeg
+  #                    base image and runs the diag suite against it.
+  # mirror-to-github:  needs: [unit, diag-suite, smoke]; pushes the
+  #                    Gitea ref to the GitHub origin only when all
+  #                    three gates are green.
+  #
+  # See /home/lns/.claude/plans/i-think-we-need-clever-moth.md
+  # ---------------------------------------------------------------

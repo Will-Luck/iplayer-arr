@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Four new auth-gated `/api/diag/*` regression-anchor endpoints.** Each synthesises an integration round-trip in-process via `httptest.NewRecorder` and returns a `verdict: pass|fail` JSON report with per-component detail. Modelled on the existing `/api/diag/sonarr-handshake` from v1.5.6 and intended as permanent CI assertions, not throwaway probes.
+  - `GET /api/diag/ffmpeg`: invokes `ffmpeg -version`, parses a synthetic 8.x `KiB`-form progress line through `download.ParseProgress`, and asserts the regex matches both `kB` and `KiB` units. The exact assertion that would have failed v1.5.5 in CI. Regression anchor: `TestDiagFfmpeg_DetectsRegression` reproduces the `kB`-only regex and asserts `verdict: fail`.
+  - `GET /api/diag/bbc`: drives the live IBL search via an injectable `bbcProbe` (production wires the real `bbc.Client`; tests inject a fake) with a known-good tvdbid and asserts the response shape carries both brand and episode information. Catches BBC API shape changes early.
+  - `GET /api/diag/sab`: synthesises each SABnzbd-compat mode (`version`, `queue`, `history`, `get_cats`, `get_config`, `fullstatus`) against the live SAB handler both with and without the apikey. Asserts `version` is the only unauthenticated carve-out and every other mode rejects key-less requests while accepting keyed ones. Catches the v1.5.5-class apikey-threading regressions (`get_config` leaking `complete_dir` on the LAN was the worst case).
+  - `GET /api/diag/auth-paths`: drives three synthetic requests through `authenticate()` and asserts `?apikey=`, `Authorization: Bearer`, and `X-Api-Key` all resolve identically. Catches the test/prod auth drift that hid the v1.5.5 chain (tests relied on `X-Api-Key`; production rejected it).
+- **`authenticate()` widened to accept `X-Api-Key`.** Three accepted mechanisms now: `?apikey=` query parameter, `Authorization: Bearer <key>`, and `X-Api-Key: <key>` header. Closes the test/prod drift: prior to this change, integration tests passed against a code path production rejected. The `/api/diag/auth-paths` endpoint asserts the invariant going forward.
+- **Gitea Actions `unit` + `diag-suite` jobs.** `.gitea/workflows/ci.yml` runs `go test ./... -race` then builds the container, brings it up on a random high port, and curls every `/api/diag/*` endpoint asserting `verdict == "pass"`. Branch protection requiring both jobs green is enabled in a follow-up commit; see `docs/testing.md` for the framework rationale.
+
 ## [1.5.6] - 2026-05-17
 
 Bundled release. Closes out the v1.5.5 regression chain (issue #40, both the apparent `ffmpeg exit status 251` symptom and the follow-up Sonarr `401 Invalid API Key`), folds in the post-v1.5.5 audit findings that were validated against real code (~23% of the agent-flagged items were false positives; only the verified ones are listed below), and adds the first iplayer-arr diagnostic endpoint so this entire regression class becomes catchable in CI from now on.

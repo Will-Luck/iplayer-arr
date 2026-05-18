@@ -64,6 +64,18 @@ type Handler struct {
 	// newznab handler depends on prober which depends on bbcClient,
 	// so it's constructed after the api handler).
 	newznabHandler http.Handler
+
+	// sabHandler is the live sabnzbd.Handler used by /api/diag/sab to
+	// synthesise SABnzbd requests in-process. Wired via SetSABHandler
+	// from main.go.
+	sabHandler http.Handler
+
+	// bbcProbe is the injection point for /api/diag/bbc. Production
+	// leaves it nil; the handler falls back to defaultBBCProbe which
+	// drives the live IBL client. Tests override it via setBBCProbe
+	// to drive happy-path and broken-shape scenarios from in-process
+	// fakes without touching the network.
+	bbcProbe diagBBCProbe
 }
 
 // SetNewznabHandler wires the live newznab handler in so the
@@ -73,6 +85,14 @@ type Handler struct {
 // a degraded verdict when newznabHandler is nil.
 func (h *Handler) SetNewznabHandler(nzh http.Handler) {
 	h.newznabHandler = nzh
+}
+
+// SetSABHandler wires the live sabnzbd.Handler in so the
+// /api/diag/sab endpoint can probe SAB modes in-process. Safe to
+// leave unset in tests; the diag handler degrades gracefully when
+// sabHandler is nil.
+func (h *Handler) SetSABHandler(sh http.Handler) {
+	h.sabHandler = sh
 }
 
 // RecordIndexerRequest records the current time as the most recent Newznab
@@ -161,28 +181,52 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGeoCheck(w, r)
 	case path == "/api/diag/sonarr-handshake" && r.Method == "GET":
 		h.handleDiagSonarrHandshake(w, r)
+	case path == "/api/diag/ffmpeg" && r.Method == "GET":
+		h.handleDiagFfmpeg(w, r)
+	case path == "/api/diag/bbc" && r.Method == "GET":
+		h.handleDiagBBC(w, r)
+	case path == "/api/diag/sab" && r.Method == "GET":
+		h.handleDiagSAB(w, r)
+	case path == "/api/diag/auth-paths" && r.Method == "GET":
+		h.handleDiagAuthPaths(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
 }
 
-// authenticate checks the apikey query param or Authorization: Bearer header.
+// authenticate validates the request against the persisted api_key.
+// Three mechanisms are accepted, in order:
+//
+//  1. `?apikey=<key>` query parameter — Sonarr's default and how /newznab
+//     callers are configured.
+//  2. `Authorization: Bearer <key>` header — operator-set scripts and
+//     dashboards that prefer header-borne secrets to query-string leakage.
+//  3. `X-Api-Key: <key>` header — arr-stack convention (Sonarr, Radarr,
+//     Lidarr all expose this); widened in v1.5.7 so the test suite and
+//     operator habits no longer diverge from production behaviour.
+//
+// The diag endpoint /api/diag/auth-paths asserts this invariant against
+// the running binary so silent drift can't recur.
 func (h *Handler) authenticate(r *http.Request) bool {
 	storedKey, _ := h.store.GetConfig("api_key")
 	if storedKey == "" {
 		return false
 	}
 
-	// Check query param
 	if key := r.URL.Query().Get("apikey"); key == storedKey {
 		return true
 	}
 
-	// Check Authorization header
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
 		token := strings.TrimPrefix(auth, "Bearer ")
-		return token == storedKey
+		if token == storedKey {
+			return true
+		}
+	}
+
+	if key := r.Header.Get("X-Api-Key"); key == storedKey {
+		return true
 	}
 
 	return false

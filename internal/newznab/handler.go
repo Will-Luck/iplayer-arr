@@ -72,14 +72,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// authenticate compares the request's apikey query param or
-// Authorization: Bearer header to the value persisted in the store.
-// A nil store, or a stored key that hasn't been seeded yet, short-
-// circuits to true. Production main.go seeds the api_key on every
-// startup before the HTTP server begins accepting connections, so
-// the unseeded case is only ever hit in tests that build a real
-// store but don't bother to write the key. Defence: the operator
-// should never see an unseeded key in production logs.
+// authenticate compares the request's apikey query param,
+// Authorization: Bearer header, or X-Api-Key header to the value
+// persisted in the store. A nil store, or a stored key that hasn't
+// been seeded yet, short-circuits to true. Production main.go seeds
+// the api_key on every startup before the HTTP server begins accepting
+// connections, so the unseeded case is only ever hit in tests that
+// build a real store but don't bother to write the key. Defence: the
+// operator should never see an unseeded key in production logs.
+//
+// X-Api-Key support is the arr-stack convention (Sonarr, Radarr, Lidarr
+// all expose it). Widened in v1.5.7 to match the api.Handler.authenticate
+// contract; see /api/diag/auth-paths for the running-binary assertion.
 func (h *Handler) authenticate(r *http.Request) bool {
 	if h.store == nil {
 		return true
@@ -92,8 +96,11 @@ func (h *Handler) authenticate(r *http.Request) bool {
 		return true
 	}
 	auth := r.Header.Get("Authorization")
-	if len(auth) > 7 && auth[:7] == "Bearer " {
-		return auth[7:] == storedKey
+	if len(auth) > 7 && auth[:7] == "Bearer " && auth[7:] == storedKey {
+		return true
+	}
+	if key := r.Header.Get("X-Api-Key"); key == storedKey {
+		return true
 	}
 	return false
 }

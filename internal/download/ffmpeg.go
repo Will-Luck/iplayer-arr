@@ -141,6 +141,16 @@ func parseProgress(line string) (FFmpegProgress, bool) {
 	return p, true
 }
 
+// ParseProgress is the exported wrapper around parseProgress. Exposed
+// in v1.5.7 so the /api/diag/ffmpeg endpoint can assert the
+// production regex still matches the current ffmpeg progress shape
+// without duplicating the regex into the diag package and inviting
+// drift. Returns the parsed progress + a boolean indicating whether
+// the line matched both the time= and size= regex groups.
+func ParseProgress(line string) (FFmpegProgress, bool) {
+	return parseProgress(line)
+}
+
 // downloaderFHDProber is the single method resolveHLSVariant needs
 // from bbc.Client. Kept as a local interface so ffmpeg_hls_test.go can
 // inject a fake without importing bbc. *bbc.Client satisfies this

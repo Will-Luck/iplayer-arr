@@ -20,7 +20,7 @@ import (
 //
 // Example use:
 //
-//	curl -s "http://localhost:8191/api/diag/sonarr-handshake?apikey=$KEY" | jq .verdict
+//	curl -s "http://localhost:62001/api/diag/sonarr-handshake?apikey=$KEY" | jq .verdict
 //	# "pass" or "fail"
 //	# Inspect .checks_failed for any failure reasons.
 //
