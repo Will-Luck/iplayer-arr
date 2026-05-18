@@ -76,6 +76,20 @@ type Handler struct {
 	// to drive happy-path and broken-shape scenarios from in-process
 	// fakes without touching the network.
 	bbcProbe diagBBCProbe
+
+	// storageProbe / networkProbe / clockHeadDate / nowFn are injection
+	// points for the v1.5.7 environment-health diag endpoints
+	// (/api/diag/storage, /api/diag/clock, /api/diag/network,
+	// /api/diag/geo). Production leaves each nil; the handlers fall
+	// back to defaults that perform real filesystem / network / time
+	// operations. Tests inject deterministic fakes to drive happy-path
+	// and per-failure-mode scenarios without touching real systems.
+	// nowFn is shared between A.9 (geo cache age) and A.11 (clock).
+	// clockHeadDate is A.11-only.
+	storageProbe  diagStoragePathProbe
+	networkProbe  diagNetworkHostProbe
+	clockHeadDate clockHeadDateFunc
+	nowFn         func() time.Time
 }
 
 // SetNewznabHandler wires the live newznab handler in so the
@@ -189,6 +203,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDiagSAB(w, r)
 	case path == "/api/diag/auth-paths" && r.Method == "GET":
 		h.handleDiagAuthPaths(w, r)
+	case path == "/api/diag/storage" && r.Method == "GET":
+		h.handleDiagStorage(w, r)
+	case path == "/api/diag/clock" && r.Method == "GET":
+		h.handleDiagClock(w, r)
+	case path == "/api/diag/geo" && r.Method == "GET":
+		h.handleDiagGeo(w, r)
+	case path == "/api/diag/network" && r.Method == "GET":
+		h.handleDiagNetwork(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}

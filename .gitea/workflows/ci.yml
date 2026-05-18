@@ -129,8 +129,12 @@ jobs:
             exit 1
           fi
 
+          # storage joins the v1.5.6 set here in diag-suite (it works in a
+          # CI container against a tmpfs /downloads thanks to the tmpfs
+          # free-space carve-out). network / geo / clock are smoke-only:
+          # they need real outbound that the CI container doesn't have.
           fail=0
-          for ep in sonarr-handshake ffmpeg bbc sab auth-paths; do
+          for ep in sonarr-handshake ffmpeg bbc sab auth-paths storage; do
             echo "::group::diag ${ep}"
             body=$(curl -fsS "http://${HOST_IP}:${PORT}/api/diag/${ep}?apikey=${KEY}")
             echo "$body" | jq .
@@ -248,8 +252,13 @@ jobs:
       - name: Probe diag endpoints against real binaries
         run: |
           set -euo pipefail
+          # smoke gets the full env-health set: the v1.5.6 regression
+          # anchors plus the v1.5.7 environment-health endpoints
+          # (storage, network, geo, clock). The latter four need real
+          # outbound + a healthy host clock that the smoke runner has
+          # but the CI container doesn't.
           fail=0
-          for ep in sonarr-handshake ffmpeg bbc sab auth-paths; do
+          for ep in sonarr-handshake ffmpeg bbc sab auth-paths storage network geo clock; do
             echo "::group::smoke diag ${ep}"
             body=$(curl -fsS "http://${HOST_IP}:${PORT}/api/diag/${ep}?apikey=${KEY}")
             echo "$body" | jq .
