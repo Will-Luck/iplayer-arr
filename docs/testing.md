@@ -87,34 +87,33 @@ Branch protection on `main` blocks merge when either job fails. The intent is th
 
 See `.gitea/workflows/ci.yml` for the workflow definition and `scripts/smoke-test.sh` for the parameterised container probe `diag-suite` runs locally.
 
-## The Tier B pipeline (smoke pre-mirror gate)
+## The Tier B pipeline (auto-mirror gate)
 
-Tier A catches code-level regressions. Tier B catches image-level regressions — the class of failure where the *code* is correct but the deployed *binary* is broken. The v1.5.5 ffmpeg incident is the canonical example: the regex parsed `kB` correctly, but the production image rolled to ffmpeg 8.x which emits `KiB`, and no Tier A test would ever notice because Tier A doesn't run against the production binary.
+Tier B adds two jobs that run on push to `main` (not on PRs):
 
-Two new jobs run on every push to `main` (not on PRs):
+3. `smoke` runs on the self-hosted `57-smoke` runner (`gitea-runner-smoke` container on `.57`). It builds the production image, brings up a container, and curls every `/api/diag/*` endpoint against the live binary. Logically identical to `diag-suite`, but executed on a separately-labelled runner that can be moved or hardened in the future.
+4. `mirror-to-github` runs only after `unit`, `diag-suite`, and `smoke` are all green. It pushes the gitea ref to the GitHub mirror via a PAT stored as the Gitea Actions secret `GH_PAT`. This replaces the manual `git push github main` step and means the GitHub mirror reflects whatever last passed the full CI pipeline — never an unverified push.
 
-3. `smoke` runs on the self-hosted `57-smoke` runner. It builds the production image with no shortcuts, brings up a container with real ffmpeg, real get_iplayer, and real outbound BBC reachability, then curls every `/api/diag/*` endpoint against the live container. A diag verdict of `fail` blocks the pipeline.
-4. `mirror-to-github` runs only after `unit`, `diag-suite`, and `smoke` are all green. It pushes the gitea ref to the GitHub mirror via a PAT stored as the Gitea Actions secret `GH_PAT`. This replaces the manual `git push github main` step.
+The split is deliberate: PRs run only the code-level gates (`unit`, `diag-suite`); `smoke` + `mirror-to-github` only run on main push, after the merge has already happened. If smoke fails on a main push, the gitea ref is updated but the github mirror is not — the fix is to roll forward (push another commit that passes smoke) or revert, never to bypass the gate manually.
 
-The split is deliberate. PRs do not run `smoke` — they only need code-level gates. `smoke` is the pre-release gate, asserted on what would otherwise be the moment of public exposure.
+### What Tier B uniquely provides
 
-If smoke fails on `main` after a merge, the gitea ref is updated but the github mirror is not. The fix is to roll forward (push another commit that passes smoke) or revert; never to bypass the gate manually.
+- **Auto-mirror gate.** The `needs: [unit, diag-suite, smoke]` dependency means gitea cannot push to github unless every gate is green. Removes the manual `git push github main` step from the release workflow — which was the original trigger for this framework after the v1.5.5 regression chain.
+- **Label-scoped runner.** `57-smoke` is its own runner instance with its own attack surface, ready to be moved off `.57` (e.g. to a test-cluster node) or scoped to genuinely-different probes (real outbound network from a different host) without disturbing Tier A.
 
-### What Tier B catches that Tier A cannot
+### What Tier B does NOT uniquely provide (since the `/api/diag/*` endpoints are real-binary probes)
 
-- Base image rolls (ffmpeg upgrade renames a unit, alpine drops a package).
-- Dockerfile drift (an `apt-get install` line silently loses a binary).
-- Network policy regressions (CI passes against a sibling container; smoke runs the actual deployment and would notice if the container can no longer reach external services).
-- Get-iplayer version drift (the version pinned in `go-iplayer-deps/` no longer behaves as expected).
+The diag endpoints in `internal/api/diag_extra.go` invoke real binaries against the running container (e.g. `/api/diag/ffmpeg` calls `exec.Command("ffmpeg", "-version")`). Tier A's `diag-suite` builds the production image and runs those endpoints, so it already catches the class of failure originally framed as Tier B's domain:
 
-### What Tier B does not catch
+- Base image rolls that drop a binary (e.g. ffmpeg, get_iplayer).
+- Dockerfile drift that silently breaks an `apk add` line.
+- `get_iplayer` version drift, when the diag probe checks the version range.
 
-- Production-only state. Tier B starts with a fresh tmpfs config; bugs that only manifest with months of accumulated state are Tier C's job (deferred).
-- Real Sonarr integration. The `/api/diag/sonarr-handshake` endpoint synthesises the handshake in-process; the actual `Sonarr → newznab → grab → file lands` round-trip is Tier C.
+If a future regression needs genuinely-different probes — e.g. real outbound network from a different host, or DNS-resolution coverage that the runner sibling network can't provide — those would be net-new endpoints (`/api/smoke/*`) only the smoke runner exercises.
 
 ### Adversarial verification
 
-Tier B was validated by deliberately dropping `ffmpeg` from the Dockerfile on a feature branch and confirming: `unit` green, `diag-suite` green (the diag-suite job uses sibling DinD; ffmpeg is still on the runner image), `smoke` RED, `mirror-to-github` skipped. The output of that run is the answer to "what would Tier B have caught if v1.5.5 happened today?".
+Tier B was validated 2026-05-18 by dropping `ffmpeg` from the Dockerfile on a throw-away branch. Result: `unit` green, `diag-suite` RED at `/api/diag/ffmpeg` (correctly: `verdict: fail`, `error: exec: "ffmpeg": executable file not found in $PATH`), `smoke` skipped (didn't run because diag-suite was in its `needs`), `mirror-to-github` skipped. The GitHub mirror stayed at the previous good SHA. End-to-end protection works as designed; the failure surfaced one layer earlier than originally framed because the diag endpoints already probe real binaries.
 
 ## Adding a new diag endpoint
 
