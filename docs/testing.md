@@ -87,6 +87,35 @@ Branch protection on `main` blocks merge when either job fails. The intent is th
 
 See `.gitea/workflows/ci.yml` for the workflow definition and `scripts/smoke-test.sh` for the parameterised container probe `diag-suite` runs locally.
 
+## The Tier B pipeline (smoke pre-mirror gate)
+
+Tier A catches code-level regressions. Tier B catches image-level regressions — the class of failure where the *code* is correct but the deployed *binary* is broken. The v1.5.5 ffmpeg incident is the canonical example: the regex parsed `kB` correctly, but the production image rolled to ffmpeg 8.x which emits `KiB`, and no Tier A test would ever notice because Tier A doesn't run against the production binary.
+
+Two new jobs run on every push to `main` (not on PRs):
+
+3. `smoke` runs on the self-hosted `57-smoke` runner. It builds the production image with no shortcuts, brings up a container with real ffmpeg, real get_iplayer, and real outbound BBC reachability, then curls every `/api/diag/*` endpoint against the live container. A diag verdict of `fail` blocks the pipeline.
+4. `mirror-to-github` runs only after `unit`, `diag-suite`, and `smoke` are all green. It pushes the gitea ref to the GitHub mirror via a PAT stored as the Gitea Actions secret `GH_PAT`. This replaces the manual `git push github main` step.
+
+The split is deliberate. PRs do not run `smoke` — they only need code-level gates. `smoke` is the pre-release gate, asserted on what would otherwise be the moment of public exposure.
+
+If smoke fails on `main` after a merge, the gitea ref is updated but the github mirror is not. The fix is to roll forward (push another commit that passes smoke) or revert; never to bypass the gate manually.
+
+### What Tier B catches that Tier A cannot
+
+- Base image rolls (ffmpeg upgrade renames a unit, alpine drops a package).
+- Dockerfile drift (an `apt-get install` line silently loses a binary).
+- Network policy regressions (CI passes against a sibling container; smoke runs the actual deployment and would notice if the container can no longer reach external services).
+- Get-iplayer version drift (the version pinned in `go-iplayer-deps/` no longer behaves as expected).
+
+### What Tier B does not catch
+
+- Production-only state. Tier B starts with a fresh tmpfs config; bugs that only manifest with months of accumulated state are Tier C's job (deferred).
+- Real Sonarr integration. The `/api/diag/sonarr-handshake` endpoint synthesises the handshake in-process; the actual `Sonarr → newznab → grab → file lands` round-trip is Tier C.
+
+### Adversarial verification
+
+Tier B was validated by deliberately dropping `ffmpeg` from the Dockerfile on a feature branch and confirming: `unit` green, `diag-suite` green (the diag-suite job uses sibling DinD; ffmpeg is still on the runner image), `smoke` RED, `mirror-to-github` skipped. The output of that run is the answer to "what would Tier B have caught if v1.5.5 happened today?".
+
 ## Adding a new diag endpoint
 
 When a new external integration lands (a new download client, a new metadata source, a new auth mechanism), add a diag endpoint for it alongside the feature, in the same commit. The existing endpoints in `internal/api/diag_extra.go` are the template:
