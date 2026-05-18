@@ -72,21 +72,33 @@ jobs:
         id: diag
         run: |
           set -euo pipefail
-          PORT=$((62000 + RANDOM % 1900))
           NAME="iplayer-arr-ci-${{ github.run_id }}"
-          echo "PORT=$PORT" >> "$GITHUB_ENV"
           echo "NAME=$NAME" >> "$GITHUB_ENV"
+
+          # The act-style runner runs each job inside its own container,
+          # so `docker run -p` binds the port on the HOST and is not
+          # reachable from the runner's loopback. Attach iplayer-arr to
+          # the runner's docker network and address it by container name
+          # on the internal port 62001 instead.
+          RUNNER_NET=$(docker network ls --format '{{.Name}}' \
+            | grep -E '^(GITEA-ACTIONS|act)-' | head -1 || true)
+          if [ -z "$RUNNER_NET" ]; then
+            echo "Could not detect the runner's docker network. Available networks:"
+            docker network ls
+            exit 1
+          fi
+          echo "Using runner network: $RUNNER_NET"
 
           docker run -d --rm \
             --name "$NAME" \
+            --network "$RUNNER_NET" \
             --tmpfs /config:rw,size=64m \
             --tmpfs /downloads:rw,size=64m \
-            -p "127.0.0.1:${PORT}:62001" \
             iplayer-arr:ci
 
           # Wait up to 30s for /api/status to return 200.
           for i in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:${PORT}/api/status" >/dev/null 2>&1; then
+            if curl -fsS "http://${NAME}:62001/api/status" >/dev/null 2>&1; then
               echo "iplayer-arr ready after ${i}s"
               break
             fi
@@ -100,7 +112,7 @@ jobs:
 
           # /api/config is unauthenticated and exposes the generated api_key.
           # See internal/api/config.go handleGetConfig.
-          KEY=$(curl -fsS "http://127.0.0.1:${PORT}/api/config" | jq -re '.api_key')
+          KEY=$(curl -fsS "http://${NAME}:62001/api/config" | jq -re '.api_key')
           if [ -z "$KEY" ] || [ "$KEY" = "null" ]; then
             echo "api_key missing from /api/config response"
             exit 1
@@ -109,7 +121,7 @@ jobs:
           fail=0
           for ep in sonarr-handshake ffmpeg bbc sab auth-paths; do
             echo "::group::diag ${ep}"
-            body=$(curl -fsS "http://127.0.0.1:${PORT}/api/diag/${ep}?apikey=${KEY}")
+            body=$(curl -fsS "http://${NAME}:62001/api/diag/${ep}?apikey=${KEY}")
             echo "$body" | jq .
             if ! echo "$body" | jq -e '.verdict == "pass"' >/dev/null; then
               echo "::error::/api/diag/${ep} returned non-pass verdict"
@@ -120,20 +132,19 @@ jobs:
 
           exit "$fail"
 
-      - name: Capture container logs
+      # Inline log dump rather than upload-artifact@v4: the v4 action
+      # requires GitHub Actions backing and is not GHES-compatible, which
+      # Gitea Actions emulates. The container logs are small (one boot,
+      # a handful of diag probes) so inline output in the run UI is
+      # sufficient and avoids the artifact-action mismatch entirely.
+      - name: Dump container logs
         if: always()
         run: |
           if [ -n "${NAME:-}" ]; then
-            docker logs "$NAME" > "${RUNNER_TEMP}/iplayer-arr-ci.log" 2>&1 || true
+            echo "::group::iplayer-arr container logs"
+            docker logs "$NAME" 2>&1 || true
+            echo "::endgroup::"
           fi
-
-      - name: Upload container logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: iplayer-arr-ci-logs
-          path: ${{ runner.temp }}/iplayer-arr-ci.log
-          if-no-files-found: ignore
 
       - name: Clean up container
         if: always()
