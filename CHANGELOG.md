@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-05-18
+
 ### Added
 
 - **Configurable ffmpeg progress watchdog timeout (#42).** The progress watchdog cancels any ffmpeg run that goes 60s without emitting a progress line. On busy hosts (4 concurrent downloads on a small NAS) ffmpeg can be CPU/IO-starved enough to trip the watchdog as a false positive, then retries make the contention worse. The threshold is now configurable in two ways with this precedence order: env var `IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS` (positive integer, overrides everything), store config key `watchdog_timeout_seconds` (settable via `PUT /api/config`), or the 60s package default if neither is set. Invalid values (non-numeric, zero, negative) fall back to the default with an info log line. Surfaced on `GET /api/system` via the new `watchdog_timeout_seconds` field so operators can verify the active value without reading logs.
