@@ -3,7 +3,39 @@ package download
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestEffectiveWatchdogTimeout_FallsBackToPackageDefault: a job with
+// zero WatchdogTimeout uses progressWatchdogTimeout (60s). Locks the
+// backward-compatible behaviour: any caller that didn't set the new
+// field still sees the historical timeout.
+func TestEffectiveWatchdogTimeout_FallsBackToPackageDefault(t *testing.T) {
+	job := FFmpegJob{} // WatchdogTimeout is zero
+	if got := effectiveWatchdogTimeout(job); got != progressWatchdogTimeout {
+		t.Errorf("effectiveWatchdogTimeout(zero) = %v, want %v (package default)", got, progressWatchdogTimeout)
+	}
+}
+
+// TestEffectiveWatchdogTimeout_HonoursPositiveOverride: a job with a
+// positive WatchdogTimeout uses that value instead of the default.
+func TestEffectiveWatchdogTimeout_HonoursPositiveOverride(t *testing.T) {
+	job := FFmpegJob{WatchdogTimeout: 120 * time.Second}
+	if got := effectiveWatchdogTimeout(job); got != 120*time.Second {
+		t.Errorf("effectiveWatchdogTimeout(120s) = %v, want 120s", got)
+	}
+}
+
+// TestEffectiveWatchdogTimeout_NegativeFallsBack: a negative override
+// (shouldn't happen but defensive) falls back to the package default
+// rather than producing a negative-timeout watchdog (which would fire
+// on every tick).
+func TestEffectiveWatchdogTimeout_NegativeFallsBack(t *testing.T) {
+	job := FFmpegJob{WatchdogTimeout: -1 * time.Second}
+	if got := effectiveWatchdogTimeout(job); got != progressWatchdogTimeout {
+		t.Errorf("effectiveWatchdogTimeout(negative) = %v, want %v (package default)", got, progressWatchdogTimeout)
+	}
+}
 
 func TestParseFFmpegProgress(t *testing.T) {
 	tests := []struct {

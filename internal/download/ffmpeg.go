@@ -164,6 +164,25 @@ type FFmpegJob struct {
 	OutputPath string
 	OnProgress func(FFmpegProgress)
 	FHDProber  downloaderFHDProber // NEW — satisfied by *bbc.Client
+
+	// WatchdogTimeout overrides progressWatchdogTimeout for this run.
+	// Zero (the default) falls back to the package constant. Manager
+	// sets this from the process-wide configured value (env var
+	// IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS or store key
+	// watchdog_timeout_seconds) so users on busy hosts can extend the
+	// gap before the watchdog cancels a slow-but-not-stuck download.
+	// Resolves #42.
+	WatchdogTimeout time.Duration
+}
+
+// effectiveWatchdogTimeout returns the per-job override if set, or
+// the package default. Centralised so the watchdog goroutine logic
+// stays readable.
+func effectiveWatchdogTimeout(job FFmpegJob) time.Duration {
+	if job.WatchdogTimeout > 0 {
+		return job.WatchdogTimeout
+	}
+	return progressWatchdogTimeout
 }
 
 // resolveHLSVariant fetches the master playlist, finds the highest-
@@ -308,6 +327,7 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 	// threshold. atomic.Int64 keeps the scanner goroutine lock-free.
 	var lastProgressNanos atomic.Int64
 	lastProgressNanos.Store(time.Now().UnixNano())
+	watchdogTimeout := effectiveWatchdogTimeout(job)
 	go func() {
 		ticker := time.NewTicker(progressWatchdogInterval)
 		defer ticker.Stop()
@@ -317,8 +337,8 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 				return
 			case <-ticker.C:
 				since := time.Since(time.Unix(0, lastProgressNanos.Load()))
-				if since > progressWatchdogTimeout {
-					log.Printf("ffmpeg watchdog: no progress in %s; cancelling", since.Round(time.Second))
+				if since > watchdogTimeout {
+					log.Printf("ffmpeg watchdog: no progress in %s (threshold %s); cancelling", since.Round(time.Second), watchdogTimeout)
 					cancelRun()
 					return
 				}

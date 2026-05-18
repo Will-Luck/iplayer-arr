@@ -27,6 +27,13 @@ type SystemInfo struct {
 	DownloadsFailed     int    `json:"downloads_failed"`
 	DownloadsTotalBytes int64  `json:"downloads_total_bytes"`
 	LastIndexerRequest  string `json:"last_indexer_request,omitempty"`
+	// MaxWorkers and WatchdogTimeoutSeconds surface the active runtime
+	// configuration so operators can verify which value the process is
+	// actually using (rather than what they intended to configure).
+	// Added v1.5.7 alongside #42 fix so the watchdog tuning is visible
+	// without needing to read logs.
+	MaxWorkers             int `json:"max_workers"`
+	WatchdogTimeoutSeconds int `json:"watchdog_timeout_seconds"`
 }
 
 // handleSystem serves GET /api/system.
@@ -84,6 +91,19 @@ func (h *Handler) handleSystem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Active runtime config from the download manager. WatchdogTimeout
+	// of zero means the package default is in effect (60s); surface
+	// that as 60 so operators see the effective number, not the override
+	// presence/absence. Manager is nil in some unit-test wirings; tolerate.
+	if h.mgr != nil {
+		info.MaxWorkers = h.mgr.MaxWorkers()
+		if wd := h.mgr.WatchdogTimeout(); wd > 0 {
+			info.WatchdogTimeoutSeconds = int(wd.Seconds())
+		} else {
+			info.WatchdogTimeoutSeconds = ffmpegPackageDefaultWatchdogSeconds
+		}
+	}
+
 	writeJSON(w, http.StatusOK, info)
 }
 
@@ -113,3 +133,12 @@ var (
 	appVersion = "dev"
 	buildDate  = "unknown"
 )
+
+// ffmpegPackageDefaultWatchdogSeconds mirrors the constant in
+// internal/download/ffmpeg.go::progressWatchdogTimeout so /api/system
+// can surface the effective value when no override is configured.
+// Kept here as an int literal so we don't have to cross-package import
+// just to compute the seconds; if the package default ever changes,
+// update both sites (low risk: covered by manual test plus the v1.5.7
+// CHANGELOG entry calls out 60s explicitly).
+const ffmpegPackageDefaultWatchdogSeconds = 60

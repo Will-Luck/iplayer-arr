@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -93,7 +94,9 @@ func main() {
 	probeTimeout := time.Duration(envIntDefault("IPLAYER_PROBE_TIMEOUT_SEC", 20)) * time.Second
 	prober := bbc.NewQualityProber(playlist, ms, bbcClient, st, probeConcurrency, probeTimeout)
 	hub := api.NewHub()
-	mgr := download.NewManager(st, downloadDir, configuredMaxWorkers(st), bbcClient, playlist, ms, hub)
+	mgr := download.NewManager(st, downloadDir, configuredMaxWorkers(st),
+		bbcClient, playlist, ms, hub,
+		download.WithWatchdogTimeout(configuredWatchdogTimeout(st)))
 
 	// Start download workers
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -365,8 +368,26 @@ func migrateQualityConfig(st *store.Store) bool {
 	return true
 }
 
+// numCPUDefault returns the NumCPU-aware default for max_workers.
+// Caps small hosts at 2 (avoids single-CPU starvation), busy hosts at 4
+// (the historical default), with a NumCPU/2 mid-range. Tested for the
+// bounds rather than a specific machine's CPU count to keep tests stable
+// across the test fleet. v1.5.7: was a fixed constant 4 prior; lowered
+// because #42 showed 4 concurrent ffmpeg processes on small hosts cause
+// CPU/IO contention that trips the progress watchdog.
+func numCPUDefault() int {
+	n := runtime.NumCPU() / 2
+	if n < 2 {
+		return 2
+	}
+	if n > 4 {
+		return 4
+	}
+	return n
+}
+
 func configuredMaxWorkers(st *store.Store) int {
-	const defaultMaxWorkers = 4
+	defaultMaxWorkers := numCPUDefault()
 
 	if st == nil {
 		return defaultMaxWorkers
@@ -384,4 +405,34 @@ func configuredMaxWorkers(st *store.Store) int {
 	}
 
 	return workers
+}
+
+// configuredWatchdogTimeout resolves the per-job ffmpeg watchdog timeout
+// from (in priority order):
+//
+//  1. env var IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS (positive integer)
+//  2. store config key watchdog_timeout_seconds (positive integer)
+//  3. zero, which causes internal/download/ffmpeg.go to use the
+//     package default (progressWatchdogTimeout = 60s)
+//
+// Resolves #42: under heavy concurrency the 60s default can fire
+// false positives when ffmpeg is starved of CPU, so users on busy
+// hosts need a way to extend the threshold without recompiling.
+func configuredWatchdogTimeout(st *store.Store) time.Duration {
+	if seconds := envIntDefault("IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS", 0); seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if st == nil {
+		return 0
+	}
+	raw, _ := st.GetConfig("watchdog_timeout_seconds")
+	if raw == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds < 1 {
+		log.Printf("invalid watchdog_timeout_seconds %q, using package default", raw)
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }

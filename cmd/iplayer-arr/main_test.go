@@ -19,11 +19,15 @@ func testStore(t *testing.T) *store.Store {
 	return st
 }
 
+// TestConfiguredMaxWorkersDefault: the default now comes from
+// numCPUDefault() rather than a fixed constant. v1.5.7 change driven
+// by #42 (4 workers on small hosts cause CPU/IO contention that
+// trips the ffmpeg progress watchdog).
 func TestConfiguredMaxWorkersDefault(t *testing.T) {
 	st := testStore(t)
-
-	if got := configuredMaxWorkers(st); got != 4 {
-		t.Fatalf("configuredMaxWorkers() = %d, want 4", got)
+	want := numCPUDefault()
+	if got := configuredMaxWorkers(st); got != want {
+		t.Fatalf("configuredMaxWorkers() = %d, want %d (numCPUDefault)", got, want)
 	}
 }
 
@@ -35,6 +39,99 @@ func TestConfiguredMaxWorkersUsesStoredValue(t *testing.T) {
 
 	if got := configuredMaxWorkers(st); got != 15 {
 		t.Fatalf("configuredMaxWorkers() = %d, want 15", got)
+	}
+}
+
+// TestNumCPUDefault_BoundsCheck locks the contract: numCPUDefault is
+// always in [2, 4] regardless of host CPU count. Tested against the
+// bounds rather than a specific value to stay stable across the CI
+// fleet (2-core runners, 8-core dev boxes, 32-core servers).
+func TestNumCPUDefault_BoundsCheck(t *testing.T) {
+	got := numCPUDefault()
+	if got < 2 || got > 4 {
+		t.Errorf("numCPUDefault() = %d, want in [2, 4]", got)
+	}
+}
+
+// TestConfiguredWatchdogTimeoutDefault: no env, no store entry,
+// returns zero (which causes ffmpeg.go to use progressWatchdogTimeout).
+func TestConfiguredWatchdogTimeoutDefault(t *testing.T) {
+	st := testStore(t)
+	t.Setenv("IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS", "")
+
+	if got := configuredWatchdogTimeout(st); got != 0 {
+		t.Errorf("configuredWatchdogTimeout(empty) = %v, want 0", got)
+	}
+}
+
+// TestConfiguredWatchdogTimeoutNilStore: tolerates a nil store
+// (early-boot code paths) and returns zero so the package default
+// kicks in.
+func TestConfiguredWatchdogTimeoutNilStore(t *testing.T) {
+	t.Setenv("IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS", "")
+
+	if got := configuredWatchdogTimeout(nil); got != 0 {
+		t.Errorf("configuredWatchdogTimeout(nil) = %v, want 0", got)
+	}
+}
+
+// TestConfiguredWatchdogTimeoutEnvOverride: env var wins when set
+// to a positive integer.
+func TestConfiguredWatchdogTimeoutEnvOverride(t *testing.T) {
+	st := testStore(t)
+	t.Setenv("IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS", "180")
+
+	got := configuredWatchdogTimeout(st)
+	if got != 180*time.Second {
+		t.Errorf("configuredWatchdogTimeout(env=180) = %v, want 180s", got)
+	}
+}
+
+// TestConfiguredWatchdogTimeoutStoreOverride: store config wins when
+// set and env is unset.
+func TestConfiguredWatchdogTimeoutStoreOverride(t *testing.T) {
+	st := testStore(t)
+	t.Setenv("IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS", "")
+	if err := st.SetConfig("watchdog_timeout_seconds", "120"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	got := configuredWatchdogTimeout(st)
+	if got != 120*time.Second {
+		t.Errorf("configuredWatchdogTimeout(store=120) = %v, want 120s", got)
+	}
+}
+
+// TestConfiguredWatchdogTimeoutEnvBeatsStore: env wins over store
+// when both are set.
+func TestConfiguredWatchdogTimeoutEnvBeatsStore(t *testing.T) {
+	st := testStore(t)
+	t.Setenv("IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS", "200")
+	if err := st.SetConfig("watchdog_timeout_seconds", "120"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	got := configuredWatchdogTimeout(st)
+	if got != 200*time.Second {
+		t.Errorf("configuredWatchdogTimeout(env=200, store=120) = %v, want 200s (env wins)", got)
+	}
+}
+
+// TestConfiguredWatchdogTimeoutInvalid: an invalid store value
+// (non-numeric or non-positive) falls back to zero so the package
+// default applies, with an info-level log line for diagnostic
+// visibility.
+func TestConfiguredWatchdogTimeoutInvalid(t *testing.T) {
+	st := testStore(t)
+	t.Setenv("IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS", "")
+
+	for _, raw := range []string{"banana", "0", "-5", "1.5"} {
+		if err := st.SetConfig("watchdog_timeout_seconds", raw); err != nil {
+			t.Fatalf("SetConfig %q: %v", raw, err)
+		}
+		if got := configuredWatchdogTimeout(st); got != 0 {
+			t.Errorf("configuredWatchdogTimeout(store=%q) = %v, want 0 (invalid -> default)", raw, got)
+		}
 	}
 }
 

@@ -182,7 +182,8 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 				m.broadcast("download:progress", dl)
 			}
 		},
-		FHDProber: m.client, // NEW — *bbc.Client satisfies downloaderFHDProber
+		FHDProber:       m.client, // NEW — *bbc.Client satisfies downloaderFHDProber
+		WatchdogTimeout: m.watchdogTimeout,
 	}
 
 	ffErr := RunFFmpeg(ctx, job)

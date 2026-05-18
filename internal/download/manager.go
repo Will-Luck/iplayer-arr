@@ -72,12 +72,32 @@ type Manager struct {
 	// produce duplicate downloads pointing at the same incomplete/
 	// directory. Audit item 21.
 	enqueueMu sync.Mutex
+
+	// watchdogTimeout is the per-job ffmpeg progress watchdog timeout.
+	// Set via WithWatchdogTimeout at construction; zero falls back to
+	// internal/download/ffmpeg.go's progressWatchdogTimeout default.
+	// Read once at Start() time semantics (passed into every FFmpegJob)
+	// to match the existing maxWorkers immutability invariant.
+	watchdogTimeout time.Duration
+}
+
+// ManagerOption configures optional Manager behaviour. Pass to NewManager
+// to override defaults without changing the positional signature.
+type ManagerOption func(*Manager)
+
+// WithWatchdogTimeout sets the per-job ffmpeg progress watchdog timeout.
+// Zero (or omitted) uses internal/download/ffmpeg.go's package default.
+// Used by main.go to plumb the configured value (env var
+// IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS or store key
+// watchdog_timeout_seconds) into every download. Resolves #42.
+func WithWatchdogTimeout(d time.Duration) ManagerOption {
+	return func(m *Manager) { m.watchdogTimeout = d }
 }
 
 func NewManager(st *store.Store, downloadDir string, maxWorkers int,
 	client *bbc.Client, playlist *bbc.PlaylistResolver, ms *bbc.MediaSelector,
-	hub EventBroadcaster) *Manager {
-	return &Manager{
+	hub EventBroadcaster, opts ...ManagerOption) *Manager {
+	m := &Manager{
 		store:       st,
 		downloadDir: downloadDir,
 		maxWorkers:  maxWorkers,
@@ -88,6 +108,22 @@ func NewManager(st *store.Store, downloadDir string, maxWorkers int,
 		claimed:     make(map[string]context.CancelFunc),
 		cancelled:   make(map[string]struct{}),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// WatchdogTimeout returns the configured per-job ffmpeg watchdog timeout
+// (zero means "use ffmpeg.go's progressWatchdogTimeout default"). Used
+// by /api/system to surface the active value to operators.
+func (m *Manager) WatchdogTimeout() time.Duration {
+	return m.watchdogTimeout
+}
+
+// MaxWorkers returns the configured worker-pool size. Used by /api/system.
+func (m *Manager) MaxWorkers() int {
+	return m.maxWorkers
 }
 
 // Start launches the worker goroutines that poll for pending downloads.

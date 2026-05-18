@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Will-Luck/iplayer-arr/internal/download"
+
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
@@ -35,6 +37,81 @@ func TestHandleSystemBasic(t *testing.T) {
 	}
 	if info.Version == "" {
 		t.Error("version is empty")
+	}
+}
+
+// TestHandleSystem_NilMgr_RuntimeConfigSafelyZero: with no Manager
+// wired (the default testAPI shape), /api/system still responds 200
+// and the runtime-config fields default to zero. Locks the safe
+// degradation path so we never NPE on early-boot or test fixtures.
+func TestHandleSystem_NilMgr_RuntimeConfigSafelyZero(t *testing.T) {
+	h, _ := testAPI(t)
+	if h.mgr != nil {
+		t.Fatalf("testAPI wired a non-nil mgr; precondition broken")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	var info SystemInfo
+	if err := json.NewDecoder(w.Body).Decode(&info); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if info.MaxWorkers != 0 {
+		t.Errorf("MaxWorkers = %d, want 0 (nil mgr)", info.MaxWorkers)
+	}
+	if info.WatchdogTimeoutSeconds != 0 {
+		t.Errorf("WatchdogTimeoutSeconds = %d, want 0 (nil mgr)", info.WatchdogTimeoutSeconds)
+	}
+}
+
+// TestHandleSystem_RuntimeConfigSurfacesManagerValues: when a Manager
+// is wired, MaxWorkers and WatchdogTimeoutSeconds reflect its actual
+// values. Verdict on watchdog: zero on the Manager -> 60s (package
+// default) is exposed; positive value passes through. Closes the loop
+// on #42 self-verification.
+func TestHandleSystem_RuntimeConfigSurfacesManagerValues(t *testing.T) {
+	h, _ := testAPI(t)
+
+	// Manager with explicit watchdog timeout override.
+	mgrWithOverride := download.NewManager(
+		nil, t.TempDir(), 3, nil, nil, nil, nil,
+		download.WithWatchdogTimeout(120*time.Second))
+	h.mgr = mgrWithOverride
+
+	req := httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	var info SystemInfo
+	if err := json.NewDecoder(w.Body).Decode(&info); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if info.MaxWorkers != 3 {
+		t.Errorf("MaxWorkers = %d, want 3", info.MaxWorkers)
+	}
+	if info.WatchdogTimeoutSeconds != 120 {
+		t.Errorf("WatchdogTimeoutSeconds = %d, want 120 (override)", info.WatchdogTimeoutSeconds)
+	}
+
+	// Same Handler, new Manager without override -> package default surfaces.
+	mgrDefault := download.NewManager(nil, t.TempDir(), 2, nil, nil, nil, nil)
+	h.mgr = mgrDefault
+
+	req = httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	info = SystemInfo{}
+	if err := json.NewDecoder(w.Body).Decode(&info); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if info.MaxWorkers != 2 {
+		t.Errorf("MaxWorkers = %d, want 2", info.MaxWorkers)
+	}
+	if info.WatchdogTimeoutSeconds != 60 {
+		t.Errorf("WatchdogTimeoutSeconds = %d, want 60 (package default surfaces when Manager.WatchdogTimeout is zero)", info.WatchdogTimeoutSeconds)
 	}
 }
 

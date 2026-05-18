@@ -15,6 +15,34 @@ import (
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
+// TestNewManager_WithWatchdogTimeoutOption: the v1.5.7 functional
+// option sets the per-job watchdog timeout on the Manager. Zero =
+// package default, positive value is honoured. Resolves #42 plumbing.
+func TestNewManager_WithWatchdogTimeoutOption(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+
+	// No option: zero default
+	m1 := NewManager(st, filepath.Join(dir, "downloads"), 1, nil, nil, nil, nil)
+	if got := m1.WatchdogTimeout(); got != 0 {
+		t.Errorf("default WatchdogTimeout() = %v, want 0", got)
+	}
+	if got := m1.MaxWorkers(); got != 1 {
+		t.Errorf("MaxWorkers() = %d, want 1", got)
+	}
+
+	// With option: honoured
+	m2 := NewManager(st, filepath.Join(dir, "downloads"), 2, nil, nil, nil, nil,
+		WithWatchdogTimeout(180*time.Second))
+	if got := m2.WatchdogTimeout(); got != 180*time.Second {
+		t.Errorf("WithWatchdogTimeout(180s) -> WatchdogTimeout() = %v, want 180s", got)
+	}
+	if got := m2.MaxWorkers(); got != 2 {
+		t.Errorf("MaxWorkers() = %d, want 2", got)
+	}
+}
+
 func TestManagerEnqueueAndList(t *testing.T) {
 	dir := t.TempDir()
 	st, _ := store.Open(filepath.Join(dir, "test.db"))
