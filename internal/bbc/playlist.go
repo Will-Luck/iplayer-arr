@@ -3,12 +3,21 @@ package bbc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
 
 const defaultPlaylistBase = "https://www.bbc.co.uk/programmes"
+
+// ErrNotYetAvailable signals that a programme exists in BBC metadata but its
+// streamable playlist has no items yet, typically a freshly-aired episode
+// whose VOD asset BBC has not published. Callers treat this as a transient
+// "try again later" state distinct from a genuine fetch/parse failure: the
+// indexer skips advertising it and the downloader defers rather than
+// permanently failing + blocklisting. Issue #44.
+var ErrNotYetAvailable = errors.New("not yet available on iplayer")
 
 type PlaylistResolver struct {
 	client  *Client
@@ -73,7 +82,7 @@ func (r *PlaylistResolver) ResolveCtx(ctx context.Context, pid string) (*Playlis
 
 	smp := resp.DefaultAvailableVersion.SMPConfig
 	if len(smp.Items) == 0 {
-		return nil, fmt.Errorf("no items in playlist for %s", pid)
+		return nil, fmt.Errorf("no items in playlist for %s: %w", pid, ErrNotYetAvailable)
 	}
 
 	info := &PlaylistInfo{

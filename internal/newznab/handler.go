@@ -9,7 +9,7 @@ import (
 )
 
 type qualityProber interface {
-	PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) map[string][]int
+	PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) bbc.PrefetchResult
 }
 
 type Handler struct {

@@ -212,6 +212,110 @@ func TestFailDownloadRetryability(t *testing.T) {
 	}
 }
 
+// TestFailDownload_NotYetAvailable_DefersOverWindow pins the Issue #44
+// downloader safety net: a not-yet-available failure stays Retryable for the
+// whole publication window (maxNotYetAvailableRetries) on the steady
+// notYetAvailableRetryInterval cadence, then becomes permanent once the
+// budget is exhausted, instead of the fast exponential CDN backoff.
+func TestFailDownload_NotYetAvailable_DefersOverWindow(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+
+	m := NewManager(st, filepath.Join(dir, "downloads"), 1, nil, nil, nil, nil)
+
+	dl := &store.Download{ID: "nya1", PID: "p1", Status: store.StatusPending}
+	st.PutDownload(dl)
+
+	// First failure: retryable, deferred by the steady interval (not the
+	// 30s exponential backoff).
+	before := time.Now()
+	m.failDownload(dl, store.FailCodeNotYetAvailable, fmt.Errorf("not yet available"))
+	if !dl.Retryable {
+		t.Fatal("not-yet-available should be retryable within the window")
+	}
+	gotDelay := dl.RetryAfter.Sub(before)
+	if gotDelay < notYetAvailableRetryInterval-time.Second || gotDelay > notYetAvailableRetryInterval+5*time.Second {
+		t.Errorf("expected RetryAfter ~%v after first NYA failure, got delay %v", notYetAvailableRetryInterval, gotDelay)
+	}
+
+	// Drive RetryCount up to the limit; should stay retryable until it hits
+	// maxNotYetAvailableRetries.
+	for dl.RetryCount < maxNotYetAvailableRetries-1 {
+		m.failDownload(dl, store.FailCodeNotYetAvailable, fmt.Errorf("not yet available"))
+		if !dl.Retryable {
+			t.Fatalf("expected retryable at RetryCount=%d (< %d)", dl.RetryCount, maxNotYetAvailableRetries)
+		}
+	}
+
+	// One more failure pushes RetryCount to maxNotYetAvailableRetries: now permanent.
+	m.failDownload(dl, store.FailCodeNotYetAvailable, fmt.Errorf("not yet available"))
+	if dl.RetryCount != maxNotYetAvailableRetries {
+		t.Fatalf("expected RetryCount=%d, got %d", maxNotYetAvailableRetries, dl.RetryCount)
+	}
+	if dl.Retryable {
+		t.Error("expected not retryable once RetryCount reaches maxNotYetAvailableRetries")
+	}
+}
+
+// TestProcessNext_ClaimsNotYetAvailableBeyondMaxRetries guards the claim-loop
+// relaxation (Issue #44): a StatusFailed+Retryable download whose RetryCount
+// sits between maxRetries and maxNotYetAvailableRetries, with a due
+// RetryAfter, must still be picked up by the worker. Pre-fix the hardcoded
+// `RetryCount < maxRetries` in the claim predicate would have skipped it.
+func TestProcessNext_ClaimsNotYetAvailableBeyondMaxRetries(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := store.Open(filepath.Join(dir, "test.db"))
+	defer st.Close()
+
+	// Real playlist resolver pointed at a server that returns an empty
+	// playlist, so processDownload classifies it as not-yet-available and
+	// calls failDownload (incrementing RetryCount) rather than nil-panicking.
+	playlistServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"defaultAvailableVersion":{"smpConfig":{"items":[]}}}`))
+	}))
+	defer playlistServer.Close()
+
+	bbcClient := bbc.NewClient()
+	playlist := bbc.NewPlaylistResolver(bbcClient)
+	playlist.BaseURL = playlistServer.URL
+	ms := bbc.NewMediaSelector(bbcClient)
+
+	m := NewManager(st, filepath.Join(dir, "downloads"), 1, bbcClient, playlist, ms, nil)
+
+	// RetryCount past maxRetries but inside the not-yet-available budget,
+	// RetryAfter already due.
+	retryCount := maxRetries + 2
+	if retryCount >= maxNotYetAvailableRetries {
+		t.Fatalf("test precondition: maxRetries+2 (%d) must be < maxNotYetAvailableRetries (%d)", retryCount, maxNotYetAvailableRetries)
+	}
+	dl := &store.Download{
+		ID:          "nya-claim",
+		PID:         "p1",
+		Status:      store.StatusFailed,
+		FailureCode: store.FailCodeNotYetAvailable,
+		Retryable:   true,
+		RetryCount:  retryCount,
+		RetryAfter:  time.Now().Add(-time.Minute),
+	}
+	st.PutDownload(dl)
+
+	// If the worker claims it, processDownload runs, the empty playlist
+	// classifies as not-yet-available, and failDownload bumps RetryCount.
+	// Pre-fix the claim predicate's hardcoded RetryCount < maxRetries would
+	// have skipped it, leaving RetryCount unchanged.
+	m.processNext(context.Background(), 0)
+
+	updated, err := st.GetDownload(dl.ID)
+	if err != nil {
+		t.Fatalf("GetDownload: %v", err)
+	}
+	if updated.RetryCount <= retryCount {
+		t.Errorf("expected worker to claim and process the download (RetryCount should advance past %d), got %d", retryCount, updated.RetryCount)
+	}
+}
+
 func TestSanitiseFilename(t *testing.T) {
 	tests := []struct {
 		in, want string

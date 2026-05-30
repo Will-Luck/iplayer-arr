@@ -247,7 +247,7 @@ func TestReconciliation_ConcurrentRaceSafe(t *testing.T) {
 	dst := filepath.Join(dir, "dst.mp4")
 
 	var (
-		wg       sync.WaitGroup
+		wg        sync.WaitGroup
 		successes atomic.Int32
 		eexists   atomic.Int32
 	)
