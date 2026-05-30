@@ -279,7 +279,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		probeItems = newProbeItems
 	}
 
-	var probedHeights map[string][]int
+	var probe bbc.PrefetchResult
 	if h.prober != nil && len(probeItems) > 0 {
 		probeCtx := r.Context()
 		if wildcardBrowse {
@@ -287,11 +287,19 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			probeCtx, cancel = context.WithTimeout(r.Context(), browseProbeDeadline)
 			defer cancel()
 		}
-		probedHeights = h.prober.PrefetchPIDs(probeCtx, probeItems)
+		probe = h.prober.PrefetchPIDs(probeCtx, probeItems)
 	}
 
 	for _, it := range filtered {
 		res, prog := it.res, it.prog
+
+		if probe.NotYetAvailable[res.PID] {
+			// Episode exists in metadata but BBC has not published its streams
+			// yet. Skip advertising so Sonarr re-queries on the next RSS cycle
+			// once it is live, instead of grabbing a 720p fallback that cannot
+			// be downloaded and gets blocklisted. Issue #44.
+			continue
+		}
 
 		// When the BBC title has a subtitle that the Sonarr query
 		// doesn't (e.g. "Talking Tom Heroes: Suddenly Super" vs
@@ -310,8 +318,8 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 
 		ceiling := h.qualityCeilingHeight()
 		var qualities []string
-		if probedHeights[res.PID] != nil {
-			qualities = heightsToTags(capHeights(probedHeights[res.PID], ceiling))
+		if probe.Heights[res.PID] != nil {
+			qualities = heightsToTags(capHeights(probe.Heights[res.PID], ceiling))
 		} else {
 			// Safe fallback: only what BBC universally delivers.
 			qualities = capQualityTags([]string{"720p", "540p"}, ceiling)

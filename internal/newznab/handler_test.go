@@ -114,36 +114,44 @@ func newHandlerWithBBCAndStore(t *testing.T, payload string) (*Handler, *store.S
 }
 
 // mockProber is a test double for the quality prefetcher. It returns a
-// fixed map of PID -> heights (or nil for "probe failed"). Every
-// PrefetchPIDs call appends the received probeItems slice to calls
-// so tests can assert which PIDs were submitted.
+// fixed map of PID -> heights (or nil for "probe failed") plus an optional
+// set of PIDs flagged not-yet-available (Issue #44). Every PrefetchPIDs
+// call appends the received probeItems slice to calls so tests can assert
+// which PIDs were submitted.
 type mockProber struct {
-	results map[string][]int
-	calls   [][]bbc.ProbeItem
+	results         map[string][]int
+	notYetAvailable map[string]bool
+	calls           [][]bbc.ProbeItem
 }
 
-func (m *mockProber) PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) map[string][]int {
+func (m *mockProber) PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) bbc.PrefetchResult {
 	copied := make([]bbc.ProbeItem, len(items))
 	copy(copied, items)
 	m.calls = append(m.calls, copied)
-	out := make(map[string][]int, len(items))
+	out := bbc.PrefetchResult{
+		Heights:         make(map[string][]int, len(items)),
+		NotYetAvailable: make(map[string]bool),
+	}
 	for _, it := range items {
 		if heights, ok := m.results[it.PID]; ok {
-			out[it.PID] = heights
+			out.Heights[it.PID] = heights
 		} else {
-			out[it.PID] = nil
+			out.Heights[it.PID] = nil
+		}
+		if m.notYetAvailable[it.PID] {
+			out.NotYetAvailable[it.PID] = true
 		}
 	}
 	return out
 }
 
-// hangingProber blocks until ctx fires, then returns nil. Used by the
-// browse-mode probe-deadline test.
+// hangingProber blocks until ctx fires, then returns an empty result. Used
+// by the browse-mode probe-deadline test.
 type hangingProber struct{}
 
-func (h *hangingProber) PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) map[string][]int {
+func (h *hangingProber) PrefetchPIDs(ctx context.Context, items []bbc.ProbeItem) bbc.PrefetchResult {
 	<-ctx.Done()
-	return nil
+	return bbc.PrefetchResult{}
 }
 
 const eastendersOneEpisodePayload = `{
@@ -466,6 +474,25 @@ func TestSearch_ProbeFailure_Emits720pAnd540pFallback(t *testing.T) {
 	qualities := itemQualities(t, w.Body.String())
 	if len(qualities) != 2 || countQuality(qualities, "720p") != 1 || countQuality(qualities, "540p") != 1 || countQuality(qualities, "1080p") != 0 {
 		t.Fatalf("expected fallback qualities [720p 540p], got %v", qualities)
+	}
+}
+
+// TestSearch_NotYetAvailable_SkipsItem pins the Issue #44 indexer change:
+// when the prober flags a PID not-yet-available (BBC streams not published
+// yet), the search handler must emit no <item> for it rather than fall back
+// to a 720p/540p advert that Sonarr would grab and then blocklist.
+func TestSearch_NotYetAvailable_SkipsItem(t *testing.T) {
+	prober := &mockProber{
+		results:         map[string][]int{"m002ttg5": nil},
+		notYetAvailable: map[string]bool{"m002ttg5": true},
+	}
+	h := newHandlerWithBBCProber(t, eastendersOneEpisodePayload, prober)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if items := rssItems(w.Body.String()); len(items) != 0 {
+		t.Fatalf("expected no items for not-yet-available PID, got %d", len(items))
 	}
 }
 

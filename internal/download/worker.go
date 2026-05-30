@@ -19,6 +19,13 @@ import (
 
 const maxRetries = 3
 
+// not-yet-available downloads (freshly-aired episodes whose BBC playlist has no
+// items yet) retry on a steady cadence over a realistic publication window
+// instead of the fast exponential CDN backoff, and stay Retryable (so Sonarr
+// sees them Queued, not Failed) for the whole window. Issue #44.
+const maxNotYetAvailableRetries = 12
+const notYetAvailableRetryInterval = 5 * time.Minute
+
 // worker polls for pending or retryable downloads every second. Each
 // tick's processNext is wrapped in safeProcessNext so an unexpected
 // panic inside the download pipeline (a nil deref, a third-party
@@ -65,8 +72,11 @@ func (m *Manager) processNext(ctx context.Context, workerID int) {
 	}
 
 	for _, dl := range downloads {
+		// Rely on dl.Retryable (which failDownload sets per failure code)
+		// rather than a hardcoded RetryCount < maxRetries, so the longer
+		// not-yet-available budget is honoured. Issue #44.
 		claimable := dl.Status == store.StatusPending ||
-			(dl.Status == store.StatusFailed && dl.Retryable && dl.RetryCount < maxRetries &&
+			(dl.Status == store.StatusFailed && dl.Retryable &&
 				(dl.RetryAfter.IsZero() || time.Now().After(dl.RetryAfter)))
 		if !claimable {
 			continue
@@ -105,7 +115,11 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	m.setStatus(dl, store.StatusResolving, "")
 	info, err := m.playlist.Resolve(dl.PID)
 	if err != nil {
-		m.failDownload(dl, store.FailCodeUnavailable, fmt.Errorf("playlist resolve: %w", err))
+		if errors.Is(err, bbc.ErrNotYetAvailable) {
+			m.failDownload(dl, store.FailCodeNotYetAvailable, fmt.Errorf("playlist resolve: %w", err))
+		} else {
+			m.failDownload(dl, store.FailCodeUnavailable, fmt.Errorf("playlist resolve: %w", err))
+		}
 		return
 	}
 
@@ -290,7 +304,8 @@ func (m *Manager) setStatus(dl *store.Download, status, errMsg string) {
 }
 
 // failDownload marks a download as failed with the given failure code.
-// GeoBlocked and Expired are permanent; everything else retries with
+// GeoBlocked and Expired are permanent; not-yet-available retries on a steady
+// cadence over the publication window; everything else retries with
 // exponential backoff (30s, 90s, 270s) to avoid hammering the BBC CDN.
 func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.Status = store.StatusFailed
@@ -298,19 +313,27 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.Error = err.Error()
 	dl.RetryCount++
 
+	limit := maxRetries
 	switch code {
 	case store.FailCodeGeoBlocked, store.FailCodeExpired:
 		dl.Retryable = false
+	case store.FailCodeNotYetAvailable:
+		limit = maxNotYetAvailableRetries
+		dl.Retryable = dl.RetryCount < maxNotYetAvailableRetries
 	default:
 		dl.Retryable = dl.RetryCount < maxRetries
 	}
 
 	if dl.Retryable {
-		backoff := 30 * time.Second
-		for i := 1; i < dl.RetryCount; i++ {
-			backoff *= 3
+		if code == store.FailCodeNotYetAvailable {
+			dl.RetryAfter = time.Now().Add(notYetAvailableRetryInterval)
+		} else {
+			backoff := 30 * time.Second
+			for i := 1; i < dl.RetryCount; i++ {
+				backoff *= 3
+			}
+			dl.RetryAfter = time.Now().Add(backoff)
 		}
-		dl.RetryAfter = time.Now().Add(backoff)
 	}
 
 	if storeErr := m.store.PutDownload(dl); storeErr != nil {
@@ -325,7 +348,7 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 
 	m.broadcast("download:failed", dl)
 	if dl.Retryable {
-		log.Printf("download %s failed (%s): %v [retry %d/%d, backoff %v]", dl.ID, code, err, dl.RetryCount, maxRetries, time.Until(dl.RetryAfter).Round(time.Second))
+		log.Printf("download %s failed (%s): %v [retry %d/%d, backoff %v]", dl.ID, code, err, dl.RetryCount, limit, time.Until(dl.RetryAfter).Round(time.Second))
 	} else {
 		log.Printf("download %s failed (%s): %v [permanent, count=%d]", dl.ID, code, err, dl.RetryCount)
 	}

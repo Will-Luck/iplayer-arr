@@ -68,8 +68,9 @@ func (f *fakeFHDProber) ProbeHiddenFHD(ctx context.Context, hlsMasterURL string)
 }
 
 type fakeCacheStore struct {
-	mu   sync.Mutex
-	data map[string]*store.QualityCache
+	mu     sync.Mutex
+	data   map[string]*store.QualityCache
+	writes int // PutQualityCache call count (Issue #44: assert not-yet-available is never cached)
 }
 
 func newFakeCacheStore() *fakeCacheStore {
@@ -85,6 +86,7 @@ func (f *fakeCacheStore) GetQualityCache(pid string) (*store.QualityCache, error
 func (f *fakeCacheStore) PutQualityCache(qc *store.QualityCache) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.writes++
 	f.data[qc.PID] = qc
 	return nil
 }
@@ -104,8 +106,8 @@ func TestPrefetch_CacheHit_NoHTTP(t *testing.T) {
 	if pl.calls != 0 || ms.calls != 0 || fhd.calls != 0 {
 		t.Errorf("cache hit should skip HTTP; calls: pl=%d ms=%d fhd=%d", pl.calls, ms.calls, fhd.calls)
 	}
-	if len(out["p1"]) != 2 || out["p1"][0] != 720 {
-		t.Errorf("expected cached heights [720,540], got %v", out["p1"])
+	if len(out.Heights["p1"]) != 2 || out.Heights["p1"][0] != 720 {
+		t.Errorf("expected cached heights [720,540], got %v", out.Heights["p1"])
 	}
 }
 
@@ -142,8 +144,8 @@ func TestPrefetch_PlaylistError_ReturnsNilNoCacheWrite(t *testing.T) {
 	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
 	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
 
-	if out["p1"] != nil {
-		t.Errorf("expected nil result on playlist error, got %v", out["p1"])
+	if out.Heights["p1"] != nil {
+		t.Errorf("expected nil result on playlist error, got %v", out.Heights["p1"])
 	}
 	if ms.calls != 0 || fhd.calls != 0 {
 		t.Errorf("expected early return; ms=%d fhd=%d", ms.calls, fhd.calls)
@@ -162,8 +164,8 @@ func TestPrefetch_MediaSelectorError_ReturnsNilNoCacheWrite(t *testing.T) {
 	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
 	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
 
-	if out["p1"] != nil {
-		t.Errorf("expected nil result on ms error, got %v", out["p1"])
+	if out.Heights["p1"] != nil {
+		t.Errorf("expected nil result on ms error, got %v", out.Heights["p1"])
 	}
 	if fhd.calls != 0 {
 		t.Errorf("expected no FHD call on ms error, got %d", fhd.calls)
@@ -182,7 +184,7 @@ func TestPrefetch_DetectsHiddenFHD(t *testing.T) {
 	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
 	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
 
-	heights := out["p1"]
+	heights := out.Heights["p1"]
 	if len(heights) == 0 || heights[0] != 1080 {
 		t.Errorf("expected 1080 prepended to heights, got %v", heights)
 	}
@@ -197,7 +199,7 @@ func TestPrefetch_FHDDefinitiveNo_KeepsLowerHeights(t *testing.T) {
 	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
 	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
 
-	heights := out["p1"]
+	heights := out.Heights["p1"]
 	if containsInt(heights, 1080) {
 		t.Errorf("expected no 1080 when FHD probe says definitive-no, got %v", heights)
 	}
@@ -225,7 +227,7 @@ func TestPrefetch_FHDProbeError_PreservesExistingHeights(t *testing.T) {
 	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
 
 	// fakeMediaSelector default returns [720, 540]; on FHD err we keep them.
-	got := out["p1"]
+	got := out.Heights["p1"]
 	if len(got) != 2 || got[0] != 720 || got[1] != 540 {
 		t.Errorf("expected preserved heights [720 540] on FHD transient error, got %v", got)
 	}
@@ -252,7 +254,7 @@ func TestPrefetch_1080InManifest_SkipsFHDProbe(t *testing.T) {
 	if fhd.calls != 0 {
 		t.Errorf("expected FHD probe to be skipped when 1080 already in manifest, got %d calls", fhd.calls)
 	}
-	heights := out["p1"]
+	heights := out.Heights["p1"]
 	// Must not contain duplicate 1080.
 	count1080 := 0
 	for _, h := range heights {
@@ -281,8 +283,8 @@ func TestPrefetch_DASHOnlyResult_SkipsFHDProbe(t *testing.T) {
 	if fhd.calls != 0 {
 		t.Errorf("expected FHD probe to be skipped for DASH-only, got %d calls", fhd.calls)
 	}
-	if len(out["p1"]) != 1 || out["p1"][0] != 720 {
-		t.Errorf("expected [720], got %v", out["p1"])
+	if len(out.Heights["p1"]) != 1 || out.Heights["p1"][0] != 720 {
+		t.Errorf("expected [720], got %v", out.Heights["p1"])
 	}
 }
 
@@ -300,8 +302,8 @@ func TestPrefetch_ConcurrentDispatch_AllPIDsHandled(t *testing.T) {
 	}
 
 	out := p.PrefetchPIDs(context.Background(), items)
-	if len(out) != 10 {
-		t.Errorf("expected 10 results, got %d", len(out))
+	if len(out.Heights) != 10 {
+		t.Errorf("expected 10 results, got %d", len(out.Heights))
 	}
 }
 
@@ -340,8 +342,8 @@ func TestPrefetch_PerProbeTimeout_AbortsHangingProbe(t *testing.T) {
 	if elapsed > 300*time.Millisecond {
 		t.Errorf("expected per-probe timeout (~50ms), got %v", elapsed)
 	}
-	if out["p1"] != nil {
-		t.Errorf("expected nil result on timeout, got %v", out["p1"])
+	if out.Heights["p1"] != nil {
+		t.Errorf("expected nil result on timeout, got %v", out.Heights["p1"])
 	}
 }
 
@@ -360,7 +362,7 @@ func TestPrefetch_DeduplicatesAndSortsHeights(t *testing.T) {
 
 	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
 	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
-	heights := out["p1"]
+	heights := out.Heights["p1"]
 
 	// Should be [720, 540] — deduped and descending.
 	if len(heights) != 2 {
@@ -394,11 +396,11 @@ func TestPrefetch_ShowGroupDedup_ProbesOncePerShow(t *testing.T) {
 
 	out := p.PrefetchPIDs(context.Background(), items)
 
-	if len(out) != 15 {
-		t.Fatalf("expected 15 results, got %d", len(out))
+	if len(out.Heights) != 15 {
+		t.Fatalf("expected 15 results, got %d", len(out.Heights))
 	}
 	for _, item := range items {
-		if out[item.PID] == nil {
+		if out.Heights[item.PID] == nil {
 			t.Errorf("missing result for PID %s", item.PID)
 		}
 	}
@@ -439,15 +441,15 @@ func TestPrefetch_ShowGroupDedup_FirstFails_FallsBackToIndividual(t *testing.T) 
 	// Leader p0 failed, but fallback probed p1/p2 individually.
 	// The group gets the first successful sibling's heights (all
 	// episodes of a show share the same qualities).
-	if out["p1"] == nil {
+	if out.Heights["p1"] == nil {
 		t.Fatal("expected p1 to have heights after fallback probe")
 	}
-	if out["p2"] == nil {
+	if out.Heights["p2"] == nil {
 		t.Fatal("expected p2 to have heights after fallback probe")
 	}
 	// p0 gets the same group result -- the show's qualities are valid
 	// even though p0's individual probe failed.
-	if out["p0"] == nil {
+	if out.Heights["p0"] == nil {
 		t.Error("expected p0 to inherit sibling heights")
 	}
 }
@@ -469,8 +471,8 @@ func TestPrefetch_ShowGroupDedup_AllFail_ReturnsNil(t *testing.T) {
 	out := p.PrefetchPIDs(context.Background(), items)
 
 	for _, pid := range []string{"p0", "p1"} {
-		if out[pid] != nil {
-			t.Errorf("expected nil for %s when all probes fail, got %v", pid, out[pid])
+		if out.Heights[pid] != nil {
+			t.Errorf("expected nil for %s when all probes fail, got %v", pid, out.Heights[pid])
 		}
 	}
 }
@@ -509,7 +511,7 @@ func TestPrefetch_ShowGroupDedup_CacheHitCoversGroup(t *testing.T) {
 
 	// All 3 should have [720, 540].
 	for _, pid := range []string{"p0", "p1", "p2"} {
-		h := out[pid]
+		h := out.Heights[pid]
 		if len(h) != 2 || h[0] != 720 || h[1] != 540 {
 			t.Errorf("PID %s: expected [720, 540], got %v", pid, h)
 		}
@@ -518,5 +520,54 @@ func TestPrefetch_ShowGroupDedup_CacheHitCoversGroup(t *testing.T) {
 	// All 3 should be in the cache.
 	if len(st.data) != 3 {
 		t.Errorf("expected 3 cache entries, got %d", len(st.data))
+	}
+}
+
+// --- not-yet-available (Issue #44) ---
+
+// TestPrefetch_NotYetAvailable_MarksAndSkipsCache verifies that a playlist
+// resolve returning ErrNotYetAvailable marks the PID NotYetAvailable, leaves
+// its Heights nil, and writes nothing to the cache (so the next probe
+// re-checks once BBC publishes the stream).
+func TestPrefetch_NotYetAvailable_MarksAndSkipsCache(t *testing.T) {
+	pl := &fakePlaylistResolver{err: ErrNotYetAvailable}
+	ms := &fakeMediaSelector{}
+	fhd := &fakeFHDProber{}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
+
+	if !out.NotYetAvailable["p1"] {
+		t.Error("expected p1 marked NotYetAvailable")
+	}
+	if out.Heights["p1"] != nil {
+		t.Errorf("expected nil heights for not-yet-available PID, got %v", out.Heights["p1"])
+	}
+	if st.writes != 0 {
+		t.Errorf("expected no cache write for not-yet-available PID, got %d writes", st.writes)
+	}
+	if ms.calls != 0 || fhd.calls != 0 {
+		t.Errorf("expected early return; ms=%d fhd=%d", ms.calls, fhd.calls)
+	}
+}
+
+// TestPrefetch_GenericError_NotMarkedNotYetAvailable verifies that a
+// generic (non-sentinel) playlist error leaves NotYetAvailable false and
+// Heights nil, preserving the transient/fallback path the indexer relies on.
+func TestPrefetch_GenericError_NotMarkedNotYetAvailable(t *testing.T) {
+	pl := &fakePlaylistResolver{err: errors.New("playlist down")}
+	ms := &fakeMediaSelector{}
+	fhd := &fakeFHDProber{}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
+
+	if out.NotYetAvailable["p1"] {
+		t.Error("generic error must not mark NotYetAvailable")
+	}
+	if out.Heights["p1"] != nil {
+		t.Errorf("expected nil heights on generic error, got %v", out.Heights["p1"])
 	}
 }

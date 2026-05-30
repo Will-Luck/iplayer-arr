@@ -2,6 +2,7 @@ package bbc
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sort"
 	"sync"
@@ -52,6 +53,18 @@ type ProbeItem struct {
 	ShowName string
 }
 
+// PrefetchResult carries per-PID probe outcomes. Heights holds usable quality
+// heights for PIDs whose probe succeeded. NotYetAvailable lists PIDs whose
+// playlist was empty (ErrNotYetAvailable), the caller must skip advertising
+// them rather than fall back to a default quality, and they are deliberately
+// NOT cached so the next probe re-checks once BBC publishes. A PID absent from
+// both (nil heights, not in NotYetAvailable) is a transient failure: the caller
+// keeps its existing fallback behaviour. Issue #44.
+type PrefetchResult struct {
+	Heights         map[string][]int
+	NotYetAvailable map[string]bool
+}
+
 // NewQualityProber constructs a prober with the given dependencies.
 // concurrency defaults to 8 if <= 0; timeout defaults to 20s if <= 0.
 func NewQualityProber(
@@ -79,12 +92,16 @@ func NewQualityProber(
 }
 
 // PrefetchPIDs probes the given items in parallel (bounded by
-// QualityProber.concurrency), returns a map of PID -> heights. Cache
-// hits skip the HTTP work entirely. Probe failures map to a nil
-// result map entry (not a missing key) so the caller can distinguish
-// "probed and failed" from "not yet probed". Honours ctx.
-func (p *QualityProber) PrefetchPIDs(ctx context.Context, items []ProbeItem) map[string][]int {
-	result := make(map[string][]int, len(items))
+// QualityProber.concurrency), returns a PrefetchResult. Cache hits skip the
+// HTTP work entirely. Probe failures map to a nil Heights entry (not a missing
+// key) so the caller can distinguish "probed and failed" from "not yet
+// probed"; a not-yet-available playlist is flagged in NotYetAvailable and
+// never cached. Honours ctx.
+func (p *QualityProber) PrefetchPIDs(ctx context.Context, items []ProbeItem) PrefetchResult {
+	result := PrefetchResult{
+		Heights:         make(map[string][]int, len(items)),
+		NotYetAvailable: make(map[string]bool),
+	}
 	var mu sync.Mutex
 
 	// Group items by ShowName so we can probe one PID per show and
@@ -109,10 +126,13 @@ func (p *QualityProber) PrefetchPIDs(ctx context.Context, items []ProbeItem) map
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			heights := p.probeShowGroup(ctx, group)
+			heights, nya := p.probeShowGroup(ctx, group)
 			mu.Lock()
 			for _, item := range group {
-				result[item.PID] = heights
+				result.Heights[item.PID] = heights
+				if nya {
+					result.NotYetAvailable[item.PID] = true
+				}
 			}
 			mu.Unlock()
 		}()
@@ -125,7 +145,7 @@ func (p *QualityProber) PrefetchPIDs(ctx context.Context, items []ProbeItem) map
 // checks for a cache hit first, then probes the first PID via
 // probeOne and reuses its result for the rest. If the first PID
 // fails, falls back to probing remaining items individually.
-func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) []int {
+func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) (heights []int, notYetAvailable bool) {
 	// 1. Check if any PID in the group is already cached.
 	for _, item := range group {
 		if cached, err := p.store.GetQualityCache(item.PID); err == nil && cached != nil {
@@ -142,49 +162,63 @@ func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) [
 			}
 			log.Printf("show-group cache hit: show=%q leader=%s heights=%v siblings=%d",
 				item.ShowName, item.PID, cached.Heights, len(group)-1)
-			return cached.Heights
+			return cached.Heights, false
 		}
 	}
 
-	// 2. Probe the first PID as the representative for the group.
-	heights := p.probeOne(ctx, group[0])
+	// 2. Probe the first PID as the representative for the group. Capture
+	// the leader's not-yet-available flag so a single-PID group (the common
+	// daily-show case) still surfaces it after the fallback loop.
+	leaderHeights, leaderNYA := p.probeOne(ctx, group[0])
 
-	if heights != nil {
+	if leaderHeights != nil {
 		now := time.Now()
 		for _, sibling := range group[1:] {
 			_ = p.store.PutQualityCache(&store.QualityCache{
 				PID:      sibling.PID,
 				ShowName: sibling.ShowName,
-				Heights:  heights,
+				Heights:  leaderHeights,
 				ProbedAt: now,
 			})
 		}
 		log.Printf("show-group probed: show=%q leader=%s heights=%v siblings=%d",
-			group[0].ShowName, group[0].PID, heights, len(group)-1)
-		return heights
+			group[0].ShowName, group[0].PID, leaderHeights, len(group)-1)
+		return leaderHeights, false
 	}
 
-	// 3. First PID failed -- fall back to individual probing.
+	// 3. First PID failed -- fall back to individual probing. A not-yet-
+	// available OR transient leader must not suppress siblings that ARE
+	// available, so probe them individually and keep the first success.
 	log.Printf("show-group leader failed: show=%q pid=%s, probing %d siblings individually",
 		group[0].ShowName, group[0].PID, len(group)-1)
 	var fallbackHeights []int
+	anyNotYetAvailable := leaderNYA
 	for _, sibling := range group[1:] {
-		h := p.probeOne(ctx, sibling)
+		h, nya := p.probeOne(ctx, sibling)
 		if h != nil && fallbackHeights == nil {
 			fallbackHeights = h
 		}
+		if nya {
+			anyNotYetAvailable = true
+		}
 	}
-	return fallbackHeights
+	if fallbackHeights != nil {
+		return fallbackHeights, false
+	}
+	return nil, anyNotYetAvailable
 }
 
 // probeOne runs the full probe for a single item. Returns the heights
 // slice on success (possibly empty if BBC has no streams), or nil on
 // any error (cached entries are never nil, but the result-map entry
-// is nil to signal "probe attempted, no usable answer").
-func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) []int {
+// is nil to signal "probe attempted, no usable answer"). The second
+// return value is true only when the playlist was empty
+// (ErrNotYetAvailable); that branch is never cached so the next probe
+// re-checks once BBC publishes the stream. Issue #44.
+func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (heights []int, notYetAvailable bool) {
 	// 1. Cache hit short-circuit.
 	if cached, err := p.store.GetQualityCache(item.PID); err == nil && cached != nil {
-		return cached.Heights
+		return cached.Heights, false
 	}
 
 	// 2. Per-probe deadline bounded by the parent context.
@@ -194,21 +228,25 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) []in
 	// 3. playlist PID -> VPID
 	plInfo, err := p.playlist.ResolveCtx(probeCtx, item.PID)
 	if err != nil {
+		if errors.Is(err, ErrNotYetAvailable) {
+			log.Printf("quality probe: not yet available pid=%s (skipping advertise, no cache)", item.PID)
+			return nil, true
+		}
 		log.Printf("quality probe failed pid=%s err=%v (playlist)", item.PID, err)
-		return nil
+		return nil, false
 	}
 	if plInfo.VPID == "" {
 		log.Printf("quality probe failed pid=%s err=no-vpid", item.PID)
-		return nil
+		return nil, false
 	}
 
 	// 4. mediaselector VPID -> streams; walk heights, dedupe, sort descending.
 	streams, err := p.ms.ResolveCtx(probeCtx, plInfo.VPID)
 	if err != nil {
 		log.Printf("quality probe failed pid=%s err=%v (mediaselector)", item.PID, err)
-		return nil
+		return nil, false
 	}
-	heights := dedupedSortedHeights(streams.Video)
+	heights = dedupedSortedHeights(streams.Video)
 
 	// 5. FHD probe (skipped if 1080 already present, or if the best
 	// available resolution is below 720p -- SD-only content never has
@@ -259,7 +297,7 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) []in
 
 	// 7. Log success at INFO level via the ring buffer (any existing logger).
 	log.Printf("quality probe pid=%s heights=%v", item.PID, heights)
-	return heights
+	return heights, false
 }
 
 // dedupedSortedHeights extracts unique Height values from the VideoStream

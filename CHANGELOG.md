@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Freshly-aired episodes whose BBC streams aren't published yet are no longer advertised at a 720p fallback or permanently failed/blocklisted within ~2 minutes. The indexer now skips not-yet-available episodes (Sonarr re-queries once live) and the downloader defers with a steady retry over a ~1 hour publication window. (#44)
+
 ## [1.5.7] - 2026-05-18
 
 ### Added
