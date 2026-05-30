@@ -28,10 +28,15 @@ type Download struct {
 	Retryable     bool      `json:"retryable"`
 	RetryCount    int       `json:"retry_count"`
 	RetryAfter    time.Time `json:"retry_after"`
-	CreatedAt     time.Time `json:"created_at"`
-	StartedAt     time.Time `json:"started_at"`
-	CompletedAt   time.Time `json:"completed_at"`
-	FileExists    *bool     `json:"file_exists,omitempty"`
+	// CDNFailures counts only consecutive CDN-style failures
+	// (ffmpeg_error / truncated), separate from the total RetryCount, so
+	// quality-degrade-on-retry steps the ladder by genuine stream
+	// failures and is not inflated by not-yet-available retries. #46.
+	CDNFailures int       `json:"cdn_failures"`
+	CreatedAt   time.Time `json:"created_at"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at"`
+	FileExists  *bool     `json:"file_exists,omitempty"`
 }
 
 type Programme struct {

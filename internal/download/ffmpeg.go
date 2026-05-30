@@ -165,6 +165,13 @@ type FFmpegJob struct {
 	OnProgress func(FFmpegProgress)
 	FHDProber  downloaderFHDProber // NEW — satisfied by *bbc.Client
 
+	// TargetHeight is the requested pixel height (e.g. 396, 720, 1080),
+	// forwarded to resolveHLSVariant so HLS variant selection honours the
+	// requested quality and the unlisted-1080p FHD probe only runs for
+	// 1080p requests. Zero means "no constraint" (highest bandwidth + FHD
+	// probe), preserving pre-#45 behaviour for callers that don't set it.
+	TargetHeight int
+
 	// WatchdogTimeout overrides progressWatchdogTimeout for this run.
 	// Zero (the default) falls back to the package constant. Manager
 	// sets this from the process-wide configured value (env var
@@ -196,7 +203,7 @@ func effectiveWatchdogTimeout(job FFmpegJob) time.Duration {
 // ProbeHiddenFHD. The duplication is documented in the spec's
 // Non-Goals section as an intentional v1.1.0 trade-off; consolidation
 // is a follow-up refactor for a later release.
-func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterURL string) string {
+func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterURL string, targetHeight int) string {
 	resp, err := http.Get(masterURL)
 	if err != nil {
 		log.Printf("failed to fetch master playlist: %v", err)
@@ -212,42 +219,70 @@ func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterUR
 	log.Printf("master playlist content:\n%s", string(body))
 
 	lines := strings.Split(string(body), "\n")
+	bwRe := regexp.MustCompile(`BANDWIDTH=(\d+)`)
+	var variants []hlsVariant
 	bestBW := 0
 	bestURL := ""
-	bwRe := regexp.MustCompile(`BANDWIDTH=(\d+)`)
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "#EXT-X-STREAM-INF:") {
 			continue
 		}
-		if m := bwRe.FindStringSubmatch(line); m != nil {
-			bw, _ := strconv.Atoi(m[1])
-			if bw > bestBW && i+1 < len(lines) {
-				bestBW = bw
-				bestURL = strings.TrimSpace(lines[i+1])
-			}
+		m := bwRe.FindStringSubmatch(line)
+		if m == nil || i+1 >= len(lines) {
+			continue
+		}
+		bw, _ := strconv.Atoi(m[1])
+		url := strings.TrimSpace(lines[i+1])
+		height := 0
+		if rm := streamInfResRe.FindStringSubmatch(line); rm != nil {
+			height, _ = strconv.Atoi(rm[1])
+		}
+		variants = append(variants, hlsVariant{bandwidth: bw, height: height, url: url})
+		if bw > bestBW {
+			bestBW = bw
+			bestURL = url
 		}
 	}
 
-	log.Printf("best variant: bw=%d url=%q", bestBW, bestURL)
 	if bestURL == "" {
 		log.Printf("no variant found in master playlist, returning master URL")
 		return masterURL
 	}
 
-	// Resolve relative to master playlist base.
-	if !strings.HasPrefix(bestURL, "http") {
+	// Default to the highest-bandwidth variant (historical behaviour),
+	// then narrow to the requested height when one was asked for. #45.
+	selectedURL := bestURL
+	selectedBW := bestBW
+	selectedHeight := 0
+	if targetHeight > 0 {
+		if v, ok := selectVariantByHeight(variants, targetHeight); ok {
+			selectedURL = v.url
+			selectedBW = v.bandwidth
+			selectedHeight = v.height
+		}
+	}
+
+	resolveBase := func(u string) string {
+		if strings.HasPrefix(u, "http") {
+			return u
+		}
 		base := masterURL
 		if idx := strings.LastIndex(base, "/"); idx >= 0 {
 			base = base[:idx+1]
 		}
-		bestURL = base + bestURL
+		return base + u
 	}
+	selectedURL = resolveBase(selectedURL)
+	bestURL = resolveBase(bestURL)
 
-	// Delegate the FHD probe to the shared helper. The prober may be
-	// nil in tests or in any future caller that constructs a FFmpegJob
-	// without wiring the prober; in that case fall straight through
-	// to bestURL.
-	if prober != nil && strings.Contains(bestURL, "video=") {
+	// Unlisted-1080p upgrade: only when the caller wants 1080p
+	// (targetHeight <= 0 means "no constraint / best") AND the height-
+	// matched variant is below 1080p, so a listed 1080p-or-higher
+	// selection is never downgraded to the hidden 1080p stream. Probe on
+	// the highest-bandwidth variant to match ProbeHiddenFHD's selection
+	// rule. A sub-1080p request is never silently upgraded. #45.
+	wantFHD := (targetHeight <= 0 || targetHeight >= 1080) && selectedHeight < 1080
+	if wantFHD && prober != nil && strings.Contains(bestURL, "video=") {
 		fhdURL, found, err := prober.ProbeHiddenFHD(ctx, masterURL)
 		switch {
 		case err != nil:
@@ -258,37 +293,114 @@ func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterUR
 		}
 	}
 
-	log.Printf("HLS variant selected: bandwidth=%d", bestBW)
-	return bestURL
+	log.Printf("HLS variant selected: target=%dp height=%dp bandwidth=%d", targetHeight, selectedHeight, selectedBW)
+	return selectedURL
 }
 
-func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
-	streamURL := job.StreamURL
-	// For HLS master playlists, resolve the highest-bandwidth variant
-	// and probe for unlisted 1080p. DASH manifests are handled by ffmpeg.
-	if strings.Contains(streamURL, ".m3u8") {
-		log.Printf("resolving HLS variant for: %s", streamURL[:min(len(streamURL), 80)])
-		streamURL = resolveHLSVariant(ctx, job.FHDProber, streamURL)
-		log.Printf("resolved stream URL: %s", streamURL[:min(len(streamURL), 80)])
-	} else {
-		log.Printf("not HLS, skipping variant resolution: %s", streamURL[:min(len(streamURL), 80)])
+// hlsVariant is one #EXT-X-STREAM-INF entry parsed from a master
+// playlist: its advertised bandwidth, its RESOLUTION height (0 when the
+// variant carries no RESOLUTION tag), and the media-playlist URL.
+type hlsVariant struct {
+	bandwidth int
+	height    int
+	url       string
+}
+
+// streamInfResRe extracts the height from RESOLUTION=WxH on an
+// #EXT-X-STREAM-INF line. #45.
+var streamInfResRe = regexp.MustCompile(`RESOLUTION=\d+x(\d+)`)
+
+// selectVariantByHeight returns the variant whose RESOLUTION height best
+// matches targetHeight: an exact match (highest bandwidth among ties),
+// else the largest height at or below the target, else the smallest
+// height above it. Returns ok=false when no variant carries a RESOLUTION
+// tag, so the caller keeps the highest-bandwidth default. #45.
+func selectVariantByHeight(variants []hlsVariant, targetHeight int) (hlsVariant, bool) {
+	var exact, below, above *hlsVariant
+	for i := range variants {
+		v := &variants[i]
+		if v.height <= 0 {
+			continue
+		}
+		switch {
+		case v.height == targetHeight:
+			if exact == nil || v.bandwidth > exact.bandwidth {
+				exact = v
+			}
+		case v.height < targetHeight:
+			if below == nil || v.height > below.height ||
+				(v.height == below.height && v.bandwidth > below.bandwidth) {
+				below = v
+			}
+		default:
+			if above == nil || v.height < above.height ||
+				(v.height == above.height && v.bandwidth > above.bandwidth) {
+				above = v
+			}
+		}
 	}
+	switch {
+	case exact != nil:
+		return *exact, true
+	case below != nil:
+		return *below, true
+	case above != nil:
+		return *above, true
+	default:
+		return hlsVariant{}, false
+	}
+}
+
+// ffmpegReconnectArgs make ffmpeg ride out transient CDN drops (TLS
+// "IO error: End of file", "Stream ends prematurely") by reconnecting
+// the underlying HTTP(S) transfer instead of aborting the run.
+// reconnect_on_network_error needs ffmpeg >= 5.1; the container ships a
+// current build. GitHub #46.
+var ffmpegReconnectArgs = []string{
+	"-reconnect", "1",
+	"-reconnect_streamed", "1",
+	"-reconnect_on_network_error", "1",
+	"-reconnect_delay_max", "30",
+}
+
+// buildFFmpegArgs assembles the ffmpeg command line. The reconnect
+// options are INPUT options and must precede -i. Split out from
+// RunFFmpeg so the arg shape is unit-testable without exec'ing ffmpeg.
+func buildFFmpegArgs(streamURL, outputPath string) []string {
 	args := []string{
 		// "error" is the loudest level that still excludes the per-segment
-		// info chatter. We want HTTP failures, EIO writes, codec rejects,
-		// and any other "ffmpeg gave up" messages to land in stderr so
-		// the diagnostic tail can surface them. Audit-style fix for
-		// GitHub issue #40.
+		// info chatter. HTTP failures, EIO writes, codec rejects, and any
+		// other "ffmpeg gave up" messages land in stderr so the diagnostic
+		// tail can surface them. GitHub issue #40.
 		"-loglevel", "error",
 		"-stats",
+	}
+	args = append(args, ffmpegReconnectArgs...)
+	args = append(args,
 		"-y",
 		"-i", streamURL,
 		"-c:v", "copy",
 		"-c:a", "copy",
 		"-bsf:a", "aac_adtstoasc",
 		"-movflags", "faststart",
-		job.OutputPath,
+		outputPath,
+	)
+	return args
+}
+
+func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
+	streamURL := job.StreamURL
+	// For HLS master playlists, resolve the variant matching the
+	// requested height and (for 1080p requests) probe for unlisted
+	// 1080p. DASH manifests are handled by ffmpeg.
+	if strings.Contains(streamURL, ".m3u8") {
+		log.Printf("resolving HLS variant for: %s", streamURL[:min(len(streamURL), 80)])
+		streamURL = resolveHLSVariant(ctx, job.FHDProber, streamURL, job.TargetHeight)
+		log.Printf("resolved stream URL: %s", streamURL[:min(len(streamURL), 80)])
+	} else {
+		log.Printf("not HLS, skipping variant resolution: %s", streamURL[:min(len(streamURL), 80)])
 	}
+	args := buildFFmpegArgs(streamURL, job.OutputPath)
 
 	// Derive a cancellable child context so the progress watchdog (and
 	// the parent ctx) can both trigger cmd.Cancel via os/exec. Caller

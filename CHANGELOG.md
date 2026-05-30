@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-05-30
+
+### Added
+
+- **Quality-degrade-on-retry for unreliable streams (#46).** When a download fails with a CDN/ffmpeg error and is retried, iplayer-arr now steps the quality down one rung per retry (1080p, then 720p, 540p, 396p) instead of re-pulling the identical oversized stream that just failed. The originally requested quality is preserved for display and reconciliation; the delivered rendition is recorded truthfully.
+- **ffmpeg reconnect on transient CDN drops (#46).** Downloads now pass `-reconnect`, `-reconnect_streamed`, `-reconnect_on_network_error` and `-reconnect_delay_max`, so a momentary TLS or end-of-file error mid-stream is retried in place rather than aborting the whole run.
+
+### Fixed
+
+- **Manual downloads now honour the selected quality (#45).** Selecting a quality such as 396p no longer downloads at 1080p. HLS variant selection matches the requested resolution against the master playlist, and the unlisted-1080p upgrade probe only runs when 1080p is actually requested. Previously the resolver always took the highest-bandwidth variant and force-upgraded to a hidden 1080p, ignoring the request.
+- **Long episodes no longer loop forever retrying from the start (#46).** The oversized hidden-1080p stream selected by the quality bug above was prone to BBC CDN early termination. With the quality fix, reconnect support, and quality-degrade-on-retry, large episodes now complete or fall back to a reliable lower rendition instead of exhausting their retries.
+
 ## [1.5.8] - 2026-05-30
 
 ### Fixed

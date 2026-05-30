@@ -111,6 +111,28 @@ func (m *Manager) processNext(ctx context.Context, workerID int) {
 
 // processDownload runs the full pipeline: resolve -> media select -> ffmpeg -> subtitles -> history.
 func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
+	// Determine the effective target quality for this attempt. On a retry
+	// that follows a CDN-style failure we step the quality DOWN the ladder
+	// by the number of CDN failures (not the total retry count, which can
+	// be inflated by not-yet-available retries) so we stop re-pulling the
+	// same oversized stream that just failed (#46). dl.Quality (the
+	// original request) is preserved for display and reconciliation;
+	// effectiveQual only diverges from it on an actual degrade, so the
+	// first attempt is byte-for-byte the prior behaviour.
+	targetHeight := qualityToHeight(dl.Quality)
+	effectiveQual := dl.Quality
+	if dl.CDNFailures > 0 &&
+		(dl.FailureCode == store.FailCodeFFmpeg || dl.FailureCode == store.FailCodeTruncated) {
+		if degraded := degradeHeight(targetHeight, dl.CDNFailures); degraded != targetHeight {
+			log.Printf("download %s: degrading quality after %d CDN failure(s): %dp -> %dp",
+				dl.ID, dl.CDNFailures, targetHeight, degraded)
+			targetHeight = degraded
+			if tag := heightToQualityTag(targetHeight); tag != "" {
+				effectiveQual = tag
+			}
+		}
+	}
+
 	// 1. Resolve playlist
 	m.setStatus(dl, store.StatusResolving, "")
 	info, err := m.playlist.Resolve(dl.PID)
@@ -128,7 +150,7 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	if dl.Title == "" {
 		dl.Title = info.Title
 	}
-	dl.Size = estimateSize(info.Duration, dl.Quality)
+	dl.Size = estimateSize(info.Duration, effectiveQual)
 	if err := m.store.PutDownload(dl); err != nil {
 		log.Printf("store update after playlist: %v", err)
 	}
@@ -154,8 +176,8 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	for _, s := range streams.Video {
 		log.Printf("available stream: %dx%d %dkbps fmt=%s supplier=%s", s.Width, s.Height, s.Bitrate, s.Format, s.Supplier)
 	}
-	stream := pickStream(streams.Video, dl.Quality)
-	log.Printf("picked stream: %dx%d %dkbps fmt=%s (requested %s)", stream.Width, stream.Height, stream.Bitrate, stream.Format, dl.Quality)
+	stream := pickStream(streams.Video, effectiveQual)
+	log.Printf("picked stream: %dx%d %dkbps fmt=%s (requested %s, effective %s)", stream.Width, stream.Height, stream.Bitrate, stream.Format, dl.Quality, effectiveQual)
 	dl.StreamURL = stream.URL
 	if err := m.store.PutDownload(dl); err != nil {
 		log.Printf("store update after stream pick: %v", err)
@@ -197,6 +219,7 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 			}
 		},
 		FHDProber:       m.client, // NEW — *bbc.Client satisfies downloaderFHDProber
+		TargetHeight:    targetHeight,
 		WatchdogTimeout: m.watchdogTimeout,
 	}
 
@@ -239,10 +262,10 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 
 	// 7. Truncation gate using the actual-quality threshold (or
 	// requested-quality fallback when actualQual is empty).
-	if threshold := truncationThreshold(dl.Duration, dl.Quality, actualQual); threshold > 0 && actualSize < threshold {
+	if threshold := truncationThreshold(dl.Duration, effectiveQual, actualQual); threshold > 0 && actualSize < threshold {
 		thresholdQ := actualQual
 		if thresholdQ == "" {
-			thresholdQ = dl.Quality
+			thresholdQ = effectiveQual
 		}
 		log.Printf("download %s truncated: %d bytes actual, threshold %d (%s)",
 			dl.ID, actualSize, threshold, thresholdQ)
@@ -312,6 +335,9 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.FailureCode = code
 	dl.Error = err.Error()
 	dl.RetryCount++
+	if code == store.FailCodeFFmpeg || code == store.FailCodeTruncated {
+		dl.CDNFailures++
+	}
 
 	limit := maxRetries
 	switch code {
@@ -449,6 +475,33 @@ func qualityToHeight(q string) int {
 		return 720 // default
 	}
 	return h
+}
+
+// qualityLadder is the descending quality ladder used by degradeHeight,
+// mirroring the taxonomy in heightToQualityTag.
+var qualityLadder = []int{2160, 1080, 720, 540, 396}
+
+// degradeHeight steps the requested height DOWN the quality ladder by
+// `steps` rungs (clamped to the lowest rung). Used to retry a download
+// at a smaller, more reliable rendition after a CDN-style failure,
+// instead of re-pulling the identical oversized stream. A request at or
+// below the lowest rung is returned unchanged. #46.
+func degradeHeight(requested, steps int) int {
+	if steps < 1 {
+		return requested
+	}
+	idx := len(qualityLadder) - 1
+	for i, h := range qualityLadder {
+		if requested >= h {
+			idx = i
+			break
+		}
+	}
+	idx += steps
+	if idx >= len(qualityLadder) {
+		idx = len(qualityLadder) - 1
+	}
+	return qualityLadder[idx]
 }
 
 // heightToQualityTag converts an encoded video height to one of the

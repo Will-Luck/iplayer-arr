@@ -49,7 +49,7 @@ func TestResolveHLSVariant_FHDFound_ReturnsFHDURL(t *testing.T) {
 	defer srv.Close()
 
 	prober := &fakeDownloaderProber{fhdURL: "https://example.com/fhd-video=12000000.m3u8", found: true}
-	got := resolveHLSVariant(context.Background(), prober, masterURL)
+	got := resolveHLSVariant(context.Background(), prober, masterURL, 0)
 	if got != prober.fhdURL {
 		t.Errorf("expected FHD URL %q, got %q", prober.fhdURL, got)
 	}
@@ -60,7 +60,7 @@ func TestResolveHLSVariant_FHDDefinitiveNo_ReturnsBestVariant(t *testing.T) {
 	defer srv.Close()
 
 	prober := &fakeDownloaderProber{found: false, err: nil}
-	got := resolveHLSVariant(context.Background(), prober, masterURL)
+	got := resolveHLSVariant(context.Background(), prober, masterURL, 0)
 	if !strings.Contains(got, "video=2700000") {
 		t.Errorf("expected best variant URL (video=2700000), got %q", got)
 	}
@@ -71,7 +71,7 @@ func TestResolveHLSVariant_FHDProberError_ReturnsBestVariant(t *testing.T) {
 	defer srv.Close()
 
 	prober := &fakeDownloaderProber{err: errors.New("FHD HEAD 503")}
-	got := resolveHLSVariant(context.Background(), prober, masterURL)
+	got := resolveHLSVariant(context.Background(), prober, masterURL, 0)
 	if !strings.Contains(got, "video=2700000") {
 		t.Errorf("expected fallback to best variant on error, got %q", got)
 	}
@@ -81,7 +81,7 @@ func TestResolveHLSVariant_NilProber_ReturnsBestVariant(t *testing.T) {
 	masterURL, srv := minimalMasterPlaylist(t)
 	defer srv.Close()
 
-	got := resolveHLSVariant(context.Background(), nil, masterURL)
+	got := resolveHLSVariant(context.Background(), nil, masterURL, 0)
 	if !strings.Contains(got, "video=2700000") {
 		t.Errorf("expected best variant on nil prober, got %q", got)
 	}
@@ -95,7 +95,7 @@ func TestResolveHLSVariant_RespectsContextCancel(t *testing.T) {
 	cancel() // pre-cancelled
 
 	prober := &fakeDownloaderProber{delayResp: 5 * time.Second}
-	got := resolveHLSVariant(ctx, prober, masterURL)
+	got := resolveHLSVariant(ctx, prober, masterURL, 0)
 
 	// The prober's ProbeHiddenFHD should have seen the cancelled ctx
 	// and returned ctx.Err(), which resolveHLSVariant treats as an
