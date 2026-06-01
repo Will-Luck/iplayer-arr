@@ -345,7 +345,9 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			prog.IdentityTier = tier
 
 			pubDate := time.Now().Format(time.RFC1123Z)
-			if res.AirDate != "" {
+			if !res.Available.IsZero() {
+				pubDate = res.Available.Format(time.RFC1123Z)
+			} else if res.AirDate != "" {
 				if t, err := time.Parse("2006-01-02", res.AirDate); err == nil {
 					pubDate = t.Format(time.RFC1123Z)
 				}

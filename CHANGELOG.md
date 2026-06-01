@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Newznab feed `pubDate` now reflects iPlayer availability, not the original broadcast date (#47).** RSS items were stamped with each episode's BBC `release_date` (its original transmission date). Content that became available on iPlayer later than it first aired (catalogue additions, boxset drops) then carried a stale publish date, so Sonarr's RSS sync treated the release as already-seen and skipped it, even when it outranked releases from other indexers. The feed now derives `pubDate` from the downloadable version's iPlayer availability timestamp (`versions[].availability.start`), falling back to the broadcast date and then the current time. Title generation and date-based episode matching are unchanged.
+
 ## [1.5.10] - 2026-06-05
 
 ### Fixed

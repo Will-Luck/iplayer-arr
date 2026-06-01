@@ -38,7 +38,8 @@ type IBLResult struct {
 	AirDate    string
 	Thumbnail  string
 	BrandPID   string
-	Duration   int // seconds
+	Duration   int       // seconds
+	Available  time.Time // iPlayer availability start (downloadable version); zero if unknown
 }
 
 var (
@@ -454,9 +455,13 @@ type iblElementJSON struct {
 	ParentPosition int    `json:"parent_position"`
 	TleoID         string `json:"tleo_id"`
 	Versions       []struct {
+		Download bool `json:"download"`
 		Duration struct {
 			Value string `json:"value"`
 		} `json:"duration"`
+		Availability struct {
+			Start string `json:"start"`
+		} `json:"availability"`
 	} `json:"versions"`
 }
 
@@ -490,6 +495,28 @@ func iblElementToResult(e iblElementJSON, fallbackChannel, fallbackThumb string)
 	r.Series, r.EpisodeNum = parseSubtitleNumbers(e.Subtitle)
 	if len(e.Versions) > 0 && e.Versions[0].Duration.Value != "" {
 		r.Duration = parseISODuration(e.Versions[0].Duration.Value)
+	}
+	// pubDate should reflect when the grabbable version became available on
+	// iPlayer. Prefer the download==true version; else earliest across versions.
+	var earliest time.Time
+	for _, v := range e.Versions {
+		if v.Availability.Start == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, v.Availability.Start)
+		if err != nil {
+			continue
+		}
+		if v.Download {
+			r.Available = t
+			break
+		}
+		if earliest.IsZero() || t.Before(earliest) {
+			earliest = t
+		}
+	}
+	if r.Available.IsZero() {
+		r.Available = earliest
 	}
 	return r
 }

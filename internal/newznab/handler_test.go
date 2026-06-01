@@ -337,6 +337,55 @@ func TestHandleTVSearchDailyMismatchByDate(t *testing.T) {
 	}
 }
 
+func TestHandleTVSearchPubDateFromAvailability(t *testing.T) {
+	// #47: the RSS <pubDate> must reflect when the episode became available
+	// on iPlayer (versions[].availability.start), not its original broadcast
+	// date (release_date). A stale broadcast-dated pubDate sinks the release
+	// below Sonarr's RSS watermark, so Sonarr never auto-grabs it.
+	payload := `{
+		"new_search": {
+			"results": [
+				{"id": "gcrj11", "type": "episode", "title": "Great Continental Railway Journeys", "subtitle": "Series 9: Episode 11", "release_date": "2026-05-20", "parent_position": 11, "versions": [
+					{"download": true, "duration": {"value": "PT28M45.040S"}, "availability": {"start": "2026-05-26T17:45:00Z"}}
+				]}
+			]
+		}
+	}`
+	h := newHandlerWithBBC(t, payload)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=great+continental+railway+journeys&season=9&ep=11", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var feed struct {
+		Channel struct {
+			Items []struct {
+				Title   string `xml:"title"`
+				PubDate string `xml:"pubDate"`
+			} `xml:"item"`
+		} `xml:"channel"`
+	}
+	if err := xml.Unmarshal(w.Body.Bytes(), &feed); err != nil {
+		t.Fatalf("parse RSS: %v\n%s", err, w.Body.String())
+	}
+	if len(feed.Channel.Items) == 0 {
+		t.Fatalf("expected at least one item, got none:\n%s", w.Body.String())
+	}
+
+	wantAvail := time.Date(2026, 5, 26, 17, 45, 0, 0, time.UTC).Format(time.RFC1123Z)
+	broadcast := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC).Format(time.RFC1123Z)
+	got := feed.Channel.Items[0].PubDate
+	if got == broadcast {
+		t.Errorf("pubDate = %q is the broadcast date; want the iPlayer availability date %q", got, wantAvail)
+	}
+	if got != wantAvail {
+		t.Errorf("pubDate = %q, want %q (versions[].availability.start)", got, wantAvail)
+	}
+}
+
 func TestHandleTVSearchFiltersOtherShowsByName(t *testing.T) {
 	// Regression: BBC iPlayer's IBL search is relevance-ranked, so a query
 	// like "Little Britain" returns ~24 unrelated programmes whose titles

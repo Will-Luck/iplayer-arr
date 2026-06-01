@@ -316,6 +316,45 @@ func TestGroupEpisodes_ParsesElements(t *testing.T) {
 	}
 }
 
+func TestIBLAvailabilityPrefersDownloadableVersion(t *testing.T) {
+	// #47: availability.start can differ between versions (e.g. audio-described
+	// vs original). pubDate must reflect the version iParr actually grabs, so
+	// prefer the download==true version's availability over an earlier one.
+	const payload = `{"group_episodes":{"elements":[
+		{"id":"pid-multi","type":"episode","title":"Multi Version","subtitle":"Series 1: Episode 1","release_date":"20 May 2026","versions":[
+			{"download":false,"duration":{"value":"PT30M0.000S"},"availability":{"start":"2026-05-20T06:00:00Z"}},
+			{"download":true,"duration":{"value":"PT30M0.000S"},"availability":{"start":"2026-05-26T17:45:00Z"}}
+		]},
+		{"id":"pid-none","type":"episode","title":"No Availability","subtitle":"Series 1: Episode 2","release_date":"21 May 2026","versions":[
+			{"download":true,"duration":{"value":"PT30M0.000S"}}
+		]}
+	]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.GroupEpisodes(context.Background(), "popular", 10)
+	if err != nil {
+		t.Fatalf("GroupEpisodes: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	wantDownloadable := time.Date(2026, 5, 26, 17, 45, 0, 0, time.UTC)
+	if !results[0].Available.Equal(wantDownloadable) {
+		t.Errorf("Available = %v, want %v (download==true version, not the earlier audio-described one)",
+			results[0].Available, wantDownloadable)
+	}
+	if !results[1].Available.IsZero() {
+		t.Errorf("element without availability: Available = %v, want zero", results[1].Available)
+	}
+}
+
 func TestGroupEpisodes_RequestShape(t *testing.T) {
 	var got *http.Request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
