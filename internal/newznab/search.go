@@ -452,7 +452,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 				baseURL(r), guid, apiKeyParam, size, cat, size)
 
 			if tvdbid != "" {
-				item += fmt.Sprintf("\n      <newznab:attr name=\"tvdbid\" value=\"%s\" />", tvdbid)
+				item += fmt.Sprintf("\n      <newznab:attr name=\"tvdbid\" value=\"%s\" />", html.EscapeString(tvdbid))
 			}
 
 			if tier == store.TierManual {
