@@ -290,7 +290,26 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		probe = h.prober.PrefetchPIDs(probeCtx, probeItems)
 	}
 
+	// Build the final emit list before rendering. The limit cap is
+	// enforced here rather than on the rendered slice so that
+	// first-seen timestamps are stamped only for items Sonarr actually
+	// receives: stamping a trimmed item would backdate its pubDate
+	// before Sonarr ever saw it, recreating issue #47 in miniature.
+	// The cap honours Sonarr's `limit=N` query parameter, already
+	// clamped to the advertised max=100 in parseLimitParam. Audit
+	// item 24.
+	type emitItem struct {
+		res       bbc.IBLResult
+		prog      *store.Programme
+		override  *store.ShowOverride
+		qualities []string
+	}
+	var emits []emitItem
+	itemCount := 0
 	for _, it := range filtered {
+		if limit > 0 && itemCount >= limit {
+			break
+		}
 		res, prog := it.res, it.prog
 
 		if probe.NotYetAvailable[res.PID] {
@@ -328,9 +347,85 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		if wildcardBrowse && len(qualities) > browseQualitiesPerPID {
 			qualities = qualities[:browseQualitiesPerPID]
 		}
+		if limit > 0 && itemCount+len(qualities) > limit {
+			qualities = qualities[:limit-itemCount]
+		}
+		if len(qualities) == 0 {
+			continue
+		}
+		itemCount += len(qualities)
+		emits = append(emits, emitItem{res: res, prog: prog, override: override, qualities: qualities})
+	}
 
-		for _, qual := range qualities {
-			title, tier := GenerateTitle(prog, qual, override)
+	// Stamp each emitted PID with the time it first appeared in the
+	// feed and use that stamp as the primary pubDate source. BBC
+	// promotes items onto the browse rails long after
+	// availability.start, so an availability-derived pubDate can still
+	// sit below Sonarr's RSS watermark the first time we surface an
+	// item. Issue #47.
+	//
+	// Writes are browse-only: Sonarr's watermark advances with the
+	// wildcard RSS feed, so a stamp created by a q=/tvdbid= search at
+	// T1 would let the item debut in the feed later with pubDate=T1 --
+	// already below the watermark, recreating issue #47 via the search
+	// path. Searches do a read-only lookup instead, so already-stamped
+	// PIDs advertise the same pubDate as the feed and unstamped ones
+	// keep the fallback chain below.
+	//
+	// The stamp lands before the first response byte, so an aborted
+	// response still stamps and the next successful poll carries a
+	// pubDate one interval older than Sonarr's actual first sight.
+	// Accepted: that stamp still post-dates the previous successful
+	// poll, keeping it above the watermark.
+	var firstSeen map[string]time.Time
+	if h.store != nil && len(emits) > 0 {
+		pids := make([]string, 0, len(emits))
+		for _, e := range emits {
+			pids = append(pids, e.res.PID)
+		}
+		var err error
+		if wildcardBrowse {
+			firstSeen, err = h.store.GetOrSetFirstSeenBatch(pids, time.Now())
+		} else {
+			firstSeen, err = h.store.GetFirstSeenBatch(pids)
+		}
+		if err != nil {
+			log.Printf("first-seen lookup failed, falling back to availability dates: %v", err)
+		}
+	}
+
+	for _, e := range emits {
+		res, prog := e.res, e.prog
+
+		// pubDate precedence: first-seen -> availability.start ->
+		// broadcast date -> now. Computed once per PID so every quality
+		// variant of an episode shares the same age in Sonarr.
+		pubDate := time.Now().Format(time.RFC1123Z)
+		if ts, ok := firstSeen[res.PID]; ok {
+			pubDate = ts.Format(time.RFC1123Z)
+		} else if !res.Available.IsZero() {
+			pubDate = res.Available.Format(time.RFC1123Z)
+		} else if res.AirDate != "" {
+			if t, err := time.Parse("2006-01-02", res.AirDate); err == nil {
+				pubDate = t.Format(time.RFC1123Z)
+			}
+		}
+
+		// Carry the availability date (else broadcast date) as a
+		// bespoke attribute for diagnostics. Deliberately NOT named
+		// usenetdate: Sonarr prefers usenetdate over pubDate for
+		// release age, which would resurrect issue #47.
+		broadcastDate := ""
+		if !res.Available.IsZero() {
+			broadcastDate = res.Available.Format(time.RFC1123Z)
+		} else if res.AirDate != "" {
+			if t, err := time.Parse("2006-01-02", res.AirDate); err == nil {
+				broadcastDate = t.Format(time.RFC1123Z)
+			}
+		}
+
+		for _, qual := range e.qualities {
+			title, tier := GenerateTitle(prog, qual, e.override)
 			guid := EncodeGUID(res.PID, qual, "original")
 
 			cat := "5040" // HD
@@ -343,13 +438,6 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 
 			size := estimateSize(prog.Duration, qual)
 			prog.IdentityTier = tier
-
-			pubDate := time.Now().Format(time.RFC1123Z)
-			if res.AirDate != "" {
-				if t, err := time.Parse("2006-01-02", res.AirDate); err == nil {
-					pubDate = t.Format(time.RFC1123Z)
-				}
-			}
 
 			item := fmt.Sprintf(`    <item>
       <title>%s</title>
@@ -364,7 +452,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 				baseURL(r), guid, apiKeyParam, size, cat, size)
 
 			if tvdbid != "" {
-				item += fmt.Sprintf("\n      <newznab:attr name=\"tvdbid\" value=\"%s\" />", tvdbid)
+				item += fmt.Sprintf("\n      <newznab:attr name=\"tvdbid\" value=\"%s\" />", html.EscapeString(tvdbid))
 			}
 
 			if tier == store.TierManual {
@@ -372,19 +460,13 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
       <newznab:attr name="iparr:manual" value="true" />`
 			}
 
+			if broadcastDate != "" {
+				item += fmt.Sprintf("\n      <newznab:attr name=\"iparr:broadcastdate\" value=\"%s\" />", broadcastDate)
+			}
+
 			item += "\n    </item>"
 			items = append(items, item)
 		}
-	}
-
-	// Honour Sonarr's `limit=N` query parameter. The cap was already
-	// clamped to the advertised max=100 in parseLimitParam; here we
-	// trim the rendered item list so the RSS body matches the client's
-	// request. Without this, a tvsearch with limit=50 could return up
-	// to ~100 items (browseCapPIDs * browseQualitiesPerPID), forcing
-	// Sonarr to discard the overflow on the client side. Audit item 24.
-	if limit > 0 && len(items) > limit {
-		items = items[:limit]
 	}
 
 	w.Header().Set("Content-Type", "application/xml")
