@@ -338,10 +338,13 @@ func TestHandleTVSearchDailyMismatchByDate(t *testing.T) {
 }
 
 func TestHandleTVSearchPubDateFromAvailability(t *testing.T) {
-	// #47: the RSS <pubDate> must reflect when the episode became available
-	// on iPlayer (versions[].availability.start), not its original broadcast
-	// date (release_date). A stale broadcast-dated pubDate sinks the release
-	// below Sonarr's RSS watermark, so Sonarr never auto-grabs it.
+	// #47 fallback chain: with no store wired, the RSS <pubDate> must
+	// reflect when the episode became available on iPlayer
+	// (versions[].availability.start), not its original broadcast date
+	// (release_date). A stale broadcast-dated pubDate sinks the release
+	// below Sonarr's RSS watermark, so Sonarr never auto-grabs it. With
+	// a store, the first-seen stamp takes precedence; see
+	// TestHandleTVSearch_FirstSeenBecomesPubDate.
 	payload := `{
 		"new_search": {
 			"results": [
@@ -383,6 +386,454 @@ func TestHandleTVSearchPubDateFromAvailability(t *testing.T) {
 	}
 	if got != wantAvail {
 		t.Errorf("pubDate = %q, want %q (versions[].availability.start)", got, wantAvail)
+	}
+}
+
+// feedEntry pairs each RSS item's decoded GUID with its pubDate so
+// tests can assert per-PID dates without relying on item order alone.
+type feedEntry struct {
+	pid     string
+	quality string
+	pubDate string
+}
+
+func feedEntries(t *testing.T, body string) []feedEntry {
+	t.Helper()
+	var doc struct {
+		Channel struct {
+			Items []struct {
+				GUID    string `xml:"guid"`
+				PubDate string `xml:"pubDate"`
+			} `xml:"item"`
+		} `xml:"channel"`
+	}
+	if err := xml.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("parse RSS: %v\n%s", err, body)
+	}
+	entries := make([]feedEntry, 0, len(doc.Channel.Items))
+	for _, it := range doc.Channel.Items {
+		u, err := url.Parse(strings.TrimSpace(it.GUID))
+		if err != nil {
+			t.Fatalf("parse GUID URL %q: %v", it.GUID, err)
+		}
+		info, err := DecodeGUID(u.Query().Get("id"))
+		if err != nil {
+			t.Fatalf("decode GUID %q: %v", it.GUID, err)
+		}
+		entries = append(entries, feedEntry{pid: info.PID, quality: info.Quality, pubDate: it.PubDate})
+	}
+	return entries
+}
+
+// TestHandleTVSearch_FirstSeenBecomesPubDate pins the second half of
+// issue #47: availability.start can still pre-date the moment an item
+// first surfaces in this feed (BBC promotes items onto the browse
+// rails late), so the wildcard RSS path stamps each PID on first emit
+// and reuses that stamp as <pubDate> on every later poll.
+func TestHandleTVSearch_FirstSeenBecomesPubDate(t *testing.T) {
+	payload := `{
+		"new_search": {
+			"results": [
+				{
+					"id": "m0023x9y",
+					"type": "episode",
+					"title": "Great Continental Railway Journeys",
+					"subtitle": "Series 9: Episode 11",
+					"release_date": "2020-05-20",
+					"versions": [
+						{
+							"download": true,
+							"duration": {"value": "PT58M"},
+							"availability": {"start": "2020-05-26T17:45:00Z"}
+						}
+					]
+				}
+			]
+		}
+	}`
+	h, _ := newHandlerWithBBCAndStore(t, payload)
+
+	get := func() string {
+		// No q= and no tvdbid=: the wildcard RSS-sync shape, the only
+		// path allowed to create first-seen stamps.
+		req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		return w.Body.String()
+	}
+
+	before := time.Now()
+	first := feedEntries(t, get())
+	if len(first) == 0 {
+		t.Fatal("expected at least one item")
+	}
+
+	avail := time.Date(2020, 5, 26, 17, 45, 0, 0, time.UTC).Format(time.RFC1123Z)
+	if first[0].pubDate == avail {
+		t.Errorf("pubDate = availability date %q; want a fresh first-seen stamp", avail)
+	}
+	stamp, err := time.Parse(time.RFC1123Z, first[0].pubDate)
+	if err != nil {
+		t.Fatalf("parse pubDate %q: %v", first[0].pubDate, err)
+	}
+	if stamp.Before(before.Add(-time.Minute)) || stamp.After(time.Now().Add(time.Minute)) {
+		t.Errorf("pubDate %v not stamped around request time", stamp)
+	}
+
+	second := feedEntries(t, get())
+	if second[0].pubDate != first[0].pubDate {
+		t.Errorf("second request pubDate %q != first %q; first-seen stamp must be stable",
+			second[0].pubDate, first[0].pubDate)
+	}
+}
+
+// TestSearch_QuerySearchDoesNotStamp pins the first-seen write gate:
+// only the wildcard RSS path creates stamps. If a q= search stamped,
+// an item surfaced by a search at T1 but never grabbed would later
+// debut in the wildcard feed with pubDate=T1 -- already below
+// Sonarr's RSS watermark, recreating issue #47 via the search path.
+func TestSearch_QuerySearchDoesNotStamp(t *testing.T) {
+	payload := newSearchPayload(`{
+		"id": "pidee",
+		"type": "episode",
+		"title": "Trawler Wars",
+		"subtitle": "Series 1: Episode 1",
+		"release_date": "2020-05-20",
+		"versions": [
+			{
+				"download": true,
+				"duration": {"value": "PT28M"},
+				"availability": {"start": "2020-05-26T17:45:00Z"}
+			}
+		]
+	}`)
+	h, st := newHandlerWithBBCAndStore(t, payload)
+
+	get := func(query string) string {
+		req := httptest.NewRequest("GET", "/newznab/api?"+query, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		return w.Body.String()
+	}
+
+	// A q= search falls back to the availability date and must not
+	// start the PID's first-seen clock.
+	avail := time.Date(2020, 5, 26, 17, 45, 0, 0, time.UTC).Format(time.RFC1123Z)
+	searched := feedEntries(t, get("t=search&q=trawler+wars"))
+	if len(searched) == 0 {
+		t.Fatal("search emitted no items")
+	}
+	if searched[0].pubDate != avail {
+		t.Errorf("search pubDate = %q, want availability fallback %q", searched[0].pubDate, avail)
+	}
+	if stamps, err := st.GetFirstSeenBatch([]string{"pidee"}); err != nil {
+		t.Fatalf("read stamps: %v", err)
+	} else if len(stamps) != 0 {
+		t.Errorf("q= search stamped pidee at %v; writes are browse-only", stamps["pidee"])
+	}
+
+	// The wildcard browse then stamps fresh: its pubDate must not
+	// inherit the search-time fallback date.
+	before := time.Now()
+	browsed := feedEntries(t, get("t=search"))
+	if len(browsed) == 0 {
+		t.Fatal("browse emitted no items")
+	}
+	if browsed[0].pubDate == avail {
+		t.Errorf("browse pubDate = search-time fallback %q; want a fresh stamp", avail)
+	}
+	stamp, err := time.Parse(time.RFC1123Z, browsed[0].pubDate)
+	if err != nil {
+		t.Fatalf("parse pubDate %q: %v", browsed[0].pubDate, err)
+	}
+	if stamp.Before(before.Add(-time.Minute)) {
+		t.Errorf("browse pubDate %v pre-dates the poll that first emitted the item", stamp)
+	}
+
+	// A follow-up browse returns the same fresh stamp.
+	again := feedEntries(t, get("t=search"))
+	if len(again) == 0 {
+		t.Fatal("second browse emitted no items")
+	}
+	if again[0].pubDate != browsed[0].pubDate {
+		t.Errorf("second browse pubDate %q != first %q; stamp must be stable",
+			again[0].pubDate, browsed[0].pubDate)
+	}
+}
+
+// TestSearch_QuerySearchReturnsExistingStamp pins the read side of the
+// write gate: once the wildcard feed has stamped a PID, a q= search
+// for it advertises the same pubDate (so Sonarr and Prowlarr caches
+// agree with the feed) without disturbing the stored stamp.
+func TestSearch_QuerySearchReturnsExistingStamp(t *testing.T) {
+	payload := newSearchPayload(`{
+		"id": "pidff",
+		"type": "episode",
+		"title": "Trawler Wars",
+		"subtitle": "Series 1: Episode 1",
+		"release_date": "2020-05-20",
+		"versions": [
+			{
+				"download": true,
+				"duration": {"value": "PT28M"},
+				"availability": {"start": "2020-05-26T17:45:00Z"}
+			}
+		]
+	}`)
+	h, st := newHandlerWithBBCAndStore(t, payload)
+
+	get := func(query string) string {
+		req := httptest.NewRequest("GET", "/newznab/api?"+query, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		return w.Body.String()
+	}
+
+	// Browse first: the wildcard feed stamps pidff.
+	browsed := feedEntries(t, get("t=search"))
+	if len(browsed) == 0 {
+		t.Fatal("browse emitted no items")
+	}
+
+	// Sentinel-probe: a stamped PID returns its original timestamp
+	// rather than adopting the sentinel.
+	sentinel := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	stamps, err := st.GetOrSetFirstSeenBatch([]string{"pidff"}, sentinel)
+	if err != nil {
+		t.Fatalf("sentinel probe: %v", err)
+	}
+	if stamps["pidff"].Equal(sentinel) {
+		t.Fatal("browse did not stamp pidff")
+	}
+	original := stamps["pidff"]
+
+	// The q= search reuses the feed's stamp, not the availability
+	// fallback.
+	searched := feedEntries(t, get("t=search&q=trawler+wars"))
+	if len(searched) == 0 {
+		t.Fatal("search emitted no items")
+	}
+	if searched[0].pubDate != browsed[0].pubDate {
+		t.Errorf("search pubDate = %q, want feed stamp %q", searched[0].pubDate, browsed[0].pubDate)
+	}
+
+	// The search's read-only lookup must not have moved the stamp.
+	after, err := st.GetFirstSeenBatch([]string{"pidff"})
+	if err != nil {
+		t.Fatalf("read stamps: %v", err)
+	}
+	if !after["pidff"].Equal(original) {
+		t.Errorf("stamp moved from %v to %v across a q= search; lookup must be read-only",
+			original, after["pidff"])
+	}
+}
+
+// TestSearch_LimitTrimmedItemNotStamped pins the limit/stamp ordering
+// on the wildcard feed: an item trimmed by Sonarr's `limit=N`
+// parameter never reached the client, so it must not be stamped --
+// otherwise its pubDate would pre-date the first feed Sonarr actually
+// saw it in, recreating issue #47 in miniature.
+func TestSearch_LimitTrimmedItemNotStamped(t *testing.T) {
+	payload := newSearchPayload(
+		`{"id": "pidaa", "type": "episode", "title": "Trawler Wars", "subtitle": "Series 1: Episode 1"}`,
+		`{"id": "pidbb", "type": "episode", "title": "Trawler Wars", "subtitle": "Series 1: Episode 2"}`,
+	)
+	h, st := newHandlerWithBBCAndStore(t, payload)
+
+	get := func(query string) string {
+		req := httptest.NewRequest("GET", "/newznab/api?"+query, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		return w.Body.String()
+	}
+
+	// limit=1 emits only pidaa's first quality variant; pidbb is
+	// trimmed before rendering.
+	capped := feedEntries(t, get("t=search&limit=1"))
+	if len(capped) != 1 {
+		t.Fatalf("limit=1 emitted %d items, want 1", len(capped))
+	}
+	if capped[0].pid != "pidaa" {
+		t.Fatalf("limit=1 emitted %s, want pidaa", capped[0].pid)
+	}
+
+	// Probe the store with a sentinel: an unstamped PID adopts it, a
+	// stamped PID returns its original timestamp.
+	sentinel := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	stamps, err := st.GetOrSetFirstSeenBatch([]string{"pidaa", "pidbb"}, sentinel)
+	if err != nil {
+		t.Fatalf("sentinel probe: %v", err)
+	}
+	if stamps["pidaa"].Equal(sentinel) {
+		t.Error("pidaa was emitted under limit=1 but has no first-seen stamp")
+	}
+	if !stamps["pidbb"].Equal(sentinel) {
+		t.Errorf("pidbb was trimmed by limit=1 yet carries stamp %v; trimmed items must not be stamped",
+			stamps["pidbb"])
+	}
+
+	// An uncapped request now emits pidbb with the sentinel stamp,
+	// proving the feed reads the store stamp and that the limit=1
+	// request never wrote one for pidbb.
+	full := feedEntries(t, get("t=search"))
+	if len(full) != 4 {
+		t.Fatalf("uncapped request emitted %d items, want 4", len(full))
+	}
+	wantSentinel := sentinel.Format(time.RFC1123Z)
+	for _, e := range full {
+		switch e.pid {
+		case "pidaa":
+			if e.pubDate != capped[0].pubDate {
+				t.Errorf("pidaa pubDate = %q, want original stamp %q", e.pubDate, capped[0].pubDate)
+			}
+		case "pidbb":
+			if e.pubDate != wantSentinel {
+				t.Errorf("pidbb pubDate = %q, want sentinel stamp %q", e.pubDate, wantSentinel)
+			}
+		default:
+			t.Errorf("unexpected PID %s in feed", e.pid)
+		}
+	}
+}
+
+// TestSearch_BroadcastDateAttrCarriesAvailability verifies the bespoke
+// iparr:broadcastdate attribute carries the availability date once the
+// first-seen stamp owns <pubDate>, and is omitted when the result has
+// neither an availability window nor a broadcast date. The attribute
+// is deliberately not called usenetdate: Sonarr prefers usenetdate
+// over pubDate for release age, which would resurrect issue #47.
+func TestSearch_BroadcastDateAttrCarriesAvailability(t *testing.T) {
+	payload := newSearchPayload(
+		`{
+			"id": "pidcc",
+			"type": "episode",
+			"title": "Trawler Wars",
+			"subtitle": "Series 1: Episode 1",
+			"release_date": "2020-05-20",
+			"versions": [
+				{
+					"download": true,
+					"duration": {"value": "PT28M"},
+					"availability": {"start": "2020-05-26T17:45:00Z"}
+				}
+			]
+		}`,
+		`{"id": "piddd", "type": "episode", "title": "Trawler Wars", "subtitle": "Series 1: Episode 2"}`,
+	)
+	h, _ := newHandlerWithBBCAndStore(t, payload)
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=trawler+wars", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	body := w.Body.String()
+
+	wantAvail := time.Date(2020, 5, 26, 17, 45, 0, 0, time.UTC).Format(time.RFC1123Z)
+	wantAttr := `<newznab:attr name="iparr:broadcastdate" value="` + wantAvail + `" />`
+	if !strings.Contains(body, wantAttr) {
+		t.Errorf("feed missing %q:\n%s", wantAttr, body)
+	}
+	// Both of pidcc's quality variants carry the attribute; piddd has
+	// neither availability nor release_date, so its variants omit it.
+	if got := strings.Count(body, `name="iparr:broadcastdate"`); got != 2 {
+		t.Errorf("broadcastdate attr count = %d, want 2", got)
+	}
+	if strings.Contains(body, `name="usenetdate"`) {
+		t.Error("feed must not emit usenetdate; Sonarr would prefer it over pubDate for release age")
+	}
+}
+
+// TestSearch_QualityVariantsShareOnePubDate verifies pubDate is
+// computed once per PID: every quality variant of an episode must
+// advertise the same age to Sonarr.
+func TestSearch_QualityVariantsShareOnePubDate(t *testing.T) {
+	prober := &mockProber{results: map[string][]int{"m002ttg5": {1080, 720}}}
+	h, _ := newHandlerWithBBCProberAndStore(t, eastendersOneEpisodePayload, prober)
+
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	entries := feedEntries(t, w.Body.String())
+	if len(entries) != 2 {
+		t.Fatalf("emitted %d items, want 2 quality variants", len(entries))
+	}
+	if entries[0].pid != entries[1].pid {
+		t.Fatalf("expected one PID, got %s and %s", entries[0].pid, entries[1].pid)
+	}
+	if entries[0].pubDate != entries[1].pubDate {
+		t.Errorf("variants disagree on pubDate: %q (%s) vs %q (%s)",
+			entries[0].pubDate, entries[0].quality, entries[1].pubDate, entries[1].quality)
+	}
+}
+
+// TestSearch_NotYetAvailable_NotStampedUntilEmitted pins the
+// interaction between issues #44 and #47: an episode skipped because
+// BBC has not published its streams yet must not collect a first-seen
+// stamp while hidden, then gets stamped on the wildcard-feed cycle it
+// first emits.
+func TestSearch_NotYetAvailable_NotStampedUntilEmitted(t *testing.T) {
+	prober := &mockProber{
+		results:         map[string][]int{"m002ttg5": {720}},
+		notYetAvailable: map[string]bool{"m002ttg5": true},
+	}
+	h, st := newHandlerWithBBCProberAndStore(t, eastendersOneEpisodePayload, prober)
+
+	get := func() string {
+		req := httptest.NewRequest("GET", "/newznab/api?t=search", nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		return w.Body.String()
+	}
+
+	// Cycle 1: streams not published yet -- no item emitted.
+	if entries := feedEntries(t, get()); len(entries) != 0 {
+		t.Fatalf("not-yet-available cycle emitted %d items, want 0", len(entries))
+	}
+
+	// Prove the skipped PID was not stamped: an unstamped PID adopts
+	// the sentinel. Purge the sentinel (it is older than the 90-day
+	// window) so the next cycle starts clean.
+	sentinel := time.Now().UTC().Truncate(time.Second).Add(-365 * 24 * time.Hour)
+	stamps, err := st.GetOrSetFirstSeenBatch([]string{"m002ttg5"}, sentinel)
+	if err != nil {
+		t.Fatalf("sentinel probe: %v", err)
+	}
+	if !stamps["m002ttg5"].Equal(sentinel) {
+		t.Fatalf("PID stamped at %v while not-yet-available; skipped items must not be stamped",
+			stamps["m002ttg5"])
+	}
+	if n, err := st.PurgeStaleFirstSeen(90 * 24 * time.Hour); err != nil || n != 1 {
+		t.Fatalf("purge sentinel: n=%d err=%v", n, err)
+	}
+
+	// Cycle 2: streams live -- the item emits with a fresh stamp.
+	prober.notYetAvailable = map[string]bool{}
+	before := time.Now()
+	entries := feedEntries(t, get())
+	if len(entries) != 1 {
+		t.Fatalf("available cycle emitted %d items, want 1", len(entries))
+	}
+	stamp, err := time.Parse(time.RFC1123Z, entries[0].pubDate)
+	if err != nil {
+		t.Fatalf("parse pubDate %q: %v", entries[0].pubDate, err)
+	}
+	if stamp.Before(before.Add(-time.Minute)) {
+		t.Errorf("pubDate %v pre-dates the cycle the item first emitted", stamp)
 	}
 }
 

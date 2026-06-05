@@ -14,6 +14,7 @@ var (
 	bucketOverrides    = []byte("overrides")
 	bucketConfig       = []byte("config")
 	bucketQualityCache = []byte("quality_cache")
+	bucketFirstSeen    = []byte("first_seen")
 )
 
 type Store struct {
@@ -30,7 +31,7 @@ func Open(path string) (*Store, error) {
 		for _, b := range [][]byte{
 			bucketDownloads, bucketHistory, bucketProgrammes,
 			bucketSeries, bucketOverrides, bucketConfig,
-			bucketQualityCache,
+			bucketQualityCache, bucketFirstSeen,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return fmt.Errorf("create bucket %s: %w", b, err)

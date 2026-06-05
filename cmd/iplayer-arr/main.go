@@ -76,6 +76,15 @@ func main() {
 	// purge stale programme cache
 	st.PurgeStaleProgrammes(4 * time.Hour)
 
+	// purge first-seen feed stamps so the bucket cannot grow without
+	// bound; standard iPlayer availability windows run to 12 months,
+	// so 400 days covers them with margin (#47)
+	if n, err := st.PurgeStaleFirstSeen(400 * 24 * time.Hour); err != nil {
+		log.Printf("WARNING: first-seen purge failed: %v", err)
+	} else if n > 0 {
+		log.Printf("purged %d stale first-seen entries", n)
+	}
+
 	// startup health checks
 	log.Println("running startup health checks...")
 
