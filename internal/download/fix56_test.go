@@ -394,8 +394,9 @@ func TestRunFFmpeg_GenuineFailureIsNotStalled(t *testing.T) {
 // #56 positive watchdog plumbing test: a hung input must trip the
 // progress watchdog inside the real RunFFmpeg and surface ErrStalled.
 // Not parallel: it mutates the package-level progressWatchdogInterval,
-// which RunFFmpeg reads once at ticker creation inside the watchdog
-// goroutine; no other test touches it concurrently.
+// which RunFFmpeg captures synchronously before spawning the watchdog
+// goroutine (the goroutine can outlive the call, so it deliberately
+// never reads the package var); no other test touches it concurrently.
 func TestRunFFmpeg_WatchdogStallReturnsErrStalled(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not on PATH")

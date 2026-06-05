@@ -453,8 +453,14 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 	// instead of an opaque "signal: terminated". Issue #56.
 	var watchdogFired atomic.Bool
 	watchdogTimeout := effectiveWatchdogTimeout(job)
+	// Capture the tick interval before spawning the goroutine: the
+	// goroutine can outlive this call (it exits via runCtx.Done after
+	// RunFFmpeg returns), so reading the package var inside it races
+	// with tests that shrink and restore progressWatchdogInterval.
+	// Issue #56.
+	watchdogInterval := progressWatchdogInterval
 	go func() {
-		ticker := time.NewTicker(progressWatchdogInterval)
+		ticker := time.NewTicker(watchdogInterval)
 		defer ticker.Stop()
 		for {
 			select {
