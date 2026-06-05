@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.11] - 2026-06-06
+
 ### Fixed
 
 - **Sonarr RSS sync no longer skips episodes that surface late in the feed (#47).** Feed items were stamped with each episode's BBC broadcast date, so content that became available (or was promoted onto BBC's browse rails) later than it first aired carried a stale `pubDate`. Sonarr's RSS sync only auto-grabs items newer than the newest it has already seen from an indexer, so those releases sat below the watermark and were silently skipped, even when they outranked releases from other indexers. The feed now stamps each item with the time iplayer-arr first emitted it (persisted per PID in a new `first_seen` BoltDB bucket, purged after 400 days) and uses that as the primary `pubDate`, falling back to the downloadable version's iPlayer availability timestamp (`versions[].availability.start`), then the broadcast date, then the current time. Stamps are only written by the no-query browse path that Sonarr's RSS sync polls: `q=`/`tvdbid=` searches read existing stamps but never create them, so a speculative search cannot back-date an item's later feed debut. The broadcast/availability date remains visible on every item via a new `iparr:broadcastdate` newznab attribute. Title generation and date-based episode matching are unchanged.
