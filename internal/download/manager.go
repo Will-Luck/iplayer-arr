@@ -79,6 +79,13 @@ type Manager struct {
 	// Read once at Start() time semantics (passed into every FFmpegJob)
 	// to match the existing maxWorkers immutability invariant.
 	watchdogTimeout time.Duration
+
+	// runFFmpeg is the ffmpeg entry point processDownload invokes. It is
+	// a test seam only: NewManager always sets it to RunFFmpeg, and
+	// production never overrides it. Tests swap in a fake so the stall
+	// routing in processDownload is executable without a real ffmpeg
+	// binary. Issue #56.
+	runFFmpeg func(context.Context, FFmpegJob) error
 }
 
 // ManagerOption configures optional Manager behaviour. Pass to NewManager
@@ -107,6 +114,7 @@ func NewManager(st *store.Store, downloadDir string, maxWorkers int,
 		hub:         hub,
 		claimed:     make(map[string]context.CancelFunc),
 		cancelled:   make(map[string]struct{}),
+		runFFmpeg:   RunFFmpeg,
 	}
 	for _, opt := range opts {
 		opt(m)

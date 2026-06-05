@@ -56,6 +56,13 @@ jobs:
             exit 1
           fi
 
+      # ffmpeg gives the LookPath-gated RunFFmpeg integration tests a
+      # real binary; without it they skip silently. The runner image
+      # (docker.gitea.com/runner-images:ubuntu-latest) runs as root, so
+      # no sudo is needed.
+      - name: Install ffmpeg
+        run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
+
       - name: go test
         run: go test ./... -race
 

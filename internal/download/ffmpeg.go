@@ -3,6 +3,7 @@ package download
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -25,8 +26,16 @@ const progressWatchdogTimeout = 60 * time.Second
 
 // progressWatchdogInterval is the watchdog's tick period. Short enough
 // to detect a stall within ~progressWatchdogTimeout + this, long
-// enough to keep the goroutine cheap.
-const progressWatchdogInterval = 15 * time.Second
+// enough to keep the goroutine cheap. A var rather than a const only
+// so tests can shrink the tick; the production value is unchanged and
+// never mutated at runtime. Issue #56.
+var progressWatchdogInterval = 15 * time.Second
+
+// ErrStalled marks an ffmpeg run cancelled by the progress watchdog
+// (no progress within the threshold). Callers use errors.Is to
+// distinguish a local stall from a genuine ffmpeg/CDN failure so
+// stalls are not counted toward quality degradation. Issue #56.
+var ErrStalled = errors.New("stalled: no ffmpeg progress within watchdog timeout")
 
 // ffmpegShutdownGrace is how long os/exec waits after sending SIGTERM
 // before escalating to SIGKILL. ffmpeg uses this window to flush
@@ -439,6 +448,10 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 	// threshold. atomic.Int64 keeps the scanner goroutine lock-free.
 	var lastProgressNanos atomic.Int64
 	lastProgressNanos.Store(time.Now().UnixNano())
+	// watchdogFired records that the watchdog (not ffmpeg itself)
+	// killed the run, so the error paths below can surface ErrStalled
+	// instead of an opaque "signal: terminated". Issue #56.
+	var watchdogFired atomic.Bool
 	watchdogTimeout := effectiveWatchdogTimeout(job)
 	go func() {
 		ticker := time.NewTicker(progressWatchdogInterval)
@@ -451,6 +464,7 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 				since := time.Since(time.Unix(0, lastProgressNanos.Load()))
 				if since > watchdogTimeout {
 					log.Printf("ffmpeg watchdog: no progress in %s (threshold %s); cancelling", since.Round(time.Second), watchdogTimeout)
+					watchdogFired.Store(true)
 					cancelRun()
 					return
 				}
@@ -477,16 +491,44 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 		diagLines = appendDiagLine(diagLines, line, ffmpegStderrTail)
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
-		return fmt.Errorf("reading ffmpeg stderr: %w", scanErr)
+		return wrapScanError(scanErr, watchdogFired.Load())
 	}
 
 	if err := cmd.Wait(); err != nil {
-		if len(diagLines) > 0 {
-			return fmt.Errorf("ffmpeg: %w | stderr: %s", err, strings.Join(diagLines, " | "))
-		}
-		return fmt.Errorf("ffmpeg: %w", err)
+		return wrapRunError(err, watchdogFired.Load(), diagLines)
 	}
 	return nil
+}
+
+// wrapRunError converts a non-nil cmd.Wait error plus the stderr
+// diagnostic tail into the error RunFFmpeg returns. When stalled is
+// true the progress watchdog cancelled the run, so the result wraps
+// ErrStalled (the wait error and tail are kept as plain text) and
+// callers can errors.Is a local stall apart from a genuine ffmpeg/CDN
+// failure. Split out from RunFFmpeg so the wrapping is unit-testable
+// without exec'ing ffmpeg. Issue #56.
+func wrapRunError(err error, stalled bool, diagLines []string) error {
+	if stalled {
+		if len(diagLines) > 0 {
+			return fmt.Errorf("%w (ffmpeg: %v | stderr: %s)", ErrStalled, err, strings.Join(diagLines, " | "))
+		}
+		return fmt.Errorf("%w (ffmpeg: %v)", ErrStalled, err)
+	}
+	if len(diagLines) > 0 {
+		return fmt.Errorf("ffmpeg: %w | stderr: %s", err, strings.Join(diagLines, " | "))
+	}
+	return fmt.Errorf("ffmpeg: %w", err)
+}
+
+// wrapScanError is wrapRunError's counterpart for a stderr read
+// failure. The watchdog killing ffmpeg can tear down the pipe
+// mid-read, so a scan error during a stall IS the stall and must
+// surface ErrStalled too. Issue #56.
+func wrapScanError(scanErr error, stalled bool) error {
+	if stalled {
+		return fmt.Errorf("%w (reading stderr: %v)", ErrStalled, scanErr)
+	}
+	return fmt.Errorf("reading ffmpeg stderr: %w", scanErr)
 }
 
 func scanFFmpegLines(data []byte, atEOF bool) (advance int, token []byte, err error) {

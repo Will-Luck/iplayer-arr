@@ -28,10 +28,11 @@ type Download struct {
 	Retryable     bool      `json:"retryable"`
 	RetryCount    int       `json:"retry_count"`
 	RetryAfter    time.Time `json:"retry_after"`
-	// CDNFailures counts only consecutive CDN-style failures
-	// (ffmpeg_error / truncated), separate from the total RetryCount, so
-	// quality-degrade-on-retry steps the ladder by genuine stream
-	// failures and is not inflated by not-yet-available retries. #46.
+	// CDNFailures counts CDN-style failures (ffmpeg_error / truncated)
+	// only, separate from the total RetryCount, so quality-degrade-on-retry
+	// steps the ladder by genuine stream failures. The counter is never
+	// reset: it is preserved across stalled and not-yet-available retries
+	// rather than counting them. #46, #56.
 	CDNFailures int       `json:"cdn_failures"`
 	CreatedAt   time.Time `json:"created_at"`
 	StartedAt   time.Time `json:"started_at"`
@@ -122,6 +123,7 @@ const (
 	FailCodeNotYetAvailable = "not_yet_available"
 	FailCodeFFmpeg          = "ffmpeg_error"
 	FailCodeTruncated       = "truncated"
+	FailCodeStalled         = "stalled"
 	FailCodeTimeout         = "timeout"
 	FailCodeUnknown         = "unknown"
 
