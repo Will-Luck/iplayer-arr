@@ -36,5 +36,8 @@ jobs:
           name: frontend-dist
           path: internal/web/dist/
       - run: go vet ./...
+      # ffmpeg gives the LookPath-gated RunFFmpeg integration tests a
+      # real binary; without it they skip silently.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: go test ./... -v -race
       - run: CGO_ENABLED=0 go build ./cmd/iplayer-arr/

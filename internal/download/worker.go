@@ -119,10 +119,11 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	// original request) is preserved for display and reconciliation;
 	// effectiveQual only diverges from it on an actual degrade, so the
 	// first attempt is byte-for-byte the prior behaviour.
+	// FailCodeStalled is deliberately excluded from the gate; see
+	// shouldDegrade. Issue #56.
 	targetHeight := qualityToHeight(dl.Quality)
 	effectiveQual := dl.Quality
-	if dl.CDNFailures > 0 &&
-		(dl.FailureCode == store.FailCodeFFmpeg || dl.FailureCode == store.FailCodeTruncated) {
+	if shouldDegrade(dl) {
 		if degraded := degradeHeight(targetHeight, dl.CDNFailures); degraded != targetHeight {
 			log.Printf("download %s: degrading quality after %d CDN failure(s): %dp -> %dp",
 				dl.ID, dl.CDNFailures, targetHeight, degraded)
@@ -223,7 +224,7 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		WatchdogTimeout: m.watchdogTimeout,
 	}
 
-	ffErr := RunFFmpeg(ctx, job)
+	ffErr := m.runFFmpeg(ctx, job)
 	if ffErr != nil {
 		if ctx.Err() != nil {
 			if m.IsCancelled(dl.ID) {
@@ -233,6 +234,14 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 			}
 			m.setStatus(dl, store.StatusPending, "")
 			log.Printf("download %s returned to pending (context cancelled)", dl.ID)
+			return
+		}
+		// A watchdog stall is recorded under its own failure code so it
+		// retries at the originally requested height with backoff instead
+		// of counting toward quality degradation (targetHeight is
+		// recomputed from dl.Quality on every attempt). Issue #56.
+		if errors.Is(ffErr, ErrStalled) {
+			m.failDownload(dl, store.FailCodeStalled, ffErr)
 			return
 		}
 		m.failDownload(dl, store.FailCodeFFmpeg, ffErr)
@@ -329,12 +338,15 @@ func (m *Manager) setStatus(dl *store.Download, status, errMsg string) {
 // failDownload marks a download as failed with the given failure code.
 // GeoBlocked and Expired are permanent; not-yet-available retries on a steady
 // cadence over the publication window; everything else retries with
-// exponential backoff (30s, 90s, 270s) to avoid hammering the BBC CDN.
+// exponential backoff (30s, then 90s; the third failure is permanent) to
+// avoid hammering the BBC CDN.
 func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.Status = store.StatusFailed
 	dl.FailureCode = code
 	dl.Error = err.Error()
 	dl.RetryCount++
+	// Stalls (FailCodeStalled) deliberately bypass this counter so a
+	// local stall never drives the quality-degradation gate. Issue #56.
 	if code == store.FailCodeFFmpeg || code == store.FailCodeTruncated {
 		dl.CDNFailures++
 	}
@@ -480,6 +492,24 @@ func qualityToHeight(q string) int {
 // qualityLadder is the descending quality ladder used by degradeHeight,
 // mirroring the taxonomy in heightToQualityTag.
 var qualityLadder = []int{2160, 1080, 720, 540, 396}
+
+// shouldDegrade reports whether the next attempt should step quality
+// down the ladder: at least one CDN-style failure has been recorded
+// and the most recent failure was CDN-style (ffmpeg or truncated).
+// FailCodeStalled is deliberately excluded: a watchdog stall is a
+// local symptom (e.g. BBC per-IP throttling under bulk load), not
+// evidence the CDN cannot serve the requested rendition, so a stalled
+// retry goes back out at the originally requested height. targetHeight
+// is recomputed from dl.Quality on every attempt, so a stall after a
+// degraded attempt deliberately bounces back up to maximise quality
+// once the throttling clears; with prior CDN failures on record, the
+// accumulated count still degrades a later genuine CDN failure by the
+// full count. Split out of processDownload so the gate is
+// unit-testable. Issue #56.
+func shouldDegrade(dl *store.Download) bool {
+	return dl.CDNFailures > 0 &&
+		(dl.FailureCode == store.FailCodeFFmpeg || dl.FailureCode == store.FailCodeTruncated)
+}
 
 // degradeHeight steps the requested height DOWN the quality ladder by
 // `steps` rungs (clamped to the lowest rung). Used to retry a download

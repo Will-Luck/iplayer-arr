@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-06-05
+
+### Fixed
+
+- **Watchdog kills no longer count as CDN quality failures (#56).** When the ffmpeg progress watchdog cancelled a stalled download (for example BBC CDN per-IP throttling during a bulk season grab), the kill surfaced as a generic ffmpeg error, incremented the CDN-failure counter and drove the #46 quality-degrade-on-retry ladder, so episodes available at 1080p completed at 720p, 540p or even 396p. Stalls now carry their own failure code (`stalled`): the run is retried at the **originally requested** quality with the usual exponential backoff (30s, then 90s), and only genuine ffmpeg/CDN errors and truncated outputs step the quality ladder down.
+
 ## [1.5.9] - 2026-05-30
 
 ### Added
