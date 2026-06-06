@@ -407,12 +407,21 @@ func TestWorkerLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.Start(ctx)
 
-	// Wait for the download to progress past pending (up to 5 seconds)
-	deadline := time.Now().Add(5 * time.Second)
+	// Wait for the playlist resolve to complete (up to 10 seconds). The
+	// worker persists status=resolving BEFORE calling the playlist
+	// resolver and persists the VPID only after the resolve returns, so
+	// breaking on the first non-pending status can capture a snapshot
+	// from inside that window (VPID still empty) and fail the VPID
+	// assertion below. The worker's 1s claim tick and this loop's 200ms
+	// grid both align on the one-second boundary, which is exactly where
+	// the GitHub runners landed once CI gained ffmpeg in v1.5.10 and this
+	// test stopped skipping. Poll for the post-resolve write instead:
+	// VPID is only ever set once the mock playlist has answered.
+	deadline := time.Now().Add(10 * time.Second)
 	var dl *store.Download
 	for time.Now().Before(deadline) {
 		dl, _ = st.GetDownload(id)
-		if dl != nil && dl.Status != store.StatusPending {
+		if dl != nil && dl.VPID != "" {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
