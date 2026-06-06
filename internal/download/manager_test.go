@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -806,5 +807,98 @@ func TestCleanupIncompleteDir_PathGuards(t *testing.T) {
 	// the path resolves outside incomplete/ so RemoveAll never runs.
 	if _, err := os.Stat("/etc"); err != nil {
 		t.Fatalf("/etc disappeared during test — path-guard regression: %v", err)
+	}
+}
+
+// recordingBroadcaster captures Broadcast calls so tests can assert on
+// the events Enqueue emits. Safe for concurrent use.
+type recordingBroadcaster struct {
+	mu     sync.Mutex
+	events []recordedEvent
+}
+
+type recordedEvent struct {
+	eventType string
+	data      interface{}
+}
+
+func (r *recordingBroadcaster) Broadcast(eventType string, data interface{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, recordedEvent{eventType, data})
+}
+
+func (r *recordingBroadcaster) snapshot() []recordedEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]recordedEvent(nil), r.events...)
+}
+
+// TestEnqueue_BroadcastsPendingStatus pins the fix for the "queued
+// downloads invisible until refresh" bug: Enqueue must emit a
+// download:status event carrying the freshly persisted pending row so
+// an already-open Dashboard can render the Queue card live. Before the
+// fix the first event for any download fired only on worker claim, so
+// items sitting in pending (all worker slots busy) were invisible to
+// open pages until a manual refresh.
+func TestEnqueue_BroadcastsPendingStatus(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	hub := &recordingBroadcaster{}
+	m := NewManager(st, filepath.Join(dir, "downloads"), 1, nil, nil, nil, hub)
+
+	id, err := m.Enqueue("b00sse", "1080p", "Test.S01E01.1080p", "sonarr")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	events := hub.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want exactly 1 download:status", len(events))
+	}
+	if events[0].eventType != "download:status" {
+		t.Fatalf("eventType = %q, want %q", events[0].eventType, "download:status")
+	}
+	dl, ok := events[0].data.(*store.Download)
+	if !ok {
+		t.Fatalf("event payload is %T, want *store.Download", events[0].data)
+	}
+	if dl.ID != id {
+		t.Fatalf("payload ID = %q, want %q", dl.ID, id)
+	}
+	if dl.Status != store.StatusPending {
+		t.Fatalf("payload Status = %q, want %q", dl.Status, store.StatusPending)
+	}
+}
+
+// TestEnqueue_DedupDoesNotBroadcast: the dedup early-return hands back
+// the existing ID without inserting a new row, so it must not
+// re-announce a download the UI already knows about.
+func TestEnqueue_DedupDoesNotBroadcast(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	hub := &recordingBroadcaster{}
+	m := NewManager(st, filepath.Join(dir, "downloads"), 1, nil, nil, nil, hub)
+
+	if _, err := m.Enqueue("b00dup", "1080p", "Test.S01E02.1080p", "sonarr"); err != nil {
+		t.Fatalf("first Enqueue: %v", err)
+	}
+	// Same pid+quality dedups against the active row and returns early.
+	if _, err := m.Enqueue("b00dup", "1080p", "Test.S01E02.1080p", "sonarr"); err != nil {
+		t.Fatalf("dedup Enqueue: %v", err)
+	}
+
+	if got := len(hub.snapshot()); got != 1 {
+		t.Fatalf("got %d events after dedup enqueue, want 1 (no event on dedup)", got)
 	}
 }

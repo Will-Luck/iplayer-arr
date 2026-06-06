@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Queued downloads now appear on an already-open Dashboard without a page refresh.** Enqueueing a download (Sonarr via the SABnzbd API, or a manual add) persisted the row as `pending` but published no SSE event; the first event for any download fired only when a worker claimed it. With all worker slots busy (a Sonarr season grab), surplus queued items were invisible to open pages until refresh. `Enqueue` now broadcasts `download:status` with the pending row after it is stored, which the Dashboard's existing handler (added in v1.1.5) routes straight into the Queue card. Dedup early-returns do not broadcast.
+
 ## [1.5.11] - 2026-06-06
 
 ### Fixed

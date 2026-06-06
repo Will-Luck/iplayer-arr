@@ -216,6 +216,12 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 		return "", fmt.Errorf("store download: %w", err)
 	}
 
+	// Announce the new pending row so an already-open Dashboard renders
+	// it in the Queue immediately. Without this the first event for a
+	// download fires only on worker claim (setStatus), leaving items
+	// beyond the free worker slots invisible until a page refresh.
+	m.broadcast("download:status", dl)
+
 	return id, nil
 }
 
