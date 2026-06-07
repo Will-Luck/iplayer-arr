@@ -96,6 +96,49 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Build an amd64 candidate locally first so the VPN-tooling gate
+      # below inspects the image BEFORE anything is published. The original
+      # design pushed :latest and then verified, so a failing gate still
+      # left a suspect image live on both registries. The push step's amd64
+      # half replays from this builder's local BuildKit state, so the
+      # second build adds little time. No cache-to here: exporting an
+      # amd64-only index would clobber the multi-platform cache the push
+      # step writes, evicting arm64 layers from week-to-week reuse.
+      - name: Build amd64 candidate for verification
+        uses: docker/build-push-action@v6
+        if: steps.check.outputs.changed == 'true'
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: iplayer-arr:rebuild-candidate
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          cache-from: type=gha,scope=rebuild
+
+      # Smoke the candidate: hotio's alpinevpn base is WireGuard-only (its
+      # apk install line ships wireguard-tools; OpenVPN has never been part
+      # of it -- verified against every iplayer-arr image back to v1.0.2),
+      # and the entrypoint's kill-switch scaffold expects wg/wg-quick to
+      # exist. If upstream ever swaps the alpinevpn tag to an image without
+      # that scaffold, fail loud here, before publishing. Audit item 38.
+      - name: Verify VPN tooling present in candidate image
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          missing=""
+          for bin in wg wg-quick; do
+            if ! docker run --rm --entrypoint sh iplayer-arr:rebuild-candidate -c "command -v $bin >/dev/null 2>&1"; then
+              missing="$missing $bin"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::VPN tooling missing from candidate image:$missing"
+            echo "::error::Base image ghcr.io/hotio/base:alpinevpn may have dropped its WireGuard scaffold; not publishing."
+            exit 1
+          fi
+          echo "VPN tooling present: wg, wg-quick"
+
       - uses: docker/build-push-action@v6
         if: steps.check.outputs.changed == 'true'
         with:
@@ -110,29 +153,6 @@ jobs:
             BUILD_DATE=${{ steps.version.outputs.build_date }}
           cache-from: type=gha,scope=rebuild
           cache-to: type=gha,scope=rebuild,mode=max
-
-      # Smoke the rebuilt image: hotio's alpinevpn base ships openvpn +
-      # wireguard tooling, and our kill-switch design relies on those
-      # binaries being present so the entrypoint's iptables rules can
-      # bind to the VPN interface. If upstream ever swaps the alpinevpn
-      # tag to a thinner image, we want CI to fail loud rather than
-      # publish a no-VPN container under the same tag. Audit item 38.
-      - name: Verify VPN tooling present in rebuilt image
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          docker pull ghcr.io/will-luck/iplayer-arr:latest
-          missing=""
-          for bin in openvpn wg; do
-            if ! docker run --rm --entrypoint sh ghcr.io/will-luck/iplayer-arr:latest -c "command -v $bin >/dev/null 2>&1"; then
-              missing="$missing $bin"
-            fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::VPN tooling missing from rebuilt image:$missing"
-            echo "::error::Base image ghcr.io/hotio/base:alpinevpn may have dropped its VPN scaffold; refusing to advance digest."
-            exit 1
-          fi
-          echo "VPN tooling present: openvpn, wg"
 
       - name: Update stored digest
         if: steps.check.outputs.changed == 'true' && steps.current.outputs.digest != steps.stored.outputs.digest

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Weekly base-image rebuild no longer fails its VPN gate, and the gate now runs before publish.** The rebuild workflow's VPN-tooling check (added 2026-05-16) asserted `openvpn` was present, but hotio's `alpinevpn` base is WireGuard-only: no iplayer-arr image has ever shipped OpenVPN, so every rebuild since the base image's 2026-05-17 refresh failed the gate. The check now asserts the WireGuard scaffold (`wg`, `wg-quick`) and runs against a locally built amd64 candidate before the multi-platform push, so a base broken on amd64 can no longer reach `:latest` on either registry. The stored base-image digest is also brought up to date so weekly runs settle back to no-op when the base is unchanged.
+
 ## [1.5.12] - 2026-06-06
 
 ### Fixed
