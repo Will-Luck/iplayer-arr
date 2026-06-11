@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.13] - 2026-06-11
+
 ### Fixed
 
+- **Manual downloads from the web GUI now save with Sonarr-parseable release titles (GitHub #48).** The Search page's Download button passed the bare programme title ("EastEnders") straight to the download queue, so files saved as `EastEnders/EastEnders.mp4` with no date or episode numbering and Sonarr could not import them. Show overrides (including force date-based) were also silently ignored on this path. Manual downloads now run through the exact same identity normalisation and release-title generation as the Newznab feed (the 4-tier identity chain, date-based titles for daily shows such as EastEnders, the GitHub #32 Series=1 promotion, and the user's show overrides), producing names like `EastEnders.2026.06.11.720p.WEB-DL.AAC.H264-iParr`. Requests without episode metadata (plain API callers supplying a deliberate custom title) keep the raw title unchanged. Note: re-downloading an episode that already has a bare-titled entry in History returns the existing entry (de-duplication by programme and quality); delete the old History entry first to re-download with the fixed name.
 - **Weekly base-image rebuild no longer fails its VPN gate, and the gate now runs before publish.** The rebuild workflow's VPN-tooling check (added 2026-05-16) asserted `openvpn` was present, but hotio's `alpinevpn` base is WireGuard-only: no iplayer-arr image has ever shipped OpenVPN, so every rebuild since the base image's 2026-05-17 refresh failed the gate. The check now asserts the WireGuard scaffold (`wg`, `wg-quick`) and runs against a locally built amd64 candidate before the multi-platform push, so a base broken on amd64 can no longer reach `:latest` on either registry. The stored base-image digest is also brought up to date so weekly runs settle back to no-op when the base is unchanged.
 
 ## [1.5.12] - 2026-06-06

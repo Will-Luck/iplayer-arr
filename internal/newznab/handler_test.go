@@ -1455,7 +1455,7 @@ func TestIblResultToProgramme_PromotesSeriesOneForPositionBasedShows(t *testing.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := iblResultToProgramme(tc.in)
+			got := IBLResultToProgramme(tc.in)
 			if got.Series != tc.wantSeries {
 				t.Errorf("Series = %d, want %d (input %+v)", got.Series, tc.wantSeries, tc.in)
 			}
@@ -1478,7 +1478,7 @@ func TestMatchesSearchFilter_CasualtyPositionBasedAcceptsSeasonOne(t *testing.T)
 		EpisodeNum: 3,
 		AirDate:    "1986-09-20",
 	}
-	prog := iblResultToProgramme(r)
+	prog := IBLResultToProgramme(r)
 	if !matchesSearchFilter(prog, "Casualty", "", 1, 3) {
 		t.Errorf("matchesSearchFilter rejected Casualty position-based item; prog=%+v", prog)
 	}

@@ -107,8 +107,13 @@ export const api = {
 
   // Downloads
   listDownloads: () => get<Download[]>("/api/downloads"),
-  manualDownload: (pid: string, quality: string, title: string, category: string) =>
-    post<{ id: string }>("/api/download", { pid, quality, title, category }),
+  manualDownload: (
+    pid: string,
+    quality: string,
+    title: string,
+    category: string,
+    meta?: { subtitle?: string; series?: number; episodeNum?: number; position?: number; airDate?: string },
+  ) => post<{ id: string }>("/api/download", { pid, quality, title, category, ...meta }),
   cancelDownload: (id: string) => del(`/api/downloads/${encodeURIComponent(id)}`),
 
   // History

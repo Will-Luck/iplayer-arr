@@ -232,7 +232,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		if _, dup := seen[res.PID]; dup {
 			continue
 		}
-		prog := iblResultToProgramme(res)
+		prog := IBLResultToProgramme(res)
 		if !matchesSearchFilter(prog, wantName, filterDate, filterSeason, filterEp) {
 			continue
 		}
@@ -487,7 +487,11 @@ func writeEmptyRSS(w http.ResponseWriter) {
 </rss>`))
 }
 
-func iblResultToProgramme(r bbc.IBLResult) *store.Programme {
+// IBLResultToProgramme converts an IBL search result into the Programme
+// shape consumed by GenerateTitle. Exported so the manual-download API
+// path can apply the exact same identity normalisation as the feed
+// (issue #48).
+func IBLResultToProgramme(r bbc.IBLResult) *store.Programme {
 	// Position-based identity promotion. BBC long-runners like Casualty
 	// and One Piece 1999 carry subtitles such as "Learning Curve Episode 3"
 	// that parseSubtitleNumbers reads as Series=0, EpisodeNum=3. Sonarr

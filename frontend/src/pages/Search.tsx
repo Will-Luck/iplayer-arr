@@ -95,7 +95,15 @@ export default function Search() {
   async function startDownload(r: SearchResult) {
     const quality = selectedQuality()[r.PID] || "720p";
     try {
-      await api.manualDownload(r.PID, quality, r.Title, "sonarr");
+      // Pass the episode identity metadata so the backend can build a
+      // Sonarr-parseable release title (dated for daily shows). Issue #48.
+      await api.manualDownload(r.PID, quality, r.Title, "sonarr", {
+        subtitle: r.Subtitle,
+        series: r.Series,
+        episodeNum: r.EpisodeNum,
+        position: r.Position,
+        airDate: r.AirDate,
+      });
       addToast("success", `Download queued: ${r.Title}`);
     } catch (e) {
       addToast("error", `Download failed: ${e instanceof Error ? e.message : "unknown error"}`);

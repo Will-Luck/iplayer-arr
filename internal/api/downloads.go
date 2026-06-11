@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
+	"github.com/Will-Luck/iplayer-arr/internal/newznab"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
@@ -158,6 +160,15 @@ func (h *Handler) handleManualDownload(w http.ResponseWriter, r *http.Request) {
 		Quality  string `json:"quality"`
 		Title    string `json:"title"`
 		Category string `json:"category"`
+		// Episode identity metadata from the search result. When any of
+		// these are set the raw title is replaced with a generated
+		// release title so manual downloads name their files the same
+		// way the Newznab feed does. Issue #48.
+		Subtitle   string `json:"subtitle"`
+		Series     int    `json:"series"`
+		EpisodeNum int    `json:"episodeNum"`
+		Position   int    `json:"position"`
+		AirDate    string `json:"airDate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
@@ -174,7 +185,31 @@ func (h *Handler) handleManualDownload(w http.ResponseWriter, r *http.Request) {
 		req.Category = "manual"
 	}
 
-	id, err := h.mgr.Enqueue(req.PID, req.Quality, req.Title, req.Category)
+	title := req.Title
+	hasMetadata := req.Subtitle != "" || req.Series > 0 || req.EpisodeNum > 0 ||
+		req.Position > 0 || req.AirDate != ""
+	if title != "" && hasMetadata {
+		// Run the request through the same identity normalisation the
+		// Newznab feed uses (IBLResultToProgramme, including the #32
+		// Series=1 promotion) so manual downloads and Sonarr grabs name
+		// files identically.
+		prog := newznab.IBLResultToProgramme(bbc.IBLResult{
+			PID:        req.PID,
+			Title:      req.Title,
+			Subtitle:   req.Subtitle,
+			Series:     req.Series,
+			EpisodeNum: req.EpisodeNum,
+			Position:   req.Position,
+			AirDate:    req.AirDate,
+		})
+		var override *store.ShowOverride
+		if h.store != nil {
+			override, _ = h.store.GetOverride(prog.Name)
+		}
+		title, _ = newznab.GenerateTitle(prog, req.Quality, override)
+	}
+
+	id, err := h.mgr.Enqueue(req.PID, req.Quality, title, req.Category)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
