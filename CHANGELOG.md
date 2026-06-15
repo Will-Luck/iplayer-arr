@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.14] - 2026-06-15
+
+### Fixed
+
+- **Sonarr no longer reports the download client as unavailable after a download fails or is cancelled before it starts.** The SABnzbd history endpoint derived each entry's `download_time` from `completed - started`, but a download that failed or was cancelled before the worker began has no start timestamp. Subtracting the zero time saturated to `math.MaxInt64`, so `download_time` was emitted as `9223372036` (~292 years in seconds) -- far larger than the 32-bit integer Sonarr parses that field into. A single such History entry made Sonarr reject the **entire** queue/history response with a JSON overflow error, which escalated into the "Download clients are unavailable due to failures" health warning and stopped Sonarr from tracking iPlayer grabs (the client itself stayed up; only the monitoring poll failed). `download_time` is now reported as `0` for entries with no recorded start, and as the real elapsed seconds otherwise.
+
 ## [1.5.13] - 2026-06-11
 
 ### Fixed

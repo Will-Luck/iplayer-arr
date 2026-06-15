@@ -234,7 +234,7 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 			"bytes":         dl.Size,
 			"downloaded":    dl.Size,
 			"completed":     dl.CompletedAt.Unix(),
-			"download_time": int(dl.CompletedAt.Sub(dl.StartedAt).Seconds()),
+			"download_time": downloadSeconds(dl.StartedAt, dl.CompletedAt),
 			"category":      dl.Category,
 			"fail_message":  dl.Error,
 			"action_line":   "",
@@ -254,6 +254,17 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 			"slots": slots,
 		},
 	})
+}
+
+// downloadSeconds returns whole seconds spent downloading, guarding an unset
+// StartedAt: CompletedAt.Sub(zeroTime) saturates to math.MaxInt64, and the
+// resulting ~9.2e9 overflows the Int32 Sonarr parses download_time into,
+// breaking the whole history response. Entries that never started report 0.
+func downloadSeconds(startedAt, completedAt time.Time) int {
+	if startedAt.IsZero() || completedAt.IsZero() || completedAt.Before(startedAt) {
+		return 0
+	}
+	return int(completedAt.Sub(startedAt).Seconds())
 }
 
 func (h *Handler) handleAdd(w http.ResponseWriter, r *http.Request) {

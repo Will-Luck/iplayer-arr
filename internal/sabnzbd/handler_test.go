@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
@@ -146,6 +147,86 @@ func TestHistoryWithDownload(t *testing.T) {
 	}
 	if slot.Storage != "/downloads/Test.Show.S01E01/" {
 		t.Errorf("storage = %q", slot.Storage)
+	}
+}
+
+// TestHistoryDownloadTimeGuardsUnsetStartedAt pins the fix for the
+// download_time overflow that took the SAB shim "offline" in Sonarr. A
+// download that failed or was cancelled before it started has a zero
+// StartedAt; CompletedAt.Sub(zeroTime) saturates to math.MaxInt64, so
+// int(...Seconds()) is 9223372036 -- larger than the Int32 Sonarr
+// deserialises download_time into. A single such slot makes Sonarr reject
+// the whole history response. The slot must report 0 for an unset StartedAt.
+func TestHistoryDownloadTimeGuardsUnsetStartedAt(t *testing.T) {
+	h, st := testHandler(t)
+
+	if err := st.PutHistory(&store.Download{
+		ID:          "iparr_nostart",
+		Title:       "Failed.Before.Start.S01E01",
+		Status:      store.StatusFailed,
+		CompletedAt: time.Now(),
+		Error:       "no available stream",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/sabnzbd/api?mode=history&apikey=test-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	var resp struct {
+		History struct {
+			Slots []struct {
+				DownloadTime int64 `json:"download_time"`
+			} `json:"slots"`
+		} `json:"history"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.History.Slots) != 1 {
+		t.Fatalf("expected 1 history slot, got %d", len(resp.History.Slots))
+	}
+	if dt := resp.History.Slots[0].DownloadTime; dt != 0 {
+		t.Errorf("download_time = %d, want 0 (unset StartedAt must not overflow Int32)", dt)
+	}
+}
+
+// TestHistoryDownloadTimeReportsElapsed guards the normal path: when
+// StartedAt is set, download_time stays the real elapsed seconds.
+func TestHistoryDownloadTimeReportsElapsed(t *testing.T) {
+	h, st := testHandler(t)
+	now := time.Now()
+
+	if err := st.PutHistory(&store.Download{
+		ID:          "iparr_ok",
+		Title:       "Good.Show.S01E01",
+		Status:      store.StatusCompleted,
+		StartedAt:   now.Add(-12 * time.Second),
+		CompletedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/sabnzbd/api?mode=history&apikey=test-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	var resp struct {
+		History struct {
+			Slots []struct {
+				DownloadTime int64 `json:"download_time"`
+			} `json:"slots"`
+		} `json:"history"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.History.Slots) != 1 {
+		t.Fatalf("expected 1 history slot, got %d", len(resp.History.Slots))
+	}
+	if dt := resp.History.Slots[0].DownloadTime; dt != 12 {
+		t.Errorf("download_time = %d, want 12", dt)
 	}
 }
 
