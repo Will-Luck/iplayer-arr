@@ -12,7 +12,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
 jobs:
@@ -39,11 +39,25 @@ jobs:
           echo "Current base digest: $DIGEST"
           docker buildx rm inspect-builder
 
+      # Track the last-seen base digest in an Actions cache instead of a
+      # committed file. A unique save key per run plus a shared restore-keys
+      # prefix forms a rolling cache: the exact key never pre-exists, so
+      # restore falls through to the most recent base-image-digest-* entry.
+      # This removes the bot commit that previously updated the digest file
+      # on the default branch on every base-image change.
+      - name: Restore last-seen base digest
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/base-image-digest
+          key: base-image-digest-${{ github.run_id }}
+          restore-keys: |
+            base-image-digest-
+
       - name: Load last-seen digest
         id: stored
         run: |
-          if [ -f .github/base-image-digest ]; then
-            STORED=$(cat .github/base-image-digest)
+          if [ -f "${{ runner.temp }}/base-image-digest" ]; then
+            STORED=$(cat "${{ runner.temp }}/base-image-digest")
           else
             STORED="none"
           fi
@@ -154,12 +168,17 @@ jobs:
           cache-from: type=gha,scope=rebuild
           cache-to: type=gha,scope=rebuild,mode=max
 
-      - name: Update stored digest
-        if: steps.check.outputs.changed == 'true' && steps.current.outputs.digest != steps.stored.outputs.digest
-        run: |
-          echo -n "${{ steps.current.outputs.digest }}" > .github/base-image-digest
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/base-image-digest
-          git commit -m "ci: update base image digest [skip ci]"
-          git push
+      # Persist the current digest for the next run. The write is
+      # unconditional so an unchanged week still refreshes the cache and
+      # keeps it inside the 7-day eviction window; the save is naturally
+      # gated on a successful build, because a failed build above fails the
+      # job and skips these steps -- so a broken rebuild never records its
+      # digest as seen, and the next run retries it.
+      - name: Record current base digest
+        run: echo -n "${{ steps.current.outputs.digest }}" > "${{ runner.temp }}/base-image-digest"
+
+      - name: Save last-seen base digest
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/base-image-digest
+          key: base-image-digest-${{ github.run_id }}

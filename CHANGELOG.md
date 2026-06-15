@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CI: the weekly base-image rebuild workflow now tracks the last-seen base digest via an Actions cache instead of a committed file, so it no longer writes an automated commit to the default branch on each base-image update.
+
 ## [1.5.14] - 2026-06-15
 
 ### Fixed
