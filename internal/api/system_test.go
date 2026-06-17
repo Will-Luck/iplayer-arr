@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 	"github.com/Will-Luck/iplayer-arr/internal/download"
 
 	"github.com/Will-Luck/iplayer-arr/internal/store"
@@ -188,7 +189,7 @@ func TestHandleSystemHistoryCounts(t *testing.T) {
 func TestHandleGeoCheckSuccess(t *testing.T) {
 	h, _ := testAPI(t)
 	h.status = &RuntimeStatus{GeoOK: false}
-	h.GeoProbe = func() bool { return true }
+	h.GeoProbe = func() bbc.GeoResult { return bbc.GeoResult{Status: bbc.GeoUKOK} }
 
 	req := httptest.NewRequest(http.MethodPost, "/api/system/geo-check?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
@@ -204,11 +205,43 @@ func TestHandleGeoCheckSuccess(t *testing.T) {
 	if !resp["geo_ok"].(bool) {
 		t.Error("expected geo_ok=true in response")
 	}
+	if resp["geo_status"] != "uk_ok" {
+		t.Errorf("geo_status = %v, want uk_ok", resp["geo_status"])
+	}
 	if !h.status.GeoOK {
 		t.Error("expected h.status.GeoOK to be updated to true")
 	}
 	if h.status.GeoCheckedAt == "" {
 		t.Error("expected GeoCheckedAt to be set")
+	}
+}
+
+func TestHandleGeoCheckDNSFailed(t *testing.T) {
+	h, _ := testAPI(t)
+	h.status = &RuntimeStatus{GeoOK: true}
+	h.GeoProbe = func() bbc.GeoResult {
+		return bbc.GeoResult{Status: bbc.GeoDNSFailed, Detail: "server misbehaving"}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/system/geo-check?apikey=test-api-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	if resp["geo_ok"].(bool) {
+		t.Error("expected geo_ok=false for dns_failed")
+	}
+	if resp["geo_status"] != "dns_failed" {
+		t.Errorf("geo_status = %v, want dns_failed", resp["geo_status"])
+	}
+	if h.status.GeoOK {
+		t.Error("expected h.status.GeoOK to be cleared to false")
 	}
 }
 
@@ -228,7 +261,7 @@ func TestHandleGeoCheckNilProbe(t *testing.T) {
 func TestHandleGeoCheckNoAuth(t *testing.T) {
 	h, _ := testAPI(t)
 	h.status = &RuntimeStatus{GeoOK: false}
-	h.GeoProbe = func() bool { return true }
+	h.GeoProbe = func() bbc.GeoResult { return bbc.GeoResult{Status: bbc.GeoUKOK} }
 
 	req := httptest.NewRequest(http.MethodPost, "/api/system/geo-check", nil)
 	w := httptest.NewRecorder()

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 )
 
 // ----------------------------------------------------------------------
@@ -509,7 +511,7 @@ func TestDiagGeo_CachedFresh(t *testing.T) {
 	h, _ := testAPI(t)
 	now := mustParseTime(t, "2026-05-18T12:00:00Z")
 	checkedAt := now.Add(-2 * time.Minute).Format(time.RFC3339)
-	h.status.SetGeo(true, checkedAt)
+	h.status.SetGeo(string(bbc.GeoUKOK), "", checkedAt)
 	h.nowFn = func() time.Time { return now }
 
 	report := callDiagGeo(t, h, "")
@@ -535,7 +537,7 @@ func TestDiagGeo_CachedStale(t *testing.T) {
 	h, _ := testAPI(t)
 	now := mustParseTime(t, "2026-05-18T12:00:00Z")
 	checkedAt := now.Add(-10 * time.Minute).Format(time.RFC3339) // 600s old, over 300s TTL
-	h.status.SetGeo(true, checkedAt)
+	h.status.SetGeo(string(bbc.GeoUKOK), "", checkedAt)
 	h.nowFn = func() time.Time { return now }
 
 	report := callDiagGeo(t, h, "")
@@ -551,15 +553,18 @@ func TestDiagGeo_CachedStale(t *testing.T) {
 func TestDiagGeo_CachedFalse(t *testing.T) {
 	h, _ := testAPI(t)
 	now := mustParseTime(t, "2026-05-18T12:00:00Z")
-	h.status.SetGeo(false, now.Add(-1*time.Minute).Format(time.RFC3339))
+	h.status.SetGeo(string(bbc.GeoNotUK), "geo-blocked: non-UK exit", now.Add(-1*time.Minute).Format(time.RFC3339))
 	h.nowFn = func() time.Time { return now }
 
 	report := callDiagGeo(t, h, "")
 	if report.Verdict != "fail" {
 		t.Errorf("verdict = %q, want fail (geo_ok=false)", report.Verdict)
 	}
-	if !containsSubstring(report.ChecksFailed, "not_uk_exit") {
-		t.Errorf("checks_failed missing 'not_uk_exit': %v", report.ChecksFailed)
+	if !containsSubstring(report.ChecksFailed, "not_uk") {
+		t.Errorf("checks_failed missing 'not_uk': %v", report.ChecksFailed)
+	}
+	if report.GeoStatus != "not_uk" {
+		t.Errorf("geo_status = %q, want not_uk", report.GeoStatus)
 	}
 }
 
@@ -587,9 +592,9 @@ func TestDiagGeo_RefreshSuccess(t *testing.T) {
 	now := mustParseTime(t, "2026-05-18T12:00:00Z")
 	h.nowFn = func() time.Time { return now }
 	probeCalled := false
-	h.GeoProbe = func() bool {
+	h.GeoProbe = func() bbc.GeoResult {
 		probeCalled = true
-		return true
+		return bbc.GeoResult{Status: bbc.GeoUKOK}
 	}
 
 	report := callDiagGeo(t, h, "?refresh=1")
@@ -603,9 +608,9 @@ func TestDiagGeo_RefreshSuccess(t *testing.T) {
 		t.Errorf("refreshed = false, want true")
 	}
 	// Cache should now be populated
-	_, geoOK, checkedAt := h.status.Snapshot()
-	if !geoOK || checkedAt == "" {
-		t.Errorf("after refresh: cache geoOK=%v checkedAt=%q (want true + non-empty)", geoOK, checkedAt)
+	s := h.status.Snapshot()
+	if !s.GeoOK || s.GeoCheckedAt == "" {
+		t.Errorf("after refresh: cache geoOK=%v checkedAt=%q (want true + non-empty)", s.GeoOK, s.GeoCheckedAt)
 	}
 }
 
@@ -613,7 +618,9 @@ func TestDiagGeo_RefreshSuccess(t *testing.T) {
 func TestDiagGeo_RefreshFail(t *testing.T) {
 	h, _ := testAPI(t)
 	h.nowFn = func() time.Time { return mustParseTime(t, "2026-05-18T12:00:00Z") }
-	h.GeoProbe = func() bool { return false }
+	h.GeoProbe = func() bbc.GeoResult {
+		return bbc.GeoResult{Status: bbc.GeoNotUK, Detail: "geo-blocked: non-UK exit"}
+	}
 
 	report := callDiagGeo(t, h, "?refresh=1")
 	if report.Verdict != "fail" {
@@ -622,8 +629,11 @@ func TestDiagGeo_RefreshFail(t *testing.T) {
 	if !report.Refreshed {
 		t.Errorf("refreshed = false, want true (probe still ran)")
 	}
-	if !containsSubstring(report.ChecksFailed, "not_uk_exit") {
-		t.Errorf("checks_failed missing 'not_uk_exit': %v", report.ChecksFailed)
+	if !containsSubstring(report.ChecksFailed, "not_uk") {
+		t.Errorf("checks_failed missing 'not_uk': %v", report.ChecksFailed)
+	}
+	if report.GeoStatus != "not_uk" {
+		t.Errorf("geo_status = %q, want not_uk", report.GeoStatus)
 	}
 }
 

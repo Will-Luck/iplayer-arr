@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CI: the weekly base-image rebuild workflow now tracks the last-seen base digest via an Actions cache instead of a committed file, so it no longer writes an automated commit to the default branch on each base-image update.
+- Geo probe: replaced the HEAD status check with a DNS resolve plus a body-classified GET. `/api/status`, `/api/system`, and `/api/system/geo-check` now return `geo_status` (`uk_ok` / `not_uk` / `dns_failed` / `probe_error`) and `geo_detail` in addition to `geo_ok` (retained, derived from `geo_status`).
+
+### Fixed
+
+- **Geo check no longer mislabels a DNS resolution failure as "Blocked", and no longer reports "UK OK" for a non-UK VPN exit (GitHub #49).** The dashboard geo indicator was driven by an HTTP HEAD that treated any non-200 response as blocked, so a working UK connection with misconfigured DNS (a common VPN case where the WireGuard `DNS =` resolvers are only reachable inside the tunnel) showed "Blocked" even though it was not geo-blocked. Conversely, BBC signals a geo-block with an HTTP 200 plus an error body, which a HEAD cannot see, so a genuinely non-UK exit reported "UK OK". The probe now resolves the hostname first and classifies the response body, so a DNS failure reads as "DNS error - set VPN_NAMESERVERS", a non-UK exit reads as "Geo-blocked (non-UK exit)", and a connectivity failure is distinguished from both.
 
 ## [1.5.14] - 2026-06-15
 

@@ -30,10 +30,12 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		diskFree = int64(stat.Bavail) * stat.Bsize
 	}
 
-	ffmpeg, geoOK, _ := h.status.Snapshot()
+	s := h.status.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ffmpeg":         ffmpeg,
-		"geo_ok":         geoOK,
+		"ffmpeg":         s.FFmpegVersion,
+		"geo_ok":         s.GeoOK,
+		"geo_status":     s.GeoStatus,
+		"geo_detail":     s.GeoDetail,
 		"active_workers": activeWorkers,
 		"queue_depth":    queueDepth,
 		"paused":         h.mgr != nil && h.mgr.IsPaused(),

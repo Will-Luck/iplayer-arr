@@ -18,22 +18,42 @@ type RuntimeStatus struct {
 	mu            sync.RWMutex
 	FFmpegVersion string
 	GeoOK         bool
+	GeoStatus     string
+	GeoDetail     string
 	GeoCheckedAt  string
 }
 
-// SetGeo updates GeoOK and GeoCheckedAt under the write lock.
-func (rs *RuntimeStatus) SetGeo(ok bool, checkedAt string) {
+// StatusSnapshot is a consistent read of RuntimeStatus.
+type StatusSnapshot struct {
+	FFmpegVersion string
+	GeoOK         bool
+	GeoStatus     string
+	GeoDetail     string
+	GeoCheckedAt  string
+}
+
+// SetGeo updates the geo fields under the write lock. GeoOK is derived from
+// the classified status so callers and the cache stay consistent.
+func (rs *RuntimeStatus) SetGeo(status, detail, checkedAt string) {
 	rs.mu.Lock()
-	rs.GeoOK = ok
+	rs.GeoStatus = status
+	rs.GeoDetail = detail
+	rs.GeoOK = status == string(bbc.GeoUKOK)
 	rs.GeoCheckedAt = checkedAt
 	rs.mu.Unlock()
 }
 
 // Snapshot returns a consistent read of all RuntimeStatus fields.
-func (rs *RuntimeStatus) Snapshot() (ffmpeg string, geoOK bool, geoCheckedAt string) {
+func (rs *RuntimeStatus) Snapshot() StatusSnapshot {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
-	return rs.FFmpegVersion, rs.GeoOK, rs.GeoCheckedAt
+	return StatusSnapshot{
+		FFmpegVersion: rs.FFmpegVersion,
+		GeoOK:         rs.GeoOK,
+		GeoStatus:     rs.GeoStatus,
+		GeoDetail:     rs.GeoDetail,
+		GeoCheckedAt:  rs.GeoCheckedAt,
+	}
 }
 
 // Handler is the REST API router for the frontend dashboard.
@@ -53,9 +73,10 @@ type Handler struct {
 	RingBuf     *RingBuffer
 	StartedAt   time.Time
 	DownloadDir string
-	// GeoProbe, when non-nil, re-runs the BBC geo check and returns true when
-	// UK access is confirmed.
-	GeoProbe func() bool
+	// GeoProbe, when non-nil, re-runs the BBC geo check and returns the
+	// classified result (UK access, geo-block, DNS failure or connectivity
+	// failure).
+	GeoProbe func() bbc.GeoResult
 
 	// newznabHandler is the live newznab.Handler so the diag endpoint
 	// (handleDiagSonarrHandshake) can simulate Sonarr's tvsearch+grab

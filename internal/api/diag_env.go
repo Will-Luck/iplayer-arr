@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 )
 
 // This file extends /api/diag with one endpoint per environment-health
@@ -473,6 +475,8 @@ type DiagGeoReport struct {
 	Verdict      string   `json:"verdict"`
 	ChecksFailed []string `json:"checks_failed"`
 	GeoOK        bool     `json:"geo_ok"`
+	GeoStatus    string   `json:"geo_status"`
+	GeoDetail    string   `json:"geo_detail"`
 	CheckedAt    string   `json:"checked_at,omitempty"`
 	AgeSeconds   int64    `json:"age_seconds"`
 	Refreshed    bool     `json:"refreshed"`
@@ -501,18 +505,21 @@ func (h *Handler) handleDiagGeo(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, report)
 			return
 		}
-		ok := h.GeoProbe()
+		r2 := h.GeoProbe()
 		checkedAt := h.now().UTC().Format(time.RFC3339)
 		if h.status != nil {
-			h.status.SetGeo(ok, checkedAt)
+			h.status.SetGeo(string(r2.Status), r2.Detail, checkedAt)
 		}
+		ok := r2.Status == bbc.GeoUKOK
 		report.GeoOK = ok
+		report.GeoStatus = string(r2.Status)
+		report.GeoDetail = r2.Detail
 		report.CheckedAt = checkedAt
 		report.AgeSeconds = 0
 		report.Refreshed = true
 		if !ok {
 			report.ChecksFailed = append(report.ChecksFailed,
-				"not_uk_exit: geo probe returned false (exit IP may not be in the UK)")
+				fmt.Sprintf("%s: %s", r2.Status, r2.Detail))
 			report.Verdict = "fail"
 		} else {
 			report.Verdict = "pass"
@@ -528,8 +535,12 @@ func (h *Handler) handleDiagGeo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, report)
 		return
 	}
-	_, geoOK, checkedAt := h.status.Snapshot()
+	s := h.status.Snapshot()
+	geoOK := s.GeoOK
+	checkedAt := s.GeoCheckedAt
 	report.GeoOK = geoOK
+	report.GeoStatus = s.GeoStatus
+	report.GeoDetail = s.GeoDetail
 	report.CheckedAt = checkedAt
 
 	if checkedAt == "" {
@@ -558,8 +569,16 @@ func (h *Handler) handleDiagGeo(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case !geoOK:
+		reason := s.GeoDetail
+		if reason == "" {
+			reason = "cached geo check is false (exit IP may not be in the UK)"
+		}
+		status := s.GeoStatus
+		if status == "" {
+			status = "not_uk_exit"
+		}
 		report.ChecksFailed = append(report.ChecksFailed,
-			"not_uk_exit: cached geo check is false (exit IP may not be in the UK)")
+			fmt.Sprintf("%s: %s", status, reason))
 		report.Verdict = "fail"
 	case age > geoCacheTTLSeconds:
 		report.ChecksFailed = append(report.ChecksFailed,

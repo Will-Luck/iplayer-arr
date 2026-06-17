@@ -158,5 +158,8 @@ export const api = {
   // System
   getSystem: () => get<SystemInfo>("/api/system"),
   geoCheck: () =>
-    post<{ geo_ok: boolean; geo_checked_at: string }>("/api/system/geo-check", {}),
+    post<{ geo_ok: boolean; geo_status?: string; geo_detail?: string; geo_checked_at: string }>(
+      "/api/system/geo-check",
+      {},
+    ),
 };

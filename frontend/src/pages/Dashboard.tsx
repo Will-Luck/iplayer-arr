@@ -4,6 +4,7 @@ import { api } from "../api";
 import { connectSSE } from "../sse";
 import { confirmDialog } from "../confirm";
 import { addToast } from "../toast";
+import { geoBadge } from "../lib/geo";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge, type BadgeVariant } from "../ui/Badge";
@@ -501,10 +502,10 @@ export default function Dashboard() {
       <Show when={status()}>
         {(st) => (
           <div class="flex flex-wrap items-center gap-2">
-            <HealthPill
-              state={st().geo_ok ? "ok" : "err"}
-              label={st().geo_ok ? "UK OK" : "Geo Blocked"}
-            />
+            {(() => {
+              const g = geoBadge(st().geo_status, st().geo_ok);
+              return <HealthPill state={g.ok ? "ok" : "err"} label={g.label} />;
+            })()}
             <HealthPill
               state={st().ffmpeg ? "ok" : "err"}
               label={st().ffmpeg || "ffmpeg: Not Found"}

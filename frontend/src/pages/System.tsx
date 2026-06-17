@@ -4,6 +4,7 @@ import type { SystemInfo } from "../types";
 import { api } from "../api";
 import { addToast } from "../toast";
 import { getSonarrSetup } from "../lib/sonarr-setup";
+import { geoBadge } from "../lib/geo";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
@@ -60,12 +61,21 @@ export default function System() {
       const result = await api.geoCheck();
       setInfo((prev) =>
         prev
-          ? { ...prev, geo_ok: result.geo_ok, geo_checked_at: result.geo_checked_at }
+          ? {
+              ...prev,
+              geo_ok: result.geo_ok,
+              geo_status: result.geo_status,
+              geo_detail: result.geo_detail,
+              geo_checked_at: result.geo_checked_at,
+            }
           : prev,
       );
+      const g = geoBadge(result.geo_status, result.geo_ok);
       addToast(
-        result.geo_ok ? "success" : "error",
-        result.geo_ok ? "Geo check passed" : "Geo check failed",
+        g.ok ? "success" : "error",
+        g.ok
+          ? "Geo check passed"
+          : `Geo check failed: ${result.geo_detail || g.detail || g.label}`,
       );
     } catch {
       addToast("error", "Geo check request failed");
@@ -113,9 +123,17 @@ export default function System() {
                 <Card.Header>BBC iPlayer status</Card.Header>
                 <Card.Body>
                   <Row label="Geo check">
-                    <Badge variant={sys().geo_ok ? "completed" : "failed"}>
-                      {sys().geo_ok ? "UK OK" : "Blocked"}
-                    </Badge>
+                    {(() => {
+                      const g = geoBadge(sys().geo_status, sys().geo_ok);
+                      return (
+                        <Badge
+                          variant={g.ok ? "completed" : "failed"}
+                          title={sys().geo_detail || g.detail || undefined}
+                        >
+                          {g.label}
+                        </Badge>
+                      );
+                    })()}
                   </Row>
                   <Show when={sys().geo_checked_at}>
                     <Row label="Last checked">

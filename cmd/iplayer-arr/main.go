@@ -115,20 +115,19 @@ func main() {
 	// Record start time before the geo probe.
 	startedAt := time.Now()
 
-	// Geo-probe: check if BBC content is accessible
-	geoOK := false
-	geoCheckedAt := startedAt.UTC().Format(time.RFC3339)
-	bbcStatus, geoErr := bbcClient.Head("https://open.live.bbc.co.uk/mediaselector/6/select/version/2.0/mediaset/pc/vpid/bbc_one_hd/format/xml")
-	if geoErr != nil {
-		log.Printf("WARNING: geo-probe failed: %v", geoErr)
-	} else if bbcStatus == 200 {
-		geoOK = true
-		geoCheckedAt = time.Now().UTC().Format(time.RFC3339)
+	// Geo-probe: classify BBC access (UK ok / geo-block / DNS failure /
+	// connectivity failure) so each surfaces distinctly in the API and UI.
+	gr := ms.CheckGeo(context.Background())
+	geoCheckedAt := time.Now().UTC().Format(time.RFC3339)
+	switch gr.Status {
+	case bbc.GeoUKOK:
 		log.Println("geo-probe: UK access confirmed")
-	} else if bbcStatus == 403 {
-		log.Println("WARNING: geo-blocked -- BBC iPlayer content unavailable without a UK connection")
-	} else {
-		log.Printf("geo-probe: unexpected status %d", bbcStatus)
+	case bbc.GeoNotUK:
+		log.Println("WARNING: geo-blocked -- non-UK exit; BBC iPlayer unavailable")
+	case bbc.GeoDNSFailed:
+		log.Printf("WARNING: geo-probe DNS failure (%s) -- set VPN_NAMESERVERS to a public resolver (e.g. 1.1.1.1)", gr.Detail)
+	default:
+		log.Printf("geo-probe: check failed (%s)", gr.Detail)
 	}
 
 	if err := download.EnsureDownloadDir(downloadDir); err != nil {
@@ -148,19 +147,17 @@ func main() {
 	// http routing
 	runtimeStatus := &api.RuntimeStatus{
 		FFmpegVersion: ffVer,
-		GeoOK:         geoOK,
+		GeoOK:         gr.Status == bbc.GeoUKOK,
+		GeoStatus:     string(gr.Status),
+		GeoDetail:     gr.Detail,
 		GeoCheckedAt:  geoCheckedAt,
 	}
 	apiHandler := api.NewHandler(st, hub, mgr, ibl, runtimeStatus)
 	apiHandler.RingBuf = ringBuf
 	apiHandler.StartedAt = startedAt
 	apiHandler.DownloadDir = downloadDir
-	apiHandler.GeoProbe = func() bool {
-		status, err := bbcClient.Head("https://open.live.bbc.co.uk/mediaselector/6/select/version/2.0/mediaset/pc/vpid/bbc_one_hd/format/xml")
-		if err != nil {
-			return false
-		}
-		return status == 200
+	apiHandler.GeoProbe = func() bbc.GeoResult {
+		return ms.CheckGeo(context.Background())
 	}
 
 	mux := http.NewServeMux()

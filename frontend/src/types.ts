@@ -32,6 +32,8 @@ export interface Download {
 export interface StatusResponse {
   ffmpeg: string;
   geo_ok: boolean;
+  geo_status?: string;
+  geo_detail?: string;
   active_workers: number;
   queue_depth: number;
   paused: boolean;
@@ -114,6 +116,8 @@ export interface SystemInfo {
   uptime_seconds: number;
   build_date: string;
   geo_ok: boolean;
+  geo_status?: string;
+  geo_detail?: string;
   geo_checked_at?: string;
   ffmpeg_version: string;
   ffmpeg_path: string;

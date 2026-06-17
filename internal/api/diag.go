@@ -135,9 +135,9 @@ func (h *Handler) handleDiagSonarrHandshake(w http.ResponseWriter, r *http.Reque
 
 	// --- geo check ---
 	if h.status != nil {
-		_, geoOK, geoAt := h.status.Snapshot()
-		report.Geo.OK = geoOK
-		report.Geo.CheckedAt = geoAt
+		s := h.status.Snapshot()
+		report.Geo.OK = s.GeoOK
+		report.Geo.CheckedAt = s.GeoCheckedAt
 	}
 
 	// --- newznab round-trip ---

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"sort"
 	"strings"
 )
@@ -14,16 +15,30 @@ const defaultMediaSelectorBase = "https://open.live.bbc.co.uk/mediaselector"
 
 var errGeoBlocked = errors.New("geo-blocked: BBC iPlayer is only available in the UK")
 
+// isGeoBlockedBody reports whether a mediaselector body indicates a geo-block.
+// Single source of truth for the markers, shared by parseResponse and CheckGeo.
+func isGeoBlockedBody(body []byte) bool {
+	s := string(body)
+	return strings.Contains(s, "geolocation") || strings.Contains(s, `id="notuk"`)
+}
+
 // MediaSelector resolves a VPID to actual HLS stream URLs via BBC's
 // open.live.bbc.co.uk mediaselector endpoint.
 type MediaSelector struct {
-	client  *Client
-	BaseURL string
+	client   *Client
+	BaseURL  string
+	lookupIP func(ctx context.Context, host string) ([]net.IP, error)
 }
 
 // NewMediaSelector creates a MediaSelector backed by the given client.
 func NewMediaSelector(client *Client) *MediaSelector {
-	return &MediaSelector{client: client, BaseURL: defaultMediaSelectorBase}
+	return &MediaSelector{
+		client:  client,
+		BaseURL: defaultMediaSelectorBase,
+		lookupIP: func(ctx context.Context, host string) ([]net.IP, error) {
+			return net.DefaultResolver.LookupIP(ctx, "ip4", host)
+		},
+	}
 }
 
 // StreamSet holds the resolved video streams and optional subtitle URL.
@@ -118,10 +133,10 @@ func (ms *MediaSelector) Resolve(vpid string) (*StreamSet, error) {
 }
 
 func (ms *MediaSelector) parseResponse(body []byte) (*StreamSet, error) {
-	bodyStr := string(body)
-	if strings.Contains(bodyStr, "geolocation") || strings.Contains(bodyStr, `id="notuk"`) {
+	if isGeoBlockedBody(body) {
 		return nil, errGeoBlocked
 	}
+	bodyStr := string(body)
 	if strings.Contains(bodyStr, "selectionunavailable") {
 		return nil, fmt.Errorf("content unavailable")
 	}

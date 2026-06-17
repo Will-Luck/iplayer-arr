@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
@@ -17,6 +18,8 @@ type SystemInfo struct {
 	UptimeSeconds       int64  `json:"uptime_seconds"`
 	BuildDate           string `json:"build_date"`
 	GeoOK               bool   `json:"geo_ok"`
+	GeoStatus           string `json:"geo_status"`
+	GeoDetail           string `json:"geo_detail"`
 	GeoCheckedAt        string `json:"geo_checked_at,omitempty"`
 	FFmpegVersion       string `json:"ffmpeg_version"`
 	FFmpegPath          string `json:"ffmpeg_path"`
@@ -48,10 +51,12 @@ func (h *Handler) handleSystem(w http.ResponseWriter, r *http.Request) {
 
 	// Geo status from runtime status.
 	if h.status != nil {
-		ffmpeg, geoOK, geoCheckedAt := h.status.Snapshot()
-		info.FFmpegVersion = ffmpeg
-		info.GeoOK = geoOK
-		info.GeoCheckedAt = geoCheckedAt
+		s := h.status.Snapshot()
+		info.FFmpegVersion = s.FFmpegVersion
+		info.GeoOK = s.GeoOK
+		info.GeoStatus = s.GeoStatus
+		info.GeoDetail = s.GeoDetail
+		info.GeoCheckedAt = s.GeoCheckedAt
 	}
 
 	// FFmpeg binary path.
@@ -115,15 +120,17 @@ func (h *Handler) handleGeoCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	geoOK := h.GeoProbe()
+	r2 := h.GeoProbe()
 	checkedAt := time.Now().UTC().Format(time.RFC3339)
 
 	if h.status != nil {
-		h.status.SetGeo(geoOK, checkedAt)
+		h.status.SetGeo(string(r2.Status), r2.Detail, checkedAt)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"geo_ok":         geoOK,
+		"geo_ok":         r2.Status == bbc.GeoUKOK,
+		"geo_status":     string(r2.Status),
+		"geo_detail":     r2.Detail,
 		"geo_checked_at": checkedAt,
 	})
 }

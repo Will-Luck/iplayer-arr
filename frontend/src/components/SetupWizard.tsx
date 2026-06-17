@@ -2,6 +2,7 @@ import { createSignal, onMount, onCleanup, Show } from "solid-js";
 import { api } from "../api";
 import { getSonarrSetup } from "../lib/sonarr-setup";
 import { copyToClipboard } from "../lib/clipboard";
+import { geoBadge } from "../lib/geo";
 import type { ConfigResponse } from "../types";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
@@ -14,6 +15,7 @@ const maskKey = (k: string) =>
 export default function SetupWizard(props: { show: boolean; onComplete: () => void }) {
   const [step, setStep] = createSignal(1);
   const [geoOk, setGeoOk] = createSignal<boolean | null>(null);
+  const [geoStatus, setGeoStatus] = createSignal<string | undefined>(undefined);
   const [ffmpegOk, setFfmpegOk] = createSignal<boolean | null>(null);
   const [geoChecking, setGeoChecking] = createSignal(false);
   const [config, setConfig] = createSignal<ConfigResponse | null>(null);
@@ -27,7 +29,8 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
     try {
       const status = await api.getStatus();
       setFfmpegOk(!!status.ffmpeg);
-      setGeoOk(status.geo_ok);
+      setGeoStatus(status.geo_status);
+      setGeoOk(geoBadge(status.geo_status, status.geo_ok).ok);
     } catch {
       // ignore
     }
@@ -51,8 +54,10 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
     setGeoChecking(true);
     try {
       const result = await api.geoCheck();
-      setGeoOk(result.geo_ok);
+      setGeoStatus(result.geo_status);
+      setGeoOk(geoBadge(result.geo_status, result.geo_ok).ok);
     } catch {
+      setGeoStatus(undefined);
       setGeoOk(false);
     } finally {
       setGeoChecking(false);
@@ -172,7 +177,8 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
 
             <Show when={geoOk() === false}>
               <p class="mb-3 text-xs text-text-secondary">
-                iplayer-arr must reach BBC iPlayer. Ensure your container routes through a UK VPN.
+                {geoBadge(geoStatus(), false).detail ||
+                  "iplayer-arr must reach BBC iPlayer. Ensure your container routes through a UK VPN."}
               </p>
             </Show>
 
