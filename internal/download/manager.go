@@ -86,6 +86,20 @@ type Manager struct {
 	// routing in processDownload is executable without a real ffmpeg
 	// binary. Issue #56.
 	runFFmpeg func(context.Context, FFmpegJob) error
+
+	// throttle is the adaptive stall-cluster governor: it opens a cooldown
+	// that pauses new admissions when a cluster of distinct downloads stalls,
+	// caps concurrency via a dynamic activeLimit enforced in processNext, and
+	// freezes clustered victims' dedicated stall budget so a season-grab burst
+	// is not silently lost. Always non-nil after NewManager (default
+	// constructed), so option-less callers never nil-panic. GitHub #50.
+	throttle    *adaptiveThrottle
+	throttleCfg AdaptiveThrottleConfig
+
+	// now is the clock, injectable for deterministic tests via WithClock.
+	// Shared with the throttle so cooldown timing is controllable. Defaults
+	// to time.Now.
+	now func() time.Time
 }
 
 // ManagerOption configures optional Manager behaviour. Pass to NewManager
@@ -99,6 +113,23 @@ type ManagerOption func(*Manager)
 // watchdog_timeout_seconds) into every download. Resolves #42.
 func WithWatchdogTimeout(d time.Duration) ManagerOption {
 	return func(m *Manager) { m.watchdogTimeout = d }
+}
+
+// WithAdaptiveThrottle sets the adaptive stall-cluster governor config.
+// Used by main.go to plumb the resolved store keys / IPLAYER_ARR_ADAPTIVE_*
+// env into the throttle. GitHub #50.
+func WithAdaptiveThrottle(cfg AdaptiveThrottleConfig) ManagerOption {
+	return func(m *Manager) { m.throttleCfg = cfg }
+}
+
+// WithClock injects the clock used by the manager and its throttle. Test seam
+// only; production leaves the default time.Now.
+func WithClock(now func() time.Time) ManagerOption {
+	return func(m *Manager) {
+		if now != nil {
+			m.now = now
+		}
+	}
 }
 
 func NewManager(st *store.Store, downloadDir string, maxWorkers int,
@@ -115,10 +146,15 @@ func NewManager(st *store.Store, downloadDir string, maxWorkers int,
 		claimed:     make(map[string]context.CancelFunc),
 		cancelled:   make(map[string]struct{}),
 		runFFmpeg:   RunFFmpeg,
+		throttleCfg: DefaultAdaptiveThrottleConfig(),
+		now:         time.Now,
 	}
 	for _, opt := range opts {
 		opt(m)
 	}
+	// Construct the throttle AFTER options so WithAdaptiveThrottle/WithClock
+	// are reflected. Always non-nil, so option-less callers never nil-panic.
+	m.throttle = newAdaptiveThrottle(m.throttleCfg, maxWorkers, m.now)
 	return m
 }
 
@@ -132,6 +168,26 @@ func (m *Manager) WatchdogTimeout() time.Duration {
 // MaxWorkers returns the configured worker-pool size. Used by /api/system.
 func (m *Manager) MaxWorkers() int {
 	return m.maxWorkers
+}
+
+// claimedLen returns the number of downloads currently being processed (the
+// live ffmpeg concurrency), read under claimMu so the adaptive-throttle
+// admission gate is race-free. GitHub #50.
+func (m *Manager) claimedLen() int {
+	m.claimMu.Lock()
+	defer m.claimMu.Unlock()
+	return len(m.claimed)
+}
+
+// ActiveLimit returns the adaptive throttle's current concurrency cap
+// (<= MaxWorkers). Used by /api/system. GitHub #50.
+func (m *Manager) ActiveLimit() int {
+	return int(m.throttle.activeLimit.Load())
+}
+
+// ThrottleSnapshot exposes the throttle state for telemetry. GitHub #50.
+func (m *Manager) ThrottleSnapshot() throttleSnapshot {
+	return m.throttle.snapshot()
 }
 
 // Start launches the worker goroutines that poll for pending downloads.
@@ -164,6 +220,8 @@ func (m *Manager) Pause() {
 
 func (m *Manager) Resume() {
 	m.paused.Store(false)
+	// A manual resume also overrides any active adaptive-throttle cooldown.
+	m.throttle.clearCooldown()
 	m.hub.Broadcast("pause:changed", map[string]bool{"paused": false})
 }
 

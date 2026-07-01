@@ -33,11 +33,23 @@ type Download struct {
 	// steps the ladder by genuine stream failures. The counter is never
 	// reset: it is preserved across stalled and not-yet-available retries
 	// rather than counting them. #46, #56.
-	CDNFailures int       `json:"cdn_failures"`
-	CreatedAt   time.Time `json:"created_at"`
-	StartedAt   time.Time `json:"started_at"`
-	CompletedAt time.Time `json:"completed_at"`
-	FileExists  *bool     `json:"file_exists,omitempty"`
+	CDNFailures int `json:"cdn_failures"`
+	// StallCount is the download's dedicated watchdog-stall budget and
+	// escalation driver, kept separate from the shared RetryCount so a
+	// stall neither consumes the CDN/not-yet-available retry budget nor is
+	// diluted by it. It gates stall permanence (StallCount < maxStalls) and
+	// widens the watchdog window on each retry. GitHub #50.
+	StallCount int `json:"stall_count"`
+	// StallCredits counts stalls that were frozen (net-zeroed against
+	// StallCount) while an adaptive-throttle cooldown was active, so a
+	// synchronised season-grab cluster cannot silently burn its stall budget
+	// and be lost. Bounded by maxStallCredits so a genuinely dead stream
+	// still reaches permanence and is handed to Sonarr for re-grab. GitHub #50.
+	StallCredits int       `json:"stall_credits"`
+	CreatedAt    time.Time `json:"created_at"`
+	StartedAt    time.Time `json:"started_at"`
+	CompletedAt  time.Time `json:"completed_at"`
+	FileExists   *bool     `json:"file_exists,omitempty"`
 }
 
 type Programme struct {

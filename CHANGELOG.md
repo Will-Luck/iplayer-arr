@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.15] - 2026-07-01
+
+### Added
+
+- **Adaptive ffmpeg-stall throttle that keeps season grabs from losing episodes (GitHub #50).** When several downloads stall together (the BBC CDN throttling the host IP on a high-bitrate stream, or concurrent ffmpeg remuxes starving each other for CPU and disk I/O), iplayer-arr now detects the cluster and responds automatically: it opens a cooldown that pauses new pickups so the pressure clears, steps the number of concurrently-active downloads down and back up on its own (AIMD), and freezes the retry budget of the affected downloads so a synchronised burst can no longer silently exhaust its attempts and be dropped until Sonarr re-searches. All control happens at the admission layer; the worker pool itself is unchanged. Tunable via `IPLAYER_ARR_ADAPTIVE_THROTTLE_*` env vars and matching store keys, with `adaptive_throttle_enabled=false` as a kill-switch. `GET /api/system` now reports `active_workers`, `throttled`, `cooldown_until`, and `stalls_in_window` so the behaviour is visible.
+- **Escalating watchdog window on stall retries.** A download that stalls now gets a progressively wider no-progress window on each retry (base, then 2x, then 4x, capped), so a transient throttle or contention burst has more room to clear before the watchdog cancels again, instead of being killed at a flat 60 seconds every time. The base is the existing `watchdog_timeout_seconds`, now also returned by `GET /api/config` so it round-trips in the config UI.
+
 ### Changed
 
 - CI: the weekly base-image rebuild workflow now tracks the last-seen base digest via an Actions cache instead of a committed file, so it no longer writes an automated commit to the default branch on each base-image update.
@@ -15,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Geo check no longer mislabels a DNS resolution failure as "Blocked", and no longer reports "UK OK" for a non-UK VPN exit (GitHub #49).** The dashboard geo indicator was driven by an HTTP HEAD that treated any non-200 response as blocked, so a working UK connection with misconfigured DNS (a common VPN case where the WireGuard `DNS =` resolvers are only reachable inside the tunnel) showed "Blocked" even though it was not geo-blocked. Conversely, BBC signals a geo-block with an HTTP 200 plus an error body, which a HEAD cannot see, so a genuinely non-UK exit reported "UK OK". The probe now resolves the hostname first and classifies the response body, so a DNS failure reads as "DNS error - set VPN_NAMESERVERS", a non-UK exit reads as "Geo-blocked (non-UK exit)", and a connectivity failure is distinguished from both.
+- **A stalled download no longer consumes the CDN or not-yet-available retry budget, so freshly-aired season episodes are not dropped after a single stall (GitHub #50).** Watchdog stalls previously shared the same 3-attempt `RetryCount` as every other failure, and a just-aired episode can accumulate several not-yet-available retries before it becomes downloadable, so its first real stall could push it straight to permanent. Stalls now use a dedicated budget (`StallCount`) that is independent of the CDN and not-yet-available counters, and still never drives quality degradation (unchanged from #56).
+- **A completed download is no longer killed during ffmpeg's faststart finalization on slow storage (GitHub #50).** `-movflags faststart` rewrites the whole file at the end to move the moov atom and emits no progress output while it does, so on slow I/O (a WSL2 Windows-mounted path, or NFS) a large finished file could exceed the watchdog and be destroyed mid-relocation. Once muxing reaches ~99% of the programme duration the watchdog relaxes to a bounded finalize grace, while a genuine mid-stream stall still trips it at the normal window.
 
 ## [1.5.14] - 2026-06-15
 

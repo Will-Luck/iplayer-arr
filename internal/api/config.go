@@ -6,13 +6,14 @@ import (
 	"strconv"
 )
 
-var configKeys = []string{"api_key", "quality", "max_workers", "download_dir", "auto_cleanup"}
+var configKeys = []string{"api_key", "quality", "max_workers", "download_dir", "auto_cleanup", "watchdog_timeout_seconds"}
 
 var configDefaults = map[string]string{
-	"quality":      "any",
-	"max_workers":  "4",
-	"download_dir": "/downloads",
-	"auto_cleanup": "false",
+	"quality":                  "any",
+	"max_workers":              "4",
+	"download_dir":             "/downloads",
+	"auto_cleanup":             "false",
+	"watchdog_timeout_seconds": "60",
 }
 
 func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {

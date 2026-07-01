@@ -47,6 +47,12 @@ func (m *Manager) worker(ctx context.Context, id int) {
 			if !m.paused.Load() {
 				m.safeProcessNext(ctx, id)
 			}
+			// Time-driven AIMD recovery: step the adaptive-throttle activeLimit
+			// back up after a clean window even when a single long download
+			// emits no completion events. Single-flight inside the throttle, so
+			// running it from every worker each tick applies at most +1 per
+			// window. GitHub #50.
+			m.throttle.maybeRecover()
 		}
 	}
 }
@@ -65,6 +71,14 @@ func (m *Manager) safeProcessNext(ctx context.Context, workerID int) {
 
 // processNext finds the next pending or retryable-failed download and processes it.
 func (m *Manager) processNext(ctx context.Context, workerID int) {
+	// Adaptive-throttle admission gate: hold off claiming new work during a
+	// stall-cluster cooldown, or when live concurrency is already at the
+	// dynamic activeLimit. In-flight downloads are never touched; only new
+	// claims pause, so the live set drains and pressure eases. Cheap check
+	// before the O(n) ListDownloads. GitHub #50.
+	if !m.throttle.admit(m.claimedLen()) {
+		return
+	}
 	downloads, err := m.store.ListDownloads()
 	if err != nil {
 		log.Printf("worker %d: list downloads: %v", workerID, err)
@@ -222,6 +236,8 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		FHDProber:       m.client, // NEW — *bbc.Client satisfies downloaderFHDProber
 		TargetHeight:    targetHeight,
 		WatchdogTimeout: m.watchdogTimeout,
+		StallCount:      dl.StallCount,
+		Duration:        time.Duration(dl.Duration) * time.Second,
 	}
 
 	ffErr := m.runFFmpeg(ctx, job)
@@ -241,12 +257,19 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		// of counting toward quality degradation (targetHeight is
 		// recomputed from dl.Quality on every attempt). Issue #56.
 		if errors.Is(ffErr, ErrStalled) {
+			// Register the stall so the adaptive throttle can detect a cluster
+			// and open a cooldown. Ordered BEFORE failDownload so the tripping
+			// stall itself is seen in-cooldown and has its budget frozen.
+			m.throttle.recordStall(dl.ID)
 			m.failDownload(dl, store.FailCodeStalled, ffErr)
 			return
 		}
 		m.failDownload(dl, store.FailCodeFFmpeg, ffErr)
 		return
 	}
+	// ffmpeg completed without stalling: tell the throttle the pressure has
+	// eased so its exponential-backoff counter resets. GitHub #50.
+	m.throttle.recordClean()
 
 	// 5. Stat the output file once; both the truncation gate and
 	// the post-completion size update consume actualSize.
@@ -344,33 +367,50 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.Status = store.StatusFailed
 	dl.FailureCode = code
 	dl.Error = err.Error()
-	dl.RetryCount++
-	// Stalls (FailCodeStalled) deliberately bypass this counter so a
-	// local stall never drives the quality-degradation gate. Issue #56.
-	if code == store.FailCodeFFmpeg || code == store.FailCodeTruncated {
-		dl.CDNFailures++
-	}
 
 	limit := maxRetries
 	switch code {
+	case store.FailCodeStalled:
+		// Stalls use a DEDICATED budget (StallCount), fully decoupled from the
+		// shared RetryCount so a stall neither consumes nor is diluted by the
+		// CDN / not-yet-available retry budget, and never bumps CDNFailures so
+		// it never drives quality degradation. Issue #56 / GitHub #50.
+		limit = maxStalls
+		dl.StallCount++
+		// Freeze: while an adaptive-throttle cooldown is active, a clustered
+		// victim's stall is net-zeroed against its budget (bounded by
+		// maxStallCredits) so a synchronised season-grab burst cannot silently
+		// exhaust the budget and be lost until the next Sonarr RSS. GitHub #50.
+		if m.throttle.inCooldown() && dl.StallCredits < maxStallCredits {
+			dl.StallCount--
+			dl.StallCredits++
+		}
+		dl.Retryable = dl.StallCount < maxStalls
+		if dl.Retryable {
+			dl.RetryAfter = m.now().Add(stallBackoff(dl.StallCount))
+		}
 	case store.FailCodeGeoBlocked, store.FailCodeExpired:
+		dl.RetryCount++
 		dl.Retryable = false
 	case store.FailCodeNotYetAvailable:
+		dl.RetryCount++
 		limit = maxNotYetAvailableRetries
 		dl.Retryable = dl.RetryCount < maxNotYetAvailableRetries
+		if dl.Retryable {
+			dl.RetryAfter = m.now().Add(notYetAvailableRetryInterval)
+		}
 	default:
+		dl.RetryCount++
+		if code == store.FailCodeFFmpeg || code == store.FailCodeTruncated {
+			dl.CDNFailures++
+		}
 		dl.Retryable = dl.RetryCount < maxRetries
-	}
-
-	if dl.Retryable {
-		if code == store.FailCodeNotYetAvailable {
-			dl.RetryAfter = time.Now().Add(notYetAvailableRetryInterval)
-		} else {
+		if dl.Retryable {
 			backoff := 30 * time.Second
 			for i := 1; i < dl.RetryCount; i++ {
 				backoff *= 3
 			}
-			dl.RetryAfter = time.Now().Add(backoff)
+			dl.RetryAfter = m.now().Add(backoff)
 		}
 	}
 
@@ -379,16 +419,20 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	}
 
 	if !dl.Retryable {
-		dl.CompletedAt = time.Now()
+		dl.CompletedAt = m.now()
 		m.store.PutDownload(dl)
 		m.store.MoveToHistory(dl.ID)
 	}
 
 	m.broadcast("download:failed", dl)
+	count := dl.RetryCount
+	if code == store.FailCodeStalled {
+		count = dl.StallCount
+	}
 	if dl.Retryable {
-		log.Printf("download %s failed (%s): %v [retry %d/%d, backoff %v]", dl.ID, code, err, dl.RetryCount, limit, time.Until(dl.RetryAfter).Round(time.Second))
+		log.Printf("download %s failed (%s): %v [retry %d/%d, backoff %v]", dl.ID, code, err, count, limit, time.Until(dl.RetryAfter).Round(time.Second))
 	} else {
-		log.Printf("download %s failed (%s): %v [permanent, count=%d]", dl.ID, code, err, dl.RetryCount)
+		log.Printf("download %s failed (%s): %v [permanent, count=%d]", dl.ID, code, err, count)
 	}
 }
 

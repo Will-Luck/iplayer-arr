@@ -37,6 +37,14 @@ type SystemInfo struct {
 	// without needing to read logs.
 	MaxWorkers             int `json:"max_workers"`
 	WatchdogTimeoutSeconds int `json:"watchdog_timeout_seconds"`
+	// Adaptive stall-throttle telemetry: the current effective concurrency
+	// (ActiveWorkers <= MaxWorkers), whether a stall-cluster cooldown is
+	// active, when it lifts, and the distinct stalls seen in the detection
+	// window, so operators can watch the throttle respond. GitHub #50.
+	ActiveWorkers  int    `json:"active_workers"`
+	Throttled      bool   `json:"throttled"`
+	CooldownUntil  string `json:"cooldown_until,omitempty"`
+	StallsInWindow int    `json:"stalls_in_window"`
 }
 
 // handleSystem serves GET /api/system.
@@ -106,6 +114,13 @@ func (h *Handler) handleSystem(w http.ResponseWriter, r *http.Request) {
 			info.WatchdogTimeoutSeconds = int(wd.Seconds())
 		} else {
 			info.WatchdogTimeoutSeconds = ffmpegPackageDefaultWatchdogSeconds
+		}
+		snap := h.mgr.ThrottleSnapshot()
+		info.ActiveWorkers = snap.ActiveLimit
+		info.Throttled = snap.Throttled
+		info.StallsInWindow = snap.StallsInWindow
+		if !snap.CooldownUntil.IsZero() {
+			info.CooldownUntil = snap.CooldownUntil.Format(time.RFC3339)
 		}
 	}
 

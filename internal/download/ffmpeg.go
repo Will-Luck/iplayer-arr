@@ -24,6 +24,34 @@ import (
 // Audit item 11.
 const progressWatchdogTimeout = 60 * time.Second
 
+// watchdogEscalationShiftCap bounds how far the per-download watchdog
+// window is doubled by prior stall count: base, 2x, 4x, then held. A
+// download's stall budget is 3 (maxStalls), so a running attempt never
+// carries a StallCount above 2, but the cap defends the shift regardless.
+// GitHub #50.
+const watchdogEscalationShiftCap = 2
+
+// watchdogEscalationMaxTimeout is the absolute ceiling on the escalated
+// window, so a large configured base cannot produce an unbounded silence
+// tolerance that would let a genuinely dead stream sit for many minutes.
+// GitHub #50.
+const watchdogEscalationMaxTimeout = 10 * time.Minute
+
+// faststartRelaxFraction is the fraction of a download's duration that
+// ffmpeg's muxed time= must reach before the watchdog switches to the
+// finalize grace. Kept high (0.99) because the moov relocation only begins
+// at 100% of muxed time; a lower fraction would relax the watchdog across
+// the final trailing segments, exactly where real CDN stalls occur on
+// season grabs, and mask them. GitHub #50.
+const faststartRelaxFraction = 0.99
+
+// faststartFinalizeGrace is the widened watchdog window used once a run is
+// in the faststart finalization phase (no -stats output during the moov
+// relocation). Bounded so a wedged write on slow I/O cannot pin a worker
+// on the immutable pool indefinitely. A var (not const) so watchdog tests
+// can shrink it the way they shrink progressWatchdogInterval. GitHub #50.
+var faststartFinalizeGrace = 3 * time.Minute
+
 // progressWatchdogInterval is the watchdog's tick period. Short enough
 // to detect a stall within ~progressWatchdogTimeout + this, long
 // enough to keep the goroutine cheap. A var rather than a const only
@@ -189,16 +217,89 @@ type FFmpegJob struct {
 	// gap before the watchdog cancels a slow-but-not-stuck download.
 	// Resolves #42.
 	WatchdogTimeout time.Duration
+
+	// StallCount is the download's accumulated watchdog-stall count
+	// (store.Download.StallCount). Each prior stall widens the effective
+	// watchdog window for this attempt (base, 2x, 4x, capped) so a
+	// transient throttle or CPU/IO-contention burst gets progressively
+	// more room to clear before the watchdog cancels again, instead of
+	// being killed at a flat 60s on every retry. GitHub #50.
+	StallCount int
+
+	// Duration is the programme's total length. When >0 it lets the
+	// watchdog relax to a finalize grace once ffmpeg's muxed time= crosses
+	// the faststart threshold, so the silent -movflags faststart moov-atom
+	// relocation (which emits no -stats lines) does not trip the watchdog
+	// and destroy a fully-downloaded file on slow I/O. Zero disables the
+	// relaxation (safe no-op). GitHub #50.
+	Duration time.Duration
 }
 
 // effectiveWatchdogTimeout returns the per-job override if set, or
 // the package default. Centralised so the watchdog goroutine logic
 // stays readable.
 func effectiveWatchdogTimeout(job FFmpegJob) time.Duration {
-	if job.WatchdogTimeout > 0 {
-		return job.WatchdogTimeout
+	base := job.WatchdogTimeout
+	if base <= 0 {
+		base = progressWatchdogTimeout
 	}
-	return progressWatchdogTimeout
+	// Resolve the base BEFORE escalating: computing base<<n in the caller
+	// when base can be zero (the unset default) would leave escalation a
+	// no-op for exactly the users on the 60s package default -- the #50
+	// reporter. Folding it here makes that impossible. GitHub #50.
+	return escalateWatchdog(base, job.StallCount)
+}
+
+// escalateWatchdog widens the watchdog window by the download's prior
+// stall count so a transient throttle/contention burst gets progressively
+// more room to clear before the watchdog cancels again: base, 2x, 4x, then
+// held at the shift cap. The result is clamped to watchdogEscalationMaxTimeout
+// but never pulled below base, so an operator who deliberately configured a
+// large base keeps it. A negative stall count is treated as zero (Go panics
+// on a negative shift). Pure and table-testable. GitHub #50.
+func escalateWatchdog(base time.Duration, stallCount int) time.Duration {
+	shift := stallCount
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > watchdogEscalationShiftCap {
+		shift = watchdogEscalationShiftCap
+	}
+	escalated := base << uint(shift)
+	if escalated > watchdogEscalationMaxTimeout {
+		escalated = watchdogEscalationMaxTimeout
+	}
+	if escalated < base {
+		escalated = base
+	}
+	return escalated
+}
+
+// crossedFaststartThreshold reports whether ffmpeg's muxed time= has reached
+// the faststart finalization window of the programme duration. Once muxing
+// completes, -movflags faststart rewrites the whole file to relocate the moov
+// atom and emits no -stats lines, so from this point a lack of progress is
+// finalization, not a stall. Duration <= 0 (unknown) disables the relaxation.
+// GitHub #50.
+func crossedFaststartThreshold(muxedSeconds, durationSeconds float64) bool {
+	if durationSeconds <= 0 {
+		return false
+	}
+	return muxedSeconds >= faststartRelaxFraction*durationSeconds
+}
+
+// finalizeAwareThreshold returns the watchdog window to enforce for the
+// current tick: the widened faststart grace once the run is in its silent
+// finalization phase, otherwise the (already stall-escalated) base. It never
+// returns less than base, so escalation and the finalize grace compose by
+// taking whichever is larger. The grace is passed in (rather than read from
+// the package var) so RunFFmpeg's watchdog goroutine, which may outlive the
+// call, does not race a test that restores the var. GitHub #50.
+func finalizeAwareThreshold(base, grace time.Duration, nearComplete bool) time.Duration {
+	if nearComplete && grace > base {
+		return grace
+	}
+	return base
 }
 
 // resolveHLSVariant fetches the master playlist, finds the highest-
@@ -448,6 +549,14 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 	// threshold. atomic.Int64 keeps the scanner goroutine lock-free.
 	var lastProgressNanos atomic.Int64
 	lastProgressNanos.Store(time.Now().UnixNano())
+	// lastMuxedMillis tracks ffmpeg's most recent muxed time= position (in
+	// milliseconds) so the watchdog can tell the silent -movflags faststart
+	// finalization phase (muxed time at ~100%, the moov relocation emitting no
+	// -stats lines) apart from a genuine mid-stream stall, and relax to a
+	// bounded finalize grace instead of killing a completed file on slow I/O.
+	// GitHub #50.
+	var lastMuxedMillis atomic.Int64
+	durationSeconds := job.Duration.Seconds()
 	// watchdogFired records that the watchdog (not ffmpeg itself)
 	// killed the run, so the error paths below can surface ErrStalled
 	// instead of an opaque "signal: terminated". Issue #56.
@@ -459,6 +568,10 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 	// with tests that shrink and restore progressWatchdogInterval.
 	// Issue #56.
 	watchdogInterval := progressWatchdogInterval
+	// Capture the finalize grace too, for the same outlive-the-call reason:
+	// the goroutine reads it every tick and must not race a test restoring
+	// the package var. GitHub #50.
+	finalizeGrace := faststartFinalizeGrace
 	go func() {
 		ticker := time.NewTicker(watchdogInterval)
 		defer ticker.Stop()
@@ -468,8 +581,18 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 				return
 			case <-ticker.C:
 				since := time.Since(time.Unix(0, lastProgressNanos.Load()))
-				if since > watchdogTimeout {
-					log.Printf("ffmpeg watchdog: no progress in %s (threshold %s); cancelling", since.Round(time.Second), watchdogTimeout)
+				// Recompute the threshold each tick: once muxing reaches the
+				// faststart finalization window, widen the watchdog to the
+				// finalize grace so the silent moov relocation is not mistaken
+				// for a stall and a completed file destroyed. GitHub #50.
+				nearComplete := crossedFaststartThreshold(float64(lastMuxedMillis.Load())/1000.0, durationSeconds)
+				threshold := finalizeAwareThreshold(watchdogTimeout, finalizeGrace, nearComplete)
+				if since > threshold {
+					phase := ""
+					if nearComplete {
+						phase = " (faststart finalize)"
+					}
+					log.Printf("ffmpeg watchdog: no progress in %s (threshold %s%s); cancelling", since.Round(time.Second), threshold, phase)
 					watchdogFired.Store(true)
 					cancelRun()
 					return
@@ -489,6 +612,7 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 		line := scanner.Text()
 		if prog, ok := parseProgress(line); ok {
 			lastProgressNanos.Store(time.Now().UnixNano())
+			lastMuxedMillis.Store(int64(prog.TimeSeconds * 1000))
 			if job.OnProgress != nil {
 				job.OnProgress(prog)
 			}

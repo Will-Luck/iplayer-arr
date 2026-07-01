@@ -37,6 +37,91 @@ func TestEffectiveWatchdogTimeout_NegativeFallsBack(t *testing.T) {
 	}
 }
 
+// TestEscalateWatchdog locks the escalation ladder: base, 2x, 4x, then
+// held at the shift cap; clamped to the max ceiling but never below base;
+// a negative count is treated as zero (a negative Go shift panics).
+func TestEscalateWatchdog(t *testing.T) {
+	cases := []struct {
+		base       time.Duration
+		stallCount int
+		want       time.Duration
+	}{
+		{60 * time.Second, 0, 60 * time.Second},
+		{60 * time.Second, 1, 120 * time.Second},
+		{60 * time.Second, 2, 240 * time.Second},
+		{60 * time.Second, 3, 240 * time.Second},           // shift capped at 2
+		{60 * time.Second, 9, 240 * time.Second},           // shift capped at 2
+		{60 * time.Second, -1, 60 * time.Second},           // negative guarded to 0
+		{5 * time.Minute, 2, watchdogEscalationMaxTimeout}, // 20m clamped to 10m
+		{15 * time.Minute, 0, 15 * time.Minute},            // large base preserved, never clamped below base
+	}
+	for _, c := range cases {
+		if got := escalateWatchdog(c.base, c.stallCount); got != c.want {
+			t.Errorf("escalateWatchdog(%v, %d) = %v, want %v", c.base, c.stallCount, got, c.want)
+		}
+	}
+}
+
+// TestEffectiveWatchdogTimeout_EscalatesWithStallCount is the discriminating
+// test: with the DEFAULT (unset) base, a StallCount of 1 must widen the
+// window to 120s, NOT stay at 0 or 60s. A version that computed base<<n with
+// base==0 would return 0 here and ship the bug for exactly the users on the
+// package default. GitHub #50.
+func TestEffectiveWatchdogTimeout_EscalatesWithStallCount(t *testing.T) {
+	if got := effectiveWatchdogTimeout(FFmpegJob{StallCount: 1}); got != 120*time.Second {
+		t.Errorf("effectiveWatchdogTimeout(default base, StallCount 1) = %v, want 120s", got)
+	}
+	if got := effectiveWatchdogTimeout(FFmpegJob{StallCount: 2}); got != 240*time.Second {
+		t.Errorf("effectiveWatchdogTimeout(default base, StallCount 2) = %v, want 240s", got)
+	}
+	// An explicit base still escalates from that base.
+	if got := effectiveWatchdogTimeout(FFmpegJob{WatchdogTimeout: 120 * time.Second, StallCount: 1}); got != 240*time.Second {
+		t.Errorf("effectiveWatchdogTimeout(120s base, StallCount 1) = %v, want 240s", got)
+	}
+}
+
+// TestCrossedFaststartThreshold: muxed time within 99% of duration is the
+// finalization window; an unknown (<=0) duration disables the relaxation.
+func TestCrossedFaststartThreshold(t *testing.T) {
+	cases := []struct {
+		muxed, duration float64
+		want            bool
+	}{
+		{100, 100, true},
+		{99, 100, true},
+		{98.9, 100, false},
+		{50, 100, false},
+		{10, 0, false}, // unknown duration -> no relaxation
+		{0, 0, false},
+	}
+	for _, c := range cases {
+		if got := crossedFaststartThreshold(c.muxed, c.duration); got != c.want {
+			t.Errorf("crossedFaststartThreshold(%v, %v) = %v, want %v", c.muxed, c.duration, got, c.want)
+		}
+	}
+}
+
+// TestFinalizeAwareThreshold: the finalize grace applies only when near
+// completion and only when it is larger than the (escalated) base.
+func TestFinalizeAwareThreshold(t *testing.T) {
+	grace := 3 * time.Minute
+	cases := []struct {
+		base time.Duration
+		near bool
+		want time.Duration
+	}{
+		{60 * time.Second, false, 60 * time.Second},
+		{60 * time.Second, true, grace},              // grace 3m > 60s
+		{240 * time.Second, true, 240 * time.Second}, // escalated base 4m > grace, never below base
+		{grace, true, grace},
+	}
+	for _, c := range cases {
+		if got := finalizeAwareThreshold(c.base, grace, c.near); got != c.want {
+			t.Errorf("finalizeAwareThreshold(%v, %v, %v) = %v, want %v", c.base, grace, c.near, got, c.want)
+		}
+	}
+}
+
 func TestParseFFmpegProgress(t *testing.T) {
 	tests := []struct {
 		line     string

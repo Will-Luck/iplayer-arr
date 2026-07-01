@@ -105,7 +105,8 @@ func main() {
 	hub := api.NewHub()
 	mgr := download.NewManager(st, downloadDir, configuredMaxWorkers(st),
 		bbcClient, playlist, ms, hub,
-		download.WithWatchdogTimeout(configuredWatchdogTimeout(st)))
+		download.WithWatchdogTimeout(configuredWatchdogTimeout(st)),
+		download.WithAdaptiveThrottle(configuredAdaptiveThrottle(st)))
 
 	// Start download workers
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -424,6 +425,79 @@ func configuredMaxWorkers(st *store.Store) int {
 // Resolves #42: under heavy concurrency the 60s default can fire
 // false positives when ffmpeg is starved of CPU, so users on busy
 // hosts need a way to extend the threshold without recompiling.
+// configuredAdaptiveThrottle resolves the adaptive stall-throttle config from
+// IPLAYER_ARR_ADAPTIVE_THROTTLE_* env vars (priority) then store config keys,
+// falling back to the shipped defaults. Set adaptive_throttle_enabled=false
+// (or the env to false/0) as the kill-switch. GitHub #50.
+func configuredAdaptiveThrottle(st *store.Store) download.AdaptiveThrottleConfig {
+	cfg := download.DefaultAdaptiveThrottleConfig()
+	cfg.Enabled = envOrStoreBool(st, "IPLAYER_ARR_ADAPTIVE_THROTTLE_ENABLED", "adaptive_throttle_enabled", cfg.Enabled)
+	if v, ok := envOrStoreInt(st, "IPLAYER_ARR_ADAPTIVE_THROTTLE_THRESHOLD", "adaptive_throttle_threshold"); ok {
+		cfg.Threshold = v
+	}
+	if v, ok := envOrStoreInt(st, "IPLAYER_ARR_ADAPTIVE_THROTTLE_WINDOW_SECONDS", "adaptive_throttle_window_seconds"); ok {
+		cfg.Window = time.Duration(v) * time.Second
+	}
+	if v, ok := envOrStoreInt(st, "IPLAYER_ARR_ADAPTIVE_THROTTLE_COOLDOWN_SECONDS", "adaptive_throttle_cooldown_seconds"); ok {
+		cfg.BaseCooldown = time.Duration(v) * time.Second
+	}
+	if v, ok := envOrStoreInt(st, "IPLAYER_ARR_ADAPTIVE_THROTTLE_MIN_ACTIVE", "adaptive_throttle_min_active"); ok {
+		cfg.Floor = v
+	}
+	return cfg
+}
+
+// envOrStoreInt reads a positive integer from an env var (priority) then a
+// store config key. Returns (0, false) when neither holds a valid positive
+// value. Mirrors configuredWatchdogTimeout's resolution order.
+func envOrStoreInt(st *store.Store, envKey, storeKey string) (int, bool) {
+	if raw := os.Getenv(envKey); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			return v, true
+		}
+		log.Printf("invalid %s %q, ignoring", envKey, raw)
+	}
+	if st == nil {
+		return 0, false
+	}
+	raw, _ := st.GetConfig(storeKey)
+	if raw == "" {
+		return 0, false
+	}
+	if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+		return v, true
+	}
+	log.Printf("invalid %s %q, ignoring", storeKey, raw)
+	return 0, false
+}
+
+// envOrStoreBool reads a boolean (true/false/1/0/yes/no/on/off) from an env
+// var (priority) then a store config key, falling back to def.
+func envOrStoreBool(st *store.Store, envKey, storeKey string, def bool) bool {
+	parse := func(raw string) (bool, bool) {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "true", "1", "yes", "on":
+			return true, true
+		case "false", "0", "no", "off":
+			return false, true
+		}
+		return false, false
+	}
+	if raw := os.Getenv(envKey); raw != "" {
+		if v, ok := parse(raw); ok {
+			return v
+		}
+	}
+	if st != nil {
+		if raw, _ := st.GetConfig(storeKey); raw != "" {
+			if v, ok := parse(raw); ok {
+				return v
+			}
+		}
+	}
+	return def
+}
+
 func configuredWatchdogTimeout(st *store.Store) time.Duration {
 	if seconds := envIntDefault("IPLAYER_ARR_WATCHDOG_TIMEOUT_SECONDS", 0); seconds > 0 {
 		return time.Duration(seconds) * time.Second
