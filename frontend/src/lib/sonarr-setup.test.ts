@@ -6,15 +6,15 @@ describe("getSonarrSetup", () => {
   it("builds concrete Sonarr values from the current browser location", () => {
     expect(
       getSonarrSetup({
-        origin: "http://192.168.1.57:62932",
-        hostname: "192.168.1.57",
-        port: "62932",
+        origin: "http://192.0.2.10:62001",
+        hostname: "192.0.2.10",
+        port: "62001",
         protocol: "http:",
       }),
     ).toEqual({
-      indexerUrl: "http://192.168.1.57:62932/newznab/api",
-      sabHost: "192.168.1.57",
-      sabPort: "62932",
+      indexerUrl: "http://192.0.2.10:62001/newznab/api",
+      sabHost: "192.0.2.10",
+      sabPort: "62001",
       sabBase: "/sabnzbd",
       sabCategory: "sonarr",
     });
