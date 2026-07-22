@@ -87,6 +87,42 @@ volumes:
 
 Open `http://localhost:62001` and the setup wizard will guide you through connecting Sonarr.
 
+## Radarr setup
+
+Some BBC one-offs (feature-length documentaries, specials) are catalogued
+as movies on TMDB rather than series on TVDB, so requests for them route
+to Radarr. iplayer-arr serves these through the same two endpoints as
+Sonarr:
+
+1. **Indexer** - Settings > Indexers > Add > Newznab. URL and API key are
+   identical to the Sonarr indexer entry. Radarr reads the caps and uses
+   text search (`q` + `year`); no TMDB/IMDb ID lookup is advertised. Radarr's
+   indexer test uses `t=movie`, and its real searches arrive as `t=search`
+   with Movies categories; iplayer-arr routes both to the movie path, so
+   test and live searches behave the same.
+2. **Download client** - Settings > Download Clients > Add > SABnzbd, same
+   host/port/API key as the Sonarr entry. The default `movies` category is
+   listed by the shim and flows through unchanged.
+3. **Set the indexer's download client (do this if you run any other
+   downloader).** If Radarr already has a real SABnzbd or NZBGet configured,
+   open the iplayer-arr indexer entry and set its **Download Client** field
+   to the iplayer-arr download-client entry. Otherwise Radarr sends iPlayer
+   grabs to the wrong client and they fail.
+
+> **Reachability:** Radarr must be able to reach iplayer-arr over the
+> network. If Radarr runs in a VPN-isolated container, point it at a
+> container-network address (for example a Docker network hostname) rather
+> than a host-published port, which the VPN kill switch blocks.
+
+How grabs work: release titles come from the matched BBC brand/subtitle
+metadata with the year appended, not from your search query (Radarr strips
+leading articles from the query, so an echo could never match an
+article-bearing TMDB title). Results are filtered by name against BBC
+brand/subtitle metadata within a +/-1 year window. Radarr's indexer test
+and RSS sync poll without a query and receive the BBC films rail (up to 10
+titles) so the test passes; targeted grabs happen when Radarr searches on
+add, on a monitored movie, or interactively.
+
 ## Configuration
 
 See the [Configuration Reference](https://github.com/Will-Luck/iplayer-arr/wiki/Configuration-Reference) for the full list of environment variables, application settings, and VPN options.

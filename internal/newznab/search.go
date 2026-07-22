@@ -40,6 +40,16 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Radarr's text-fallback movie search uses the general search
+	// endpoint with Movies categories rather than t=movie (its
+	// indexer test uses t=movie, searches do not). Route those to
+	// the movie path so they get movie titles, categories and the
+	// wrong-content name guard.
+	if hasMovieCategory(r.URL.Query().Get("cat")) {
+		h.handleMovieSearch(w, r)
+		return
+	}
+
 	q := r.URL.Query().Get("q")
 	filterName := q
 	isWildcard := q == ""

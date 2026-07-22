@@ -78,7 +78,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "version":
 		writeJSON(w, map[string]interface{}{"version": "4.0.0"})
 	case "get_cats":
-		writeJSON(w, map[string]interface{}{"categories": []string{"sonarr", "tv", "manual"}})
+		writeJSON(w, map[string]interface{}{"categories": []string{"sonarr", "radarr", "tv", "movies", "manual"}})
 	case "get_config":
 		downloadDir := h.ResolveDownloadDir()
 		writeJSON(w, map[string]interface{}{
@@ -88,7 +88,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				},
 				"categories": []map[string]interface{}{
 					{"name": "sonarr", "dir": ""},
+					{"name": "radarr", "dir": ""},
 					{"name": "tv", "dir": ""},
+					{"name": "movies", "dir": ""},
 					{"name": "manual", "dir": ""},
 				},
 			},

@@ -496,3 +496,23 @@ func TestSabnzbdGetConfig_UsesEnvDownloadDir(t *testing.T) {
 		t.Errorf("expected response to contain /data, got: %s", body)
 	}
 }
+
+// Radarr's download-client Test verifies its configured category
+// (default "movies") exists. Both SAB config surfaces must list it.
+func TestCategoriesIncludeMovies(t *testing.T) {
+	h, _ := testHandler(t)
+
+	for _, mode := range []string{"get_cats", "get_config"} {
+		t.Run(mode, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/sabnzbd/api?mode="+mode+"&apikey=test-key", nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			body := rec.Body.String()
+			for _, want := range []string{"movies", "radarr"} {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s missing %q category: %s", mode, want, body)
+				}
+			}
+		})
+	}
+}

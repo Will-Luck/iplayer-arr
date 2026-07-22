@@ -520,3 +520,52 @@ func iblElementToResult(e iblElementJSON, fallbackChannel, fallbackThumb string)
 	}
 	return r
 }
+
+// FilmsCtx fetches the first page of the iPlayer films category rail.
+// Used by the Newznab movie path's q-less browse: Radarr's indexer
+// test issues t=movie with no query and rejects an empty feed, so the
+// browse must return real movie content. Elements arrive as
+// programme_large wrappers whose initial_children carry the episode
+// payload in the same shape as search results.
+func (ibl *IBL) FilmsCtx(ctx context.Context, limit int) ([]IBLResult, error) {
+	filmsURL := fmt.Sprintf("%s/categories/films/programmes?rights=web&page=1&per_page=%d",
+		ibl.BaseURL, limit)
+
+	body, err := ibl.client.GetCtx(ctx, filmsURL)
+	if err != nil {
+		return nil, fmt.Errorf("iBL films browse: %w", err)
+	}
+
+	var resp struct {
+		CategoryProgrammes struct {
+			Elements []struct {
+				iblElementJSON
+				InitialChildren []iblElementJSON `json:"initial_children"`
+			} `json:"elements"`
+		} `json:"category_programmes"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse iBL films response: %w", err)
+	}
+
+	var results []IBLResult
+	for _, el := range resp.CategoryProgrammes.Elements {
+		child := el.iblElementJSON
+		if len(el.InitialChildren) > 0 {
+			child = el.InitialChildren[0]
+		}
+		if child.Type != "episode" {
+			continue
+		}
+		channel := el.MasterBrand.Titles.Small
+		if child.MasterBrand.Titles.Small != "" {
+			channel = child.MasterBrand.Titles.Small
+		}
+		thumb := ""
+		if el.Images.Standard != "" {
+			thumb = strings.Replace(el.Images.Standard, "{recipe}", "960x540", 1)
+		}
+		results = append(results, iblElementToResult(child, channel, thumb))
+	}
+	return results, nil
+}

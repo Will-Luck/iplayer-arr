@@ -64,6 +64,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleSearch(w, r)
 	case "tvsearch":
 		h.handleTVSearch(w, r)
+	case "movie":
+		h.handleMovieSearch(w, r)
 	case "get":
 		h.handleGet(w, r)
 	default:

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-22
+
+### Added
+- Radarr movie search support: one-off programmes catalogued as movies on
+  TMDB (feature-length documentaries, specials) can now be requested through
+  Radarr or Overseerr/Jellyseerr. The movie path is reached two ways: Newznab
+  `t=movie` with `q` + `year` params (used by Radarr's indexer test), and
+  Radarr's actual searches, which arrive as `t=search` carrying Movies
+  categories (2000-2999) and are routed to the same movie path. Release
+  titles are built from the matched BBC brand/subtitle metadata with the
+  year appended, not by echoing the query: Radarr strips leading articles
+  from a query but keeps them when mapping a release back to a movie, so an
+  echoed query could never match an article-bearing TMDB title. Results are
+  filtered by brand/subtitle name matching against the query and a +/-1 year
+  window. A q-less poll (Radarr's indexer test and RSS sync) returns the BBC
+  iPlayer films rail (first page, up to 10 titles) rather than an empty feed,
+  which Radarr rejects outright. Caps advertise the Movies categories
+  (2000/2030/2040/2045) and the SABnzbd shim lists `movies` and `radarr`
+  categories.
+
 ## [1.5.15] - 2026-07-01
 
 ### Added

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -547,5 +548,58 @@ func TestBrowseFresh_RespectsContextTimeout(t *testing.T) {
 
 	if elapsed > 2*time.Second {
 		t.Errorf("BrowseFresh did not honour ctx; elapsed=%v want <2s", elapsed)
+	}
+}
+
+func TestFilmsCtx(t *testing.T) {
+	const filmsJSON = `{"category_programmes": {"elements": [
+  {"id": "m001fyf7", "type": "programme_large", "title": "2003",
+   "master_brand": {"titles": {"small": "BBC Two"}},
+   "images": {"standard": "https://.../{recipe}/p0djqsjv.jpg"},
+   "initial_children": [
+     {"id": "m001fyf7", "type": "episode", "title": "2003",
+      "release_date": "2021",
+      "versions": [{"download": true,
+                    "duration": {"value": "PT12M20.560S"},
+                    "availability": {"start": "2022-12-05T00:21:36Z"}}]}
+   ]}
+]}}`
+
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(filmsJSON))
+	}))
+	defer srv.Close()
+
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+
+	results, err := ibl.FilmsCtx(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("FilmsCtx: %v", err)
+	}
+	if !strings.Contains(gotPath, "/categories/films/programmes") {
+		t.Errorf("request path = %q, want it to contain /categories/films/programmes", gotPath)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len = %d, want 1", len(results))
+	}
+	r := results[0]
+	if r.PID != "m001fyf7" {
+		t.Errorf("PID = %q, want m001fyf7", r.PID)
+	}
+	if r.Title != "2003" {
+		t.Errorf("Title = %q, want 2003", r.Title)
+	}
+	if r.Channel != "BBC Two" {
+		t.Errorf("Channel = %q, want BBC Two", r.Channel)
+	}
+	if r.Duration != 740 {
+		t.Errorf("Duration = %d, want 740 (PT12M20.560S truncated to seconds)", r.Duration)
+	}
+	if r.Available.IsZero() {
+		t.Error("Available is zero, want non-zero")
 	}
 }
