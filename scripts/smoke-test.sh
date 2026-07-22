@@ -11,8 +11,8 @@
 #          On success, leaves the container running for inspection.
 #   down   Stop the container and remove the state file.
 #
-# Conventions (LuckNet smoke_test_pattern):
-#   * Random high port in 62000-63999 (avoids prod port 62945 et al).
+# Conventions:
+#   * Random high port in 62000-63999 (avoids clashing with services already bound on the host).
 #   * tmpfs /config + /downloads (no host bind, no persistent state).
 #   * Distinct container name (no overlap with prod iplayer-arr).
 #   * api_key scraped from unauthenticated /api/config; no env override.
