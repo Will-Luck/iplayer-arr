@@ -91,6 +91,18 @@ type Handler struct {
 	// from main.go.
 	sabHandler http.Handler
 
+	// prober, when non-nil, lets handleSearch report per-result
+	// availability so an API-driven client can skip an episode BBC has
+	// not published yet (issue #52). Optional: with no prober every
+	// result is reported as unknown and the search still answers.
+	// Wired via SetProber from main.go for the same ordering reason as
+	// newznabHandler above -- the prober is built after the api handler.
+	prober searchQualityProber
+
+	// searchProbeTimeout bounds the availability probe on /api/search.
+	// Zero means defaultSearchProbeTimeout; tests shorten it.
+	searchProbeTimeout time.Duration
+
 	// bbcProbe is the injection point for /api/diag/bbc. Production
 	// leaves it nil; the handler falls back to defaultBBCProbe which
 	// drives the live IBL client. Tests override it via setBBCProbe
@@ -128,6 +140,13 @@ func (h *Handler) SetNewznabHandler(nzh http.Handler) {
 // sabHandler is nil.
 func (h *Handler) SetSABHandler(sh http.Handler) {
 	h.sabHandler = sh
+}
+
+// SetProber wires the quality prober in so /api/search can report
+// per-result availability. Safe to leave unset: handleSearch reports
+// every result as unknown rather than failing the search.
+func (h *Handler) SetProber(p searchQualityProber) {
+	h.prober = p
 }
 
 // RecordIndexerRequest records the current time as the most recent Newznab

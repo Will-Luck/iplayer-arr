@@ -170,6 +170,10 @@ func main() {
 	// at line 142 before prober/nzHandler exist, so this is a
 	// post-construction setter rather than a constructor arg.
 	apiHandler.SetNewznabHandler(nzHandler)
+	// Same ordering constraint, same post-construction setter: /api/search
+	// reports per-result availability so an API-driven client can skip an
+	// episode BBC has not published yet. Issue #52.
+	apiHandler.SetProber(prober)
 	mux.Handle("/newznab/", nzHandler)
 	sabHandler := sabnzbd.NewHandler(st, mgr)
 	sabHandler.DownloadDir = downloadDir

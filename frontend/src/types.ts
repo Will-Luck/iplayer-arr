@@ -53,6 +53,11 @@ export interface SearchResult {
   AirDate: string;
   Thumbnail: string;
   BrandPID: string;
+  // Availability tells whether BBC has actually published this
+  // episode's playlist. "not_yet_available" means a grab would fail and
+  // be deferred; "unknown" means the probe could not answer. Optional:
+  // older servers omit it. Issue #52.
+  Availability?: "available" | "not_yet_available" | "unknown";
 }
 
 export interface ShowOverride {

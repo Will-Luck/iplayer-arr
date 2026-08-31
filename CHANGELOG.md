@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `/api/search` now reports an `Availability` field per result: `available`,
+  `not_yet_available` for an episode BBC has not published yet, or `unknown`
+  when the check could not answer. A script driving the SABnzbd endpoint can
+  use it to hold off on an episode that is flagged as not out yet. The field is
+  additive, so existing clients are unaffected.
+
+  The signal is best-effort, not a guarantee. Each result is checked on its own
+  rather than one check per programme. But a check reuses the stored quality
+  cache, and the indexer feed writes cache entries for every episode of a
+  programme it returns, including ones it never checked. So once the feed has
+  returned a programme, an unpublished episode of it can report `available`
+  even though its playlist is not out. A grab in that case still succeeds and
+  is deferred, and the entry no longer sticks as permanently failed, per the
+  fix below. Treat `not_yet_available` as reliable and `available` as a strong
+  hint. Tracked separately for a proper fix.
+
+  At most 20 results per request are checked, so one search cannot fan out to
+  hundreds of requests to BBC; anything beyond that is returned with
+  `unknown`. The search also still returns results when the check is
+  unavailable, slow, or fails.
+
 ### Fixed
+- An episode grabbed before BBC published its playlist no longer sticks as
+  permanently failed. It used to fail `not_yet_available` twelve times, land in
+  history, and then block every later attempt at the same episode and quality:
+  the history lookup ignored status, so each new grab was silently handed the
+  dead entry and nothing was ever queued again, even after BBC published the
+  episode. Only a history entry that failed because the episode was not yet
+  available is superseded, and that entry is cleared as the retry is queued.
+  Every other terminal failure still deduplicates as it did before, so a
+  truncated, expired or geo-blocked entry is not re-downloaded, and neither is
+  an episode that already downloaded successfully. A grab of an unpublished
+  episode still succeeds and is deferred rather than rejected, so Sonarr does
+  not blocklist the release. Fixes #52.
 - Release workflow now reads the tag annotation with `git cat-file` and fetches
   tag objects explicitly, so published release notes carry the annotation body
   instead of falling back to the squash commit subject. Lightweight tags and

@@ -141,6 +141,59 @@ func (p *QualityProber) PrefetchPIDs(ctx context.Context, items []ProbeItem) Pre
 	return result
 }
 
+// PrefetchPIDsIndividually probes every item on its own instead of
+// electing one leader per ShowName group, and returns the same
+// PrefetchResult shape. Duplicate PIDs are probed once.
+//
+// PrefetchPIDs is the right call for the newznab feed: a whole BBC brand
+// shares one quality set, so one probe answers for the lot. It cannot
+// answer "is THIS episode published yet", because probeShowGroup returns
+// the leader's verdict (or any sibling's cache hit) for the entire
+// group. For a show with several published episodes plus a newest one
+// BBC has not published, that reports the unpublished episode as
+// available. Callers that need a per-PID availability answer rather than
+// a per-show quality set use this instead. Issue #52.
+//
+// The per-PID cache short-circuit in probeOne still applies, so a PID
+// whose cache row was written by a previous grouped probe reads as
+// available without a fresh playlist fetch.
+//
+// Honours ctx and the same concurrency bound as PrefetchPIDs.
+func (p *QualityProber) PrefetchPIDsIndividually(ctx context.Context, items []ProbeItem) PrefetchResult {
+	result := PrefetchResult{
+		Heights:         make(map[string][]int, len(items)),
+		NotYetAvailable: make(map[string]bool),
+	}
+	var mu sync.Mutex
+
+	seen := make(map[string]struct{}, len(items))
+	sem := make(chan struct{}, p.concurrency)
+	var wg sync.WaitGroup
+	for _, item := range items {
+		if _, dup := seen[item.PID]; dup {
+			continue
+		}
+		seen[item.PID] = struct{}{}
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(item ProbeItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			heights, nya := p.probeOne(ctx, item)
+			mu.Lock()
+			result.Heights[item.PID] = heights
+			if nya {
+				result.NotYetAvailable[item.PID] = true
+			}
+			mu.Unlock()
+		}(item)
+	}
+	wg.Wait()
+	return result
+}
+
 // probeShowGroup probes a group of PIDs that share a ShowName. It
 // checks for a cache hit first, then probes the first PID via
 // probeOne and reuses its result for the rest. If the first PID

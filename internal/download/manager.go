@@ -242,9 +242,37 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 		return existing.ID, nil
 	}
 
+	// A history entry short-circuits the enqueue, with exactly one
+	// exception: a not-yet-available failure. Before issue #52 the
+	// status-blind lookup handed that dead ID back to every later grab
+	// of the same pid+quality, so an episode grabbed before BBC
+	// published its playlist -- failed by the worker after
+	// maxNotYetAvailableRetries and moved to history -- could never be
+	// retried, even once BBC published it. That failure alone means
+	// "come back later", so it is the only one a fresh grab supersedes.
+	//
+	// Every other terminal failure keeps deduping as before, on purpose.
+	// Retrying a truncated or ffmpeg_error row refetches a whole episode
+	// that died near the end; expired, geo_blocked and stream_unavailable
+	// cannot succeed on a retry at all; and a row with no failure code
+	// (the SABnzbd queue-delete path writes StatusFailed and leaves it
+	// unset) is left exactly as it was. Deleting the superseded row as we
+	// retry also keeps the bucket to one entry per pid+quality, so the
+	// lookup cannot become order-dependent.
 	hist, _ := m.store.FindHistoryByPIDQuality(pid, quality)
 	if hist != nil {
-		return hist.ID, nil
+		supersede := hist.Status == store.StatusFailed &&
+			hist.FailureCode == store.FailCodeNotYetAvailable
+		if !supersede {
+			return hist.ID, nil
+		}
+		if err := m.store.DeleteHistory(hist.ID); err != nil {
+			// Non-fatal: the retry is worth more than the tidy-up.
+			// Worst case the stale row lingers and the next lookup
+			// still prefers a non-failed entry over it.
+			log.Printf("enqueue %s/%s: clearing stale not-yet-available history %s: %v",
+				pid, quality, hist.ID, err)
+		}
 	}
 
 	id := generateNzoID()

@@ -165,6 +165,14 @@ func (s *Store) DeleteHistory(id string) error {
 	})
 }
 
+// FindHistoryByPIDQuality returns the history entry for pid+quality, or
+// nil when the bucket holds none. A non-failed entry always wins over a
+// failed one: ForEach walks in Bolt key order and the keys are random
+// nzo IDs, so returning "the last match" would make the answer depend on
+// key order whenever a superseded failure sits beside a later success.
+// download.Manager.Enqueue deletes a superseded not-yet-available row as
+// it retries, so the pair should not persist, but the preference makes
+// the lookup order-independent regardless. Issue #52.
 func (s *Store) FindHistoryByPIDQuality(pid, quality string) (*Download, error) {
 	var found *Download
 	err := s.db.View(func(tx *bolt.Tx) error {
@@ -173,9 +181,13 @@ func (s *Store) FindHistoryByPIDQuality(pid, quality string) (*Download, error) 
 			if err := json.Unmarshal(v, &dl); err != nil {
 				return err
 			}
-			if dl.PID == pid && dl.Quality == quality {
-				found = &dl
+			if dl.PID != pid || dl.Quality != quality {
+				return nil
 			}
+			if found != nil && found.Status != StatusFailed && dl.Status == StatusFailed {
+				return nil
+			}
+			found = &dl
 			return nil
 		})
 	})
