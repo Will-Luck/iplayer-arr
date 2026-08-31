@@ -16,6 +16,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch tag objects
+        run: git fetch --tags --force
+
       - name: Generate build date
         id: build-date
         run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -74,7 +77,10 @@ jobs:
         id: notes
         run: |
           set -euo pipefail
-          body=$(git for-each-ref --format='%(contents)' "refs/tags/${GITHUB_REF_NAME}")
+          body=""
+          if [ "$(git cat-file -t "${GITHUB_REF_NAME}" 2>/dev/null || true)" = "tag" ]; then
+            body=$(git cat-file tag "${GITHUB_REF_NAME}" | awk '/^\r?$/{flag=1; next} flag')
+          fi
           if [ -z "$body" ]; then
             body=$(git log -1 --pretty=%B "${GITHUB_REF_NAME}")
           fi

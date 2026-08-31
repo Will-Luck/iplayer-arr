@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Release workflow now reads the tag annotation with `git cat-file` and fetches
+  tag objects explicitly, so published release notes carry the annotation body
+  instead of falling back to the squash commit subject. Lightweight tags and
+  CRLF annotations are handled. (#50)
+- CI diag-suite lets Docker assign the container's host port and reads it back
+  with `docker port`, instead of picking a random port that could collide with
+  a port already bound on the runner host.
+
 ## [1.6.0] - 2026-07-22
 
 ### Added

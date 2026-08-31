@@ -80,9 +80,6 @@ jobs:
         run: |
           set -euo pipefail
           NAME="iplayer-arr-ci-${{ github.run_id }}"
-          PORT=$((62000 + RANDOM % 1900))
-          echo "NAME=$NAME" >> "$GITHUB_ENV"
-          echo "PORT=$PORT" >> "$GITHUB_ENV"
 
           # The Gitea Actions act runner shares /var/run/docker.sock with
           # the host, so spawned containers are siblings on the host's
@@ -105,14 +102,29 @@ jobs:
             exit 1
           fi
           HOST_IP="$(printf '%d' "0x${ROUTE_HEX:6:2}").$(printf '%d' "0x${ROUTE_HEX:4:2}").$(printf '%d' "0x${ROUTE_HEX:2:2}").$(printf '%d' "0x${ROUTE_HEX:0:2}")"
-          echo "Docker host gateway: $HOST_IP, host port: $PORT"
+          echo "Docker host gateway: $HOST_IP"
 
+          # Let Docker pick a free host port (avoids collisions with
+          # services on the runner host, e.g. cloudflare-tunnel on
+          # 62123 surfaced during PR #47 main-push). The empty host
+          # port in HOST_IP::62001 triggers automatic assignment; we
+          # read the allocated port back via `docker port`.
           docker run -d --rm \
             --name "$NAME" \
             --tmpfs /config:rw,size=64m \
             --tmpfs /downloads:rw,size=64m \
-            -p "${HOST_IP}:${PORT}:62001" \
+            -p "${HOST_IP}::62001" \
             iplayer-arr:ci
+
+          PORT=$(docker port "$NAME" 62001/tcp | head -1 | cut -d: -f2)
+          if [ -z "$PORT" ]; then
+            echo "::error::Could not read assigned host port from docker port"
+            docker logs "$NAME" || true
+            exit 1
+          fi
+          echo "Docker assigned host port: $PORT"
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          echo "PORT=$PORT" >> "$GITHUB_ENV"
 
           # Wait up to 30s for /api/status to return 200.
           for i in $(seq 1 30); do
@@ -211,9 +223,6 @@ jobs:
         run: |
           set -euo pipefail
           NAME="iplayer-arr-smoke-${{ github.run_id }}"
-          PORT=$((63000 + RANDOM % 900))
-          echo "NAME=$NAME" >> "$GITHUB_ENV"
-          echo "PORT=$PORT" >> "$GITHUB_ENV"
 
           # Same /proc/net/route parsing as diag-suite — the smoke runner is
           # also an act_runner DinD sibling and has no iproute2.
@@ -226,15 +235,28 @@ jobs:
             exit 1
           fi
           HOST_IP="$(printf '%d' "0x${ROUTE_HEX:6:2}").$(printf '%d' "0x${ROUTE_HEX:4:2}").$(printf '%d' "0x${ROUTE_HEX:2:2}").$(printf '%d' "0x${ROUTE_HEX:0:2}")"
-          echo "Docker host gateway: $HOST_IP, host port: $PORT"
+          echo "Docker host gateway: $HOST_IP"
           echo "HOST_IP=$HOST_IP" >> "$GITHUB_ENV"
 
+          # Let Docker pick a free host port (same rationale as
+          # diag-suite — avoids collisions with services on the runner
+          # host such as cloudflare-tunnel).
           docker run -d --rm \
             --name "$NAME" \
             --tmpfs /config:rw,size=64m \
             --tmpfs /downloads:rw,size=64m \
-            -p "${HOST_IP}:${PORT}:62001" \
+            -p "${HOST_IP}::62001" \
             iplayer-arr-smoke:${{ github.sha }}
+
+          PORT=$(docker port "$NAME" 62001/tcp | head -1 | cut -d: -f2)
+          if [ -z "$PORT" ]; then
+            echo "::error::Could not read assigned host port from docker port"
+            docker logs "$NAME" || true
+            exit 1
+          fi
+          echo "Docker assigned host port: $PORT"
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          echo "PORT=$PORT" >> "$GITHUB_ENV"
 
           for i in $(seq 1 30); do
             if curl -fsS "http://${HOST_IP}:${PORT}/api/status" >/dev/null 2>&1; then
