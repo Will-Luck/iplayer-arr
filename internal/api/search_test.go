@@ -147,7 +147,7 @@ func searchAPI(t *testing.T, body string) (*Handler, func()) {
 
 func doSearch(t *testing.T, h *Handler) []searchRow {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/api/search?q=match+of+the+day&apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/search?q=match+of+the+day&apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -339,7 +339,7 @@ func TestSearch_EmptyQueryUnchanged(t *testing.T) {
 	prober := &fakeSearchProber{}
 	h.SetProber(prober)
 
-	req := httptest.NewRequest("GET", "/api/search?q=&apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/search?q=&apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 

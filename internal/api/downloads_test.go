@@ -30,7 +30,7 @@ func TestCancelDownload_MovesToHistory(t *testing.T) {
 		t.Fatalf("PutDownload: %v", err)
 	}
 
-	req := httptest.NewRequest("DELETE", "/api/downloads/iparr_cancel1?apikey=test-api-key", nil)
+	req := authedRequest("DELETE", "/api/downloads/iparr_cancel1?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -62,7 +62,7 @@ func TestCancelDownload_MovesToHistory(t *testing.T) {
 // may have already finished or been cancelled in another tab).
 func TestCancelDownload_UnknownID(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("DELETE", "/api/downloads/iparr_nope?apikey=test-api-key", nil)
+	req := authedRequest("DELETE", "/api/downloads/iparr_nope?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -83,7 +83,7 @@ func testAPIWithManager(t *testing.T) (*Handler, *store.Store) {
 
 func postManualDownload(t *testing.T, h *Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest("POST", "/api/download?apikey=test-api-key", strings.NewReader(body))
+	req := authedRequest("POST", "/api/download?apikey=test-api-key", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	return w

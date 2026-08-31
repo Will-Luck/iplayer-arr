@@ -49,11 +49,11 @@ Every endpoint returns the same JSON envelope shape:
 
 `verdict` is `pass` when `checks_failed` is empty. CI asserts on `.verdict == "pass"`; operators reading the report get the per-component detail in `checks_failed` and the per-mode fields.
 
-All five endpoints require authentication. They are not intended for unauthenticated probes from outside the deployment.
+Every diag endpoint requires authentication, as does the rest of `/api/*` since GHSA-3hfw-5v8p-p588. The one exception on the whole surface is `GET /api/healthz`, an unauthenticated liveness probe that returns a fixed `{"ok":true}`; use it for readiness polling and container health checks. Nothing under `/api/diag/` is intended for unauthenticated probes from outside the deployment.
 
 ## Running the diag suite
 
-Set an API key first (the wizard or `/api/config`). Then any of these will work:
+Get the API key first. It is written to `<CONFIG_DIR>/api_key` with mode 0600 on every start, so `docker exec <container> cat /config/api_key` reads it back; alternatively set your own with the `API_KEY` environment variable before starting the container. `GET /api/config` does not return the key. Then any of these will work:
 
 ```bash
 KEY=<your-api-key>
@@ -87,7 +87,7 @@ Any `fail` row indicates a regression. The endpoint's `checks_failed` array name
 `.gitea/workflows/ci.yml` runs two jobs on every push and every PR to `main`:
 
 1. `unit` runs `go test ./... -race`. Catches anything the standard test surface covers.
-2. `diag-suite` builds the container, brings it up on a random high port with tmpfs volumes (no production state touched), seeds an API key, then curls each `/api/diag/*` endpoint and asserts `.verdict == "pass"`.
+2. `diag-suite` builds the container, brings it up on a random high port with tmpfs volumes (no production state touched), injects a throwaway key via `API_KEY`, waits on `/api/healthz`, then curls each `/api/diag/*` endpoint and asserts `.verdict == "pass"`. It also asserts that unauthenticated `GET /api/config` is refused and that the authenticated response carries no `api_key` field, so the GHSA-3hfw-5v8p-p588 fix cannot silently regress.
 
 Branch protection on `main` blocks merge when either job fails. The intent is that a regression of the v1.5.5 shape is caught at PR time, not at production deploy time.
 

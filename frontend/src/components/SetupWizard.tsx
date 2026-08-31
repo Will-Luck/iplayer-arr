@@ -1,9 +1,9 @@
 import { createSignal, onMount, onCleanup, Show } from "solid-js";
-import { api } from "../api";
+import { api, probeApiKey } from "../api";
+import { apiKey, setApiKey } from "../apikey";
 import { getSonarrSetup } from "../lib/sonarr-setup";
 import { copyToClipboard } from "../lib/clipboard";
 import { geoBadge } from "../lib/geo";
-import type { ConfigResponse } from "../types";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
@@ -13,32 +13,41 @@ const maskKey = (k: string) =>
   k.length > 8 ? k.slice(0, 4) + "•".repeat(8) + k.slice(-4) : k;
 
 export default function SetupWizard(props: { show: boolean; onComplete: () => void }) {
+  // Step 1 is the API key. It has to come first: every other call the
+  // wizard makes is authenticated, so the health check and the Sonarr
+  // details cannot load until the operator has supplied a credential.
   const [step, setStep] = createSignal(1);
   const [geoOk, setGeoOk] = createSignal<boolean | null>(null);
   const [geoStatus, setGeoStatus] = createSignal<string | undefined>(undefined);
   const [ffmpegOk, setFfmpegOk] = createSignal<boolean | null>(null);
   const [geoChecking, setGeoChecking] = createSignal(false);
-  const [config, setConfig] = createSignal<ConfigResponse | null>(null);
   const [copiedField, setCopiedField] = createSignal<string | null>(null);
   const [keyRevealed, setKeyRevealed] = createSignal(false);
+  const [keyDraft, setKeyDraft] = createSignal("");
+  const [keyChecking, setKeyChecking] = createSignal(false);
+  const [keyError, setKeyError] = createSignal("");
+  const [editingKey, setEditingKey] = createSignal(false);
   const sonarrSetup = () => getSonarrSetup(window.location);
 
   const displayKey = (k: string) => (keyRevealed() ? k : maskKey(k));
+  const showKeyForm = () => editingKey() || apiKey() === "";
 
-  onMount(async () => {
+  async function loadHealth() {
     try {
       const status = await api.getStatus();
       setFfmpegOk(!!status.ffmpeg);
       setGeoStatus(status.geo_status);
       setGeoOk(geoBadge(status.geo_status, status.geo_ok).ok);
     } catch {
-      // ignore
+      // Unauthenticated or server not up yet: leave the pills unknown
+      // rather than claiming a failure we have not measured.
+      setFfmpegOk(null);
+      setGeoOk(null);
     }
-    try {
-      setConfig(await api.getConfig());
-    } catch {
-      // ignore
-    }
+  }
+
+  onMount(() => {
+    if (apiKey()) loadHealth();
 
     const onKey = (e: KeyboardEvent) => {
       if (props.show && e.key === "Escape") {
@@ -49,6 +58,34 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
   });
+
+  async function saveKey() {
+    const candidate = keyDraft().trim();
+    if (candidate === "") {
+      setKeyError("Enter the API key.");
+      return;
+    }
+    setKeyChecking(true);
+    setKeyError("");
+    try {
+      if (!(await probeApiKey(candidate))) {
+        setKeyError("That key was rejected by the server. Check the value and try again.");
+        return;
+      }
+      setApiKey(candidate);
+      setKeyDraft("");
+      setEditingKey(false);
+      await loadHealth();
+      setStep(2);
+    } finally {
+      setKeyChecking(false);
+    }
+  }
+
+  async function goToHealth() {
+    await loadHealth();
+    setStep(2);
+  }
 
   async function runGeoCheck() {
     setGeoChecking(true);
@@ -154,10 +191,107 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
           <div class="wizard-progress" aria-label="Setup progress">
             <div class={stepClass(1)} />
             <div class={stepClass(2)} />
+            <div class={stepClass(3)} />
           </div>
 
           <Show when={step() === 1}>
-            <h2 class="mb-2 text-lg font-semibold text-text-primary">Welcome to iplayer-arr</h2>
+            <h2 class="mb-2 text-lg font-semibold text-text-primary">API key</h2>
+            <p class="mb-4 text-sm text-text-secondary">
+              The dashboard, the Newznab indexer and the SABnzbd download client all
+              share one key. Enter it here to unlock this browser.
+            </p>
+
+            <Show when={showKeyForm()}>
+              <Card class="mb-4">
+                <Card.Header>Where to find it</Card.Header>
+                <Card.Body>
+                  <p class="mb-2 text-sm text-text-secondary">
+                    iplayer-arr writes the key to a file in its config directory on
+                    every start:
+                  </p>
+                  <code class="mb-3 block rounded bg-elevated px-3 py-2 font-mono text-xs text-text-primary">
+                    docker exec &lt;container&gt; cat /config/api_key
+                  </code>
+                  <p class="text-sm text-text-secondary">
+                    You can also pin your own value with the{" "}
+                    <code class="rounded bg-elevated px-1 py-0.5 font-mono text-xs">API_KEY</code>{" "}
+                    environment variable and restart the container.
+                  </p>
+                </Card.Body>
+              </Card>
+
+              <label class="mb-1 block text-sm text-text-secondary" for="wizard-api-key">
+                API key
+              </label>
+              <input
+                id="wizard-api-key"
+                class="mb-2 h-9 w-full rounded-md border border-border bg-elevated px-3 font-mono text-sm text-text-primary"
+                type="text"
+                autocomplete="off"
+                spellcheck={false}
+                value={keyDraft()}
+                onInput={(e) => setKeyDraft(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveKey();
+                }}
+              />
+              <Show when={keyError()}>
+                <p class="mb-2 text-xs text-danger">{keyError()}</p>
+              </Show>
+
+              <div class="flex items-center gap-2">
+                <Show when={editingKey() && apiKey()}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      setEditingKey(false);
+                      setKeyDraft("");
+                      setKeyError("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </Show>
+                <Button size="sm" class="ml-auto" loading={keyChecking()} onClick={saveKey}>
+                  {keyChecking() ? "Checking..." : "Save and continue"}
+                </Button>
+              </div>
+            </Show>
+
+            <Show when={!showKeyForm()}>
+              <Card class="mb-4">
+                <Card.Body>
+                  <CopyRow
+                    label="API key"
+                    value={displayKey(apiKey())}
+                    copyValue={apiKey()}
+                    field="wizard-key"
+                    trailing={<RevealButton />}
+                  />
+                </Card.Body>
+              </Card>
+              <div class="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setEditingKey(true);
+                    setKeyDraft("");
+                    setKeyError("");
+                  }}
+                >
+                  Use a different key
+                </Button>
+                <Button size="sm" class="ml-auto" onClick={goToHealth}>
+                  Next
+                </Button>
+              </div>
+            </Show>
+          </Show>
+
+          <Show when={step() === 2}>
+            <h2 class="mb-2 text-lg font-semibold text-text-primary">Health checks</h2>
             <p class="mb-5 text-sm text-text-secondary">
               Let's make sure everything is ready before you start.
             </p>
@@ -189,6 +323,9 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
             </Show>
 
             <div class="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setStep(1)}>
+                Back
+              </Button>
               <Button
                 variant="secondary"
                 size="sm"
@@ -201,14 +338,14 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
                 size="sm"
                 class="ml-auto"
                 disabled={!geoOk()}
-                onClick={() => setStep(2)}
+                onClick={() => setStep(3)}
               >
                 Next
               </Button>
             </div>
           </Show>
 
-          <Show when={step() === 2}>
+          <Show when={step() === 3}>
             <h2 class="mb-2 text-lg font-semibold text-text-primary">Sonarr setup</h2>
             <p class="mb-5 text-sm text-text-secondary">
               Add iplayer-arr to Sonarr using the values below.
@@ -222,23 +359,13 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
                   value={sonarrSetup().indexerUrl}
                   field="indexer-url"
                 />
-                <Show
-                  when={config()?.api_key}
-                  fallback={
-                    <div class="flex items-center justify-between gap-3 py-2">
-                      <span class="text-sm text-text-secondary">API key</span>
-                      <span class="text-text-tertiary">-</span>
-                    </div>
-                  }
-                >
-                  <CopyRow
-                    label="API key"
-                    value={displayKey(config()!.api_key)}
-                    copyValue={config()!.api_key}
-                    field="indexer-key"
-                    trailing={<RevealButton />}
-                  />
-                </Show>
+                <CopyRow
+                  label="API key"
+                  value={displayKey(apiKey())}
+                  copyValue={apiKey()}
+                  field="indexer-key"
+                  trailing={<RevealButton />}
+                />
               </Card.Body>
             </Card>
 
@@ -249,28 +376,18 @@ export default function SetupWizard(props: { show: boolean; onComplete: () => vo
                 <CopyRow label="Port" value={sonarrSetup().sabPort} field="sab-port" />
                 <CopyRow label="URL base" value={sonarrSetup().sabBase} field="sab-base" />
                 <CopyRow label="Category" value={sonarrSetup().sabCategory} field="sab-cat" />
-                <Show
-                  when={config()?.api_key}
-                  fallback={
-                    <div class="flex items-center justify-between gap-3 py-2">
-                      <span class="text-sm text-text-secondary">API key</span>
-                      <span class="text-text-tertiary">-</span>
-                    </div>
-                  }
-                >
-                  <CopyRow
-                    label="API key"
-                    value={displayKey(config()!.api_key)}
-                    copyValue={config()!.api_key}
-                    field="sab-key"
-                    trailing={<RevealButton />}
-                  />
-                </Show>
+                <CopyRow
+                  label="API key"
+                  value={displayKey(apiKey())}
+                  copyValue={apiKey()}
+                  field="sab-key"
+                  trailing={<RevealButton />}
+                />
               </Card.Body>
             </Card>
 
             <div class="flex items-center gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setStep(1)}>
+              <Button variant="secondary" size="sm" onClick={() => setStep(2)}>
                 Back
               </Button>
               <Button size="sm" class="ml-auto" onClick={props.onComplete}>

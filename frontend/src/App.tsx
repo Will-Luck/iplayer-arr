@@ -15,7 +15,7 @@ import Overrides from "./pages/Overrides";
 import Logs from "./pages/Logs";
 import System from "./pages/System";
 import NotFound from "./pages/NotFound";
-import { api } from "./api";
+import { apiKey, UNAUTHORIZED_EVENT } from "./apikey";
 
 function ConfirmHost() {
   return (
@@ -47,17 +47,23 @@ function Layout(props: { children?: any }) {
     mainRef?.focus({ preventScroll: false });
   });
 
-  onMount(async () => {
-    try {
-      const config = await api.getConfig();
-      if (!config.api_key) setShowWizard(true);
-    } catch {
-      setShowWizard(true);
-    }
+  onMount(() => {
+    // No key in this browser: the operator has either just installed
+    // iplayer-arr or has upgraded past the point where the dashboard
+    // became authenticated. Either way the wizard's first step tells
+    // them where to find the key.
+    if (!apiKey()) setShowWizard(true);
 
+    // A stored key that the server rejects produces the same outcome.
+    // api.ts raises this event on any 401 so a stale key cannot leave
+    // the operator staring at an empty dashboard with no way back.
     const handler = () => setShowWizard(true);
     window.addEventListener("rerun-wizard", handler);
-    onCleanup(() => window.removeEventListener("rerun-wizard", handler));
+    window.addEventListener(UNAUTHORIZED_EVENT, handler);
+    onCleanup(() => {
+      window.removeEventListener("rerun-wizard", handler);
+      window.removeEventListener(UNAUTHORIZED_EVENT, handler);
+    });
   });
 
   return (

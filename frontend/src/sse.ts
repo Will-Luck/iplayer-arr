@@ -1,4 +1,21 @@
+import { apiKey } from "./apikey";
+
 export type EventHandler = (data: unknown) => void;
+
+/**
+ * URL for the SSE stream, carrying the API key as a query parameter.
+ *
+ * Every other API call authenticates with an Authorization header, but
+ * EventSource has no way to set request headers, so this one connection
+ * has to put the credential in the query string. The backend therefore
+ * keeps accepting ?apikey= on /api/events. Returns the bare path when no
+ * key is stored so the connection still opens (and 401s) rather than
+ * sending a literal "undefined".
+ */
+export function eventsURL(): string {
+  const key = apiKey();
+  return key ? `/api/events?apikey=${encodeURIComponent(key)}` : "/api/events";
+}
 
 /**
  * Base delay before the first reconnect attempt. Doubles per attempt
@@ -52,7 +69,9 @@ export function connectSSE(handlers: Record<string, EventHandler>): () => void {
   function connect() {
     if (closed) return;
 
-    es = new EventSource("/api/events");
+    // Read the URL per attempt, not once: a reconnect after the operator
+    // saves a key in the wizard must pick the new credential up.
+    es = new EventSource(eventsURL());
 
     es.addEventListener("open", () => {
       attempts = 0;

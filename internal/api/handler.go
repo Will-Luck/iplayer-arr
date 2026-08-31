@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Will-Luck/iplayer-arr/internal/auth"
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
 	"github.com/Will-Luck/iplayer-arr/internal/download"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
@@ -123,6 +124,16 @@ type Handler struct {
 	networkProbe  diagNetworkHostProbe
 	clockHeadDate clockHeadDateFunc
 	nowFn         func() time.Time
+
+	// mux is the /api/* router, built once by buildMux and guarded by
+	// muxOnce. sync.Once rather than a nil check: the nil-check form is
+	// a data race between concurrent first requests, which is exactly
+	// what go test -race caught on the abandoned v1.6.0 branch. Once.Do
+	// also establishes the happens-before that makes reading h.mux
+	// afterwards safe. Deliberately not built in NewHandler so a
+	// Handler assembled field by field in a test still routes.
+	muxOnce sync.Once
+	mux     http.Handler
 }
 
 // SetNewznabHandler wires the live newznab handler in so the
@@ -167,93 +178,28 @@ func NewHandler(st *store.Store, hub *Hub, mgr *download.Manager, ibl *bbc.IBL, 
 	}
 }
 
-// ServeHTTP routes requests to the appropriate handler.
+// ServeHTTP normalises the path, applies the cross-origin CSRF defence,
+// and dispatches through the router built by buildMux. Authentication is
+// applied per route by authMiddleware; see registerRoutes for the table
+// and unauthenticatedAPIRoutes for the allowlist.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Cross-origin browser CSRF defence on state-changing methods.
-	// A non-browser client (curl, Sonarr) sends no Origin header and
-	// passes through. A browser on the same origin sends a matching
-	// Origin and passes through. A malicious page on a different
-	// origin sends a mismatched Origin and is refused. This is
-	// defence-in-depth, not a substitute for the apikey-based auth
-	// that proper /api/* protection (v1.6.0 setup wizard rework)
-	// will introduce.
-	if isMutatingMethod(r.Method) && !sameOriginRequest(r) {
+	// Fold a trailing slash before routing so /api/status/ and
+	// /api/status remain the same endpoint, as they were under the
+	// pre-mux switch.
+	r = normaliseTrailingSlash(r)
+
+	// Cross-origin browser CSRF defence on state-changing methods,
+	// kept as defence in depth now that every route below also
+	// authenticates. A browser on the same origin sends a matching
+	// Origin and passes; a malicious page on another origin sends a
+	// mismatched one and is refused.
+	if isMutatingMethod(r.Method) && !csrfCheckPasses(r) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request refused"})
 		return
 	}
 
-	path := strings.TrimSuffix(r.URL.Path, "/")
-
-	switch {
-	case path == "/api/status" && r.Method == "GET":
-		h.handleStatus(w, r)
-		return
-	case path == "/api/events" && r.Method == "GET":
-		h.handleEvents(w, r)
-		return
-	case path == "/api/downloads" && r.Method == "GET":
-		h.handleListDownloads(w, r)
-	case path == "/api/download" && r.Method == "POST":
-		h.handleManualDownload(w, r)
-	case path == "/api/history" && r.Method == "GET":
-		h.handleListHistory(w, r)
-	case path == "/api/history/stats" && r.Method == "GET":
-		h.handleHistoryStats(w, r)
-	case path == "/api/history" && r.Method == "DELETE":
-		h.handleClearHistory(w, r)
-	case strings.HasPrefix(path, "/api/history/") && r.Method == "DELETE":
-		h.handleDeleteHistory(w, r)
-	case path == "/api/config" && r.Method == "GET":
-		h.handleGetConfig(w, r)
-	case path == "/api/config" && r.Method == "PUT":
-		h.handlePutConfig(w, r)
-	case path == "/api/overrides" && r.Method == "GET":
-		h.handleListOverrides(w, r)
-	case strings.HasPrefix(path, "/api/overrides/") && r.Method == "PUT":
-		h.handlePutOverride(w, r)
-	case strings.HasPrefix(path, "/api/overrides/") && r.Method == "DELETE":
-		h.handleDeleteOverride(w, r)
-	case path == "/api/search" && r.Method == "GET":
-		h.handleSearch(w, r)
-	case path == "/api/downloads/directory" && r.Method == "GET":
-		h.handleListDirectory(w, r)
-	case strings.HasPrefix(path, "/api/downloads/directory/") && r.Method == "DELETE":
-		h.handleDeleteDirectory(w, r)
-	case strings.HasPrefix(path, "/api/downloads/") && r.Method == "DELETE":
-		h.handleCancelDownload(w, r)
-	case path == "/api/pause" && r.Method == "POST":
-		h.mgr.Pause()
-		writeJSON(w, http.StatusOK, map[string]bool{"paused": true})
-	case path == "/api/resume" && r.Method == "POST":
-		h.mgr.Resume()
-		writeJSON(w, http.StatusOK, map[string]bool{"paused": false})
-	case path == "/api/logs" && r.Method == "GET":
-		h.handleLogs(w, r)
-	case path == "/api/system" && r.Method == "GET":
-		h.handleSystem(w, r)
-	case path == "/api/system/geo-check" && r.Method == "POST":
-		h.handleGeoCheck(w, r)
-	case path == "/api/diag/sonarr-handshake" && r.Method == "GET":
-		h.handleDiagSonarrHandshake(w, r)
-	case path == "/api/diag/ffmpeg" && r.Method == "GET":
-		h.handleDiagFfmpeg(w, r)
-	case path == "/api/diag/bbc" && r.Method == "GET":
-		h.handleDiagBBC(w, r)
-	case path == "/api/diag/sab" && r.Method == "GET":
-		h.handleDiagSAB(w, r)
-	case path == "/api/diag/auth-paths" && r.Method == "GET":
-		h.handleDiagAuthPaths(w, r)
-	case path == "/api/diag/storage" && r.Method == "GET":
-		h.handleDiagStorage(w, r)
-	case path == "/api/diag/clock" && r.Method == "GET":
-		h.handleDiagClock(w, r)
-	case path == "/api/diag/geo" && r.Method == "GET":
-		h.handleDiagGeo(w, r)
-	case path == "/api/diag/network" && r.Method == "GET":
-		h.handleDiagNetwork(w, r)
-	default:
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-	}
+	h.muxOnce.Do(func() { h.mux = h.buildMux() })
+	h.mux.ServeHTTP(w, r)
 }
 
 // authenticate validates the request against the persisted api_key.
@@ -269,25 +215,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 // The diag endpoint /api/diag/auth-paths asserts this invariant against
 // the running binary so silent drift can't recur.
+//
+// Every comparison goes through auth.SecretsEqual, which is constant time
+// in the number of matching leading bytes. A plain == returns at the first
+// differing byte and leaks the key one byte at a time to a caller who can
+// measure response latency.
 func (h *Handler) authenticate(r *http.Request) bool {
 	storedKey, _ := h.store.GetConfig("api_key")
 	if storedKey == "" {
 		return false
 	}
 
-	if key := r.URL.Query().Get("apikey"); key == storedKey {
+	if key := r.URL.Query().Get("apikey"); auth.SecretsEqual(key, storedKey) {
 		return true
 	}
 
-	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if token == storedKey {
+	header := r.Header.Get("Authorization")
+	if strings.HasPrefix(header, "Bearer ") {
+		token := strings.TrimPrefix(header, "Bearer ")
+		if auth.SecretsEqual(token, storedKey) {
 			return true
 		}
 	}
 
-	if key := r.Header.Get("X-Api-Key"); key == storedKey {
+	if key := r.Header.Get("X-Api-Key"); auth.SecretsEqual(key, storedKey) {
 		return true
 	}
 
@@ -331,8 +282,40 @@ func isMutatingMethod(method string) bool {
 	return false
 }
 
+// csrfCheckPasses decides whether a state-changing request may proceed
+// past the cross-origin check.
+//
+// An absent Origin used to pass unconditionally, which made the check
+// free to bypass with any non-browser client. It now passes only when the
+// caller supplies its credential in a request header. That is not a
+// cosmetic distinction: Authorization and X-Api-Key are not CORS-safelisted,
+// so a page on another origin cannot set either without a preflight, and
+// iplayer-arr answers no preflight and emits no CORS headers, so the
+// browser refuses to send the request at all. curl, Sonarr, Radarr and
+// operator scripts are unaffected because they set the header anyway.
+//
+// Presence, not validity, is what is checked here. Validity is the
+// authMiddleware's job on the route itself; a forged header value gets
+// past this check and straight into a 401.
+func csrfCheckPasses(r *http.Request) bool {
+	if r.Header.Get("Origin") == "" {
+		return hasHeaderCredential(r)
+	}
+	return sameOriginRequest(r)
+}
+
+// hasHeaderCredential reports whether the request carries an API key in a
+// request header rather than in the query string.
+func hasHeaderCredential(r *http.Request) bool {
+	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		return true
+	}
+	return r.Header.Get("X-Api-Key") != ""
+}
+
 // sameOriginRequest returns true when the request's Origin header is
-// either absent (non-browser client) or matches the request's Host.
+// either absent or matches the request's Host. Callers that care about
+// the absent case must use csrfCheckPasses instead.
 // A browser-issued cross-origin request always sets Origin to the
 // scheme+host of the initiating page, so a mismatch is a strong CSRF
 // signal. We don't fall back to Referer because some browsers strip

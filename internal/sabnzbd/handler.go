@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Will-Luck/iplayer-arr/internal/auth"
 	"github.com/Will-Luck/iplayer-arr/internal/newznab"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
@@ -56,16 +57,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// mode=version is the only operation that stays unauthenticated.
 	// Sonarr probes version BEFORE attaching the apikey so it can
-	// recognise the SABnzbd dialect — same shape as the Newznab
+	// recognise the SABnzbd dialect, the same shape as the Newznab
 	// t=caps probe. Every other mode reads or writes operator state
 	// (download directory, category list, queue, history) and must
 	// be guarded so anyone on the LAN can't enumerate or modify
 	// downloads without the key. See `internal/newznab/handler.go`
 	// for the parallel structure.
+	//
+	// The comparison runs through auth.SecretsEqual so response timing
+	// does not reveal how many leading bytes of the key were correct.
+	//
+	// It fails closed on every degenerate case: a nil store, a store read
+	// error and an unseeded key all deny. Until v1.7.0 an empty stored key
+	// let every mode through here and in the Newznab handler while
+	// internal/api denied it, so one unreadable key opened the download
+	// client and the indexer while the dashboard stayed shut. See
+	// internal/newznab/handler.go authenticate for the parallel change.
 	if mode != "version" {
 		apiKey := r.URL.Query().Get("apikey")
-		storedKey, _ := h.store.GetConfig("api_key")
-		if storedKey != "" && apiKey != storedKey {
+		var storedKey string
+		var err error
+		if h.store != nil {
+			storedKey, err = h.store.GetConfig("api_key")
+		}
+		if h.store == nil || err != nil || !auth.SecretsEqual(apiKey, storedKey) {
 			writeJSON(w, map[string]interface{}{
 				"status": false,
 				"error":  "API Key Incorrect",

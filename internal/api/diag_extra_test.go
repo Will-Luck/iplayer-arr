@@ -31,7 +31,7 @@ func TestDiagFfmpeg_NoAuth(t *testing.T) {
 // ffmpeg 8.x KiB-form line that landed in v1.5.5 fix #41.
 func TestDiagFfmpeg_HappyPath(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/diag/ffmpeg?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/ffmpeg?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -68,7 +68,7 @@ func TestDiagFfmpeg_HappyPath(t *testing.T) {
 func TestDiagFfmpeg_DetectsRegression(t *testing.T) {
 	// First: current ffmpeg 8.x KiB shape parses cleanly.
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/diag/ffmpeg?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/ffmpeg?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -118,7 +118,7 @@ func TestDiagBBC_HappyPath(t *testing.T) {
 	h, _ := testAPI(t)
 	h.bbcProbe = fakeBBCProbe(5, true, true, nil)
 
-	req := httptest.NewRequest("GET", "/api/diag/bbc?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/bbc?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -149,7 +149,7 @@ func TestDiagBBC_DetectsRegression(t *testing.T) {
 	h, _ := testAPI(t)
 	h.bbcProbe = fakeBBCProbe(0, false, false, nil)
 
-	req := httptest.NewRequest("GET", "/api/diag/bbc?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/bbc?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -253,7 +253,7 @@ func TestDiagSAB_HappyPath(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest("GET", "/api/diag/sab?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/sab?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -293,7 +293,7 @@ func TestDiagSAB_DetectsRegression(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest("GET", "/api/diag/sab?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/sab?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -327,7 +327,7 @@ func TestDiagSAB_HandlerNotWired(t *testing.T) {
 	h, _ := testAPI(t)
 	// Deliberately don't call h.SetSABHandler.
 
-	req := httptest.NewRequest("GET", "/api/diag/sab?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/sab?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -364,7 +364,7 @@ func TestDiagAuthPaths_NoAuth(t *testing.T) {
 // endpoint will report the regression and CI will block the merge.
 func TestDiagAuthPaths_AllThreeAccepted(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/diag/auth-paths?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/auth-paths?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -422,7 +422,7 @@ func TestAuthPathsAllAccepted(t *testing.T) {
 
 	for _, m := range mechanisms {
 		t.Run(m.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/api/diag/sonarr-handshake", nil)
+			req := authedRequest("GET", "/api/diag/sonarr-handshake", nil)
 			m.setup(req)
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)
@@ -442,7 +442,7 @@ func TestAuthPathsAllAccepted(t *testing.T) {
 func TestDiagAuthPaths_DetectsRegression(t *testing.T) {
 	h, st := testAPI(t)
 	// Pre-auth call gets through with the real key in place.
-	req := httptest.NewRequest("GET", "/api/diag/auth-paths?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/auth-paths?apikey=test-api-key", nil)
 
 	// Now drop the api_key in the store. The endpoint will still
 	// authenticate the outer caller via the query-param value that
@@ -460,5 +460,49 @@ func TestDiagAuthPaths_DetectsRegression(t *testing.T) {
 	// once the key is wiped.
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 when api_key is empty (fail-closed contract)", w.Code)
+	}
+}
+
+// TestDiagAuthPaths_ReportsMethodDependentTruth pins the v1.7.0 change to
+// this endpoint. The three mechanisms are all accepted on a safe method,
+// but a state-changing request also clears the same-origin CSRF check,
+// which no longer trusts an absent Origin unless the credential is in a
+// header. A query-only POST is therefore refused. The endpoint exists to
+// state the auth contract, so reporting a bare query_param_works:true
+// would point anyone debugging that 403 at the wrong layer.
+func TestDiagAuthPaths_ReportsMethodDependentTruth(t *testing.T) {
+	h, _ := testAPI(t)
+
+	req := authedRequest("GET", "/api/diag/auth-paths", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var report DiagAuthPathsReport
+	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !report.QueryParamWorks || !report.BearerWorks || !report.HeaderWorks {
+		t.Errorf("safe-method mechanisms: query=%v bearer=%v header=%v, want all true",
+			report.QueryParamWorks, report.BearerWorks, report.HeaderWorks)
+	}
+	if !report.HeaderWorksMutating {
+		t.Error("header_works_mutating = false; a header credential must work on a state-changing request")
+	}
+	if report.QueryParamWorksMutating {
+		t.Error("query_param_works_mutating = true; a query-only credential must be refused on a state-changing request")
+	}
+	if report.Verdict != "pass" {
+		t.Errorf("verdict = %q, checks_failed = %v", report.Verdict, report.ChecksFailed)
+	}
+
+	// The reported values must match what the router actually does.
+	live := httptest.NewRecorder()
+	h.ServeHTTP(live, httptest.NewRequest("POST", "/api/pause?apikey=test-api-key", nil))
+	if live.Code != http.StatusForbidden {
+		t.Errorf("a query-only POST returned %d, want 403; the report and the router disagree", live.Code)
 	}
 }

@@ -32,7 +32,15 @@ export default function Overrides() {
   const [nameError, setNameError] = createSignal("");
 
   onMount(async () => {
-    setOverrides(await api.listOverrides());
+    try {
+      setOverrides(await api.listOverrides());
+    } catch (e) {
+      // Usually a missing or stale API key, which api.ts has already
+      // turned into the event that reopens the setup wizard. Toast
+      // rather than throw: an uncaught rejection here replaces the
+      // whole page with the ErrorBoundary crash card.
+      addToast("error", `Failed to load overrides: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
   });
 
   async function save() {

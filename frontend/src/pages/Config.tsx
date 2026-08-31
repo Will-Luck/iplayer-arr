@@ -1,7 +1,8 @@
 import { createSignal, onMount, Show, For } from "solid-js";
 import type { ConfigResponse } from "../types";
 import { QUALITY_CEILING_OPTIONS } from "../types";
-import { api } from "../api";
+import { api, probeApiKey } from "../api";
+import { apiKey, setApiKey } from "../apikey";
 import { addToast } from "../toast";
 import { getSonarrSetup } from "../lib/sonarr-setup";
 import { copyToClipboard } from "../lib/clipboard";
@@ -25,9 +26,26 @@ export default function Config() {
   const [config, setConfig] = createSignal<ConfigResponse | null>(null);
   const [copiedField, setCopiedField] = createSignal<string | null>(null);
   const [keyRevealed, setKeyRevealed] = createSignal(false);
+  const [loadError, setLoadError] = createSignal<string | null>(null);
+  const [keyDraft, setKeyDraft] = createSignal("");
+  const [keyChecking, setKeyChecking] = createSignal(false);
+  const [keyError, setKeyError] = createSignal("");
+  const [editingKey, setEditingKey] = createSignal(false);
   const sonarrSetup = () => getSonarrSetup(window.location);
 
   onMount(async () => {
+    try {
+      await loadConfig();
+    } catch (e) {
+      // Most likely a missing or stale API key. api.ts has already
+      // raised the unauthorized event that reopens the setup wizard;
+      // render an explanation here instead of throwing into the
+      // ErrorBoundary and replacing the page with a crash card.
+      setLoadError(e instanceof Error ? e.message : "Failed to load configuration");
+    }
+  });
+
+  async function loadConfig() {
     const cfg = await api.getConfig();
     // Defensive: if the stored quality value isn't one of our current
     // options, normalise it to "any" so the Select trigger doesn't
@@ -46,7 +64,39 @@ export default function Config() {
       }
     }
     setConfig(cfg);
-  });
+  }
+
+  /**
+   * Validates a pasted key against the server before storing it, so a
+   * typo cannot silently lock the browser out of its own dashboard.
+   */
+  async function saveKey() {
+    const candidate = keyDraft().trim();
+    if (candidate === "") {
+      setKeyError("Enter the API key.");
+      return;
+    }
+    setKeyChecking(true);
+    setKeyError("");
+    try {
+      if (!(await probeApiKey(candidate))) {
+        setKeyError("That key was rejected by the server.");
+        return;
+      }
+      setApiKey(candidate);
+      setKeyDraft("");
+      setEditingKey(false);
+      setLoadError(null);
+      try {
+        await loadConfig();
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : "Failed to load configuration");
+      }
+      addToast("success", "API key saved");
+    } finally {
+      setKeyChecking(false);
+    }
+  }
 
   async function copyField(value: string, key: string) {
     const ok = await copyToClipboard(value);
@@ -100,25 +150,17 @@ export default function Config() {
   return (
     <div class="flex flex-col gap-4">
       <h1 class="page-title">Configuration</h1>
-      <Show
-        when={config()}
-        fallback={
-          <Card>
-            <Card.Body>
-              <p class="text-sm text-text-secondary">Loading...</p>
-            </Card.Body>
-          </Card>
-        }
-      >
-        <Card>
-          <Card.Header>API Key</Card.Header>
-          <Card.Body>
+
+      <Card>
+        <Card.Header>API Key</Card.Header>
+        <Card.Body>
+          <Show when={apiKey() && !editingKey()}>
             <div class="flex flex-wrap items-center gap-2">
               <code
                 class="flex-1 min-w-0 truncate rounded bg-elevated px-3 py-2 font-mono text-sm text-text-primary"
                 aria-label="API key"
               >
-                {keyRevealed() ? config()!.api_key : maskKey(config()!.api_key)}
+                {keyRevealed() ? apiKey() : maskKey(apiKey())}
               </code>
               <Button
                 variant="secondary"
@@ -130,7 +172,7 @@ export default function Config() {
               </Button>
               <Button
                 size="sm"
-                onClick={() => copyField(config()!.api_key, "api-key")}
+                onClick={() => copyField(apiKey(), "api-key")}
               >
                 <Show
                   when={copiedField() === "api-key"}
@@ -145,10 +187,86 @@ export default function Config() {
                   Copied
                 </Show>
               </Button>
+              <Button variant="secondary" size="sm" onClick={() => setEditingKey(true)}>
+                Change
+              </Button>
             </div>
+            <p class="mt-2 text-xs text-text-tertiary">
+              Held in this browser only. Paste the same value into Sonarr and Radarr
+              as the indexer and download-client key.
+            </p>
+          </Show>
+
+          <Show when={!apiKey() || editingKey()}>
+            <p class="mb-2 text-sm text-text-secondary">
+              Read it from the container with{" "}
+              <code class="rounded bg-elevated px-1 py-0.5 font-mono text-xs">
+                docker exec &lt;container&gt; cat /config/api_key
+              </code>
+              , or pin your own with the{" "}
+              <code class="rounded bg-elevated px-1 py-0.5 font-mono text-xs">API_KEY</code>{" "}
+              environment variable.
+            </p>
+            <div class="flex flex-wrap items-center gap-2">
+              <input
+                class="h-9 min-w-0 flex-1 rounded-md border border-border bg-elevated px-3 font-mono text-sm text-text-primary"
+                type="text"
+                autocomplete="off"
+                spellcheck={false}
+                aria-label="API key"
+                value={keyDraft()}
+                onInput={(e) => setKeyDraft(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveKey();
+                }}
+              />
+              <Show when={editingKey()}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setEditingKey(false);
+                    setKeyDraft("");
+                    setKeyError("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </Show>
+              <Button size="sm" loading={keyChecking()} onClick={saveKey}>
+                {keyChecking() ? "Checking..." : "Save"}
+              </Button>
+            </div>
+            <Show when={keyError()}>
+              <p class="mt-2 text-xs text-danger">{keyError()}</p>
+            </Show>
+          </Show>
+        </Card.Body>
+      </Card>
+
+      <Show when={loadError() && !config()}>
+        <Card>
+          <Card.Body>
+            <p class="text-sm text-danger">Could not load configuration: {loadError()}</p>
+            <p class="mt-1 text-xs text-text-secondary">
+              Check the API key above, then reload the page.
+            </p>
           </Card.Body>
         </Card>
+      </Show>
 
+      <Show
+        when={config()}
+        fallback={
+          <Show when={!loadError()}>
+            <Card>
+              <Card.Body>
+                <p class="text-sm text-text-secondary">Loading...</p>
+              </Card.Body>
+            </Card>
+          </Show>
+        }
+      >
         <Card>
           <Card.Header>Settings</Card.Header>
           <Card.Body>
@@ -255,8 +373,8 @@ export default function Config() {
             />
             <CopyRow
               label="API key"
-              value={maskKey(config()!.api_key)}
-              copyValue={config()!.api_key}
+              value={maskKey(apiKey())}
+              copyValue={apiKey()}
               field="indexer-key"
             />
           </Card.Body>
@@ -278,8 +396,8 @@ export default function Config() {
             />
             <CopyRow
               label="API key"
-              value={maskKey(config()!.api_key)}
-              copyValue={config()!.api_key}
+              value={maskKey(apiKey())}
+              copyValue={apiKey()}
               field="sab-key"
             />
           </Card.Body>

@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { computeReconnectDelay } from "./sse";
+import { describe, it, expect, beforeEach } from "vitest";
+import { computeReconnectDelay, eventsURL } from "./sse";
+import { clearApiKey, setApiKey } from "./apikey";
 
 describe("computeReconnectDelay", () => {
   // rng = 0.5 puts the jitter at exactly 0 so we get the pure
@@ -34,5 +35,27 @@ describe("computeReconnectDelay", () => {
 
   it("zero attempts treated as first attempt floor", () => {
     expect(computeReconnectDelay(0, noJitter)).toBe(1000);
+  });
+});
+
+// EventSource cannot attach an Authorization header, so the SSE stream
+// is the one place the credential has to ride in the query string. If
+// this regresses the dashboard silently stops receiving live updates
+// once /api/* is authenticated.
+describe("eventsURL", () => {
+  beforeEach(() => clearApiKey());
+
+  it("is the bare path when no key is stored", () => {
+    expect(eventsURL()).toBe("/api/events");
+  });
+
+  it("appends the apikey query parameter when a key is stored", () => {
+    setApiKey("live-key");
+    expect(eventsURL()).toBe("/api/events?apikey=live-key");
+  });
+
+  it("percent-encodes a key with URL-special characters", () => {
+    setApiKey("a b&c=d");
+    expect(eventsURL()).toBe("/api/events?apikey=a%20b%26c%3Dd");
   });
 });

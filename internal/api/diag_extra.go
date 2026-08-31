@@ -393,13 +393,32 @@ func sabBodyAuthed(body []byte) bool {
 // only because they called handler methods directly and bypassed
 // ServeHTTP. The fix was to widen authenticate() to accept all three;
 // this endpoint asserts the wider contract holds.
+//
+// Since v1.7.0 the answer depends on the HTTP method, so the report says
+// so. A state-changing request additionally passes the same-origin CSRF
+// check, which no longer trusts an absent Origin unless the credential
+// is in a request header. A query-only POST, PUT, PATCH or DELETE is
+// therefore refused with 403 even though the key itself is valid.
+// Reporting a bare query_param_works:true would send anyone debugging
+// that 403 looking in the wrong place.
 type DiagAuthPathsReport struct {
-	Verdict         string   `json:"verdict"`
-	ChecksFailed    []string `json:"checks_failed"`
-	QueryParamWorks bool     `json:"query_param_works"`
-	BearerWorks     bool     `json:"bearer_works"`
-	HeaderWorks     bool     `json:"header_works"`
-	Error           string   `json:"error,omitempty"`
+	Verdict      string   `json:"verdict"`
+	ChecksFailed []string `json:"checks_failed"`
+
+	// Safe methods (GET, HEAD, OPTIONS): the auth predicate is the
+	// whole gate, so all three mechanisms are accepted.
+	QueryParamWorks bool `json:"query_param_works"`
+	BearerWorks     bool `json:"bearer_works"`
+	HeaderWorks     bool `json:"header_works"`
+
+	// State-changing methods also clear the CSRF check. A header
+	// credential passes; a query-only one is refused by design, so
+	// QueryParamWorksMutating is expected to be false and a true value
+	// here means the v1.7.0 tightening has regressed.
+	HeaderWorksMutating     bool `json:"header_works_mutating"`
+	QueryParamWorksMutating bool `json:"query_param_works_mutating"`
+
+	Error string `json:"error,omitempty"`
 }
 
 func (h *Handler) handleDiagAuthPaths(w http.ResponseWriter, r *http.Request) {
@@ -445,6 +464,28 @@ func (h *Handler) handleDiagAuthPaths(w http.ResponseWriter, r *http.Request) {
 	if !report.HeaderWorks {
 		report.ChecksFailed = append(report.ChecksFailed,
 			"auth_paths: X-Api-Key header not accepted")
+	}
+
+	// State-changing methods clear the CSRF gate as well as the auth
+	// predicate, so probe both. A header credential must still work.
+	mutatingHeaderReq := httptest.NewRequest("POST", "/probe", nil)
+	mutatingHeaderReq.Header.Set("X-Api-Key", apiKey)
+	report.HeaderWorksMutating = h.authenticate(mutatingHeaderReq) && csrfCheckPasses(mutatingHeaderReq)
+	if !report.HeaderWorksMutating {
+		report.ChecksFailed = append(report.ChecksFailed,
+			"auth_paths: header credential refused on a state-changing request")
+	}
+
+	// A query-only credential on a state-changing request must be
+	// refused. This assertion is inverted on purpose: false is the
+	// correct answer, and a true here means the CSRF tightening that
+	// stopped treating an absent Origin as trusted has been undone.
+	mutatingQueryReq := httptest.NewRequest("POST", "/probe?apikey="+url.QueryEscape(apiKey), nil)
+	report.QueryParamWorksMutating = h.authenticate(mutatingQueryReq) && csrfCheckPasses(mutatingQueryReq)
+	if report.QueryParamWorksMutating {
+		report.ChecksFailed = append(report.ChecksFailed,
+			"auth_paths: a query-only credential was accepted on a state-changing request; "+
+				"the absent-Origin CSRF tightening has regressed")
 	}
 
 	if len(report.ChecksFailed) == 0 {

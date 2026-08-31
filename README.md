@@ -83,7 +83,67 @@ volumes:
 >
 > **If you set `VPN_ENABLED=true`, the examples above are not sufficient.** You must also pass `--cap-add=NET_ADMIN` and `--sysctl net.ipv4.conf.all.src_valid_mark=1` (or the Compose equivalent) or the container will crash-loop at startup with `[VPN] Not the right capabilities`. Full example: [VPN Configuration → Docker Capabilities](https://github.com/Will-Luck/iplayer-arr/wiki/VPN-Configuration#docker-capabilities).
 
-Open `http://localhost:62001` and the setup wizard will guide you through connecting Sonarr.
+Open `http://localhost:62001` and the setup wizard will guide you through connecting Sonarr. Its first step asks for the API key.
+
+## API key
+
+One key protects everything: the dashboard API, the Newznab indexer and the SABnzbd download client. iplayer-arr generates one on first start if you do not supply your own.
+
+**Getting the key.** It is written to your config directory on every start, owner-readable only:
+
+```bash
+docker exec iplayer-arr cat /config/api_key
+```
+
+If `/config` is a host bind mount you can read the file directly instead.
+
+**Setting your own.** Pass `API_KEY` and it takes precedence over the generated value. It must be at least 16 characters; a shorter one is refused at startup with an explanation rather than silently accepted. This is the supported way to pin a key across rebuilds, to rotate one, or to provision a container from a secrets manager:
+
+```bash
+docker run -d \
+  --name iplayer-arr \
+  -e API_KEY=your-own-long-random-value \
+  ...
+```
+
+To rotate: set a new `API_KEY`, restart the container, then update the key in the iplayer-arr Config page and in the Sonarr and Radarr indexer and download-client entries.
+
+**Where it is not available.** `GET /api/config` does not return the key, and the log records at most a four-character prefix, and nothing at all for a key short enough that four characters would be a meaningful share of it. Both are deliberate. Until v1.7.0 the dashboard API was unauthenticated and that endpoint handed the key to anyone who could reach the port ([GHSA-3hfw-5v8p-p588](https://github.com/Will-Luck/iplayer-arr/security/advisories)).
+
+**In the browser.** The dashboard stores the key in `localStorage` for the browser you enter it in. Each browser or device you use needs it entered once. `GET /api/healthz` is the only endpoint that answers without it, so container health checks and uptime monitors keep working.
+
+**Sending the key to `/api/*`.** Three forms are accepted: `Authorization: Bearer <key>`, `X-Api-Key: <key>`, and `?apikey=<key>`.
+
+| Request | Accepted credential |
+| --- | --- |
+| `GET`, `HEAD`, `OPTIONS` | any of the three |
+| `POST`, `PUT`, `PATCH`, `DELETE` | **a header only** (`Authorization: Bearer` or `X-Api-Key`) |
+
+A state-changing request also passes a same-origin check. An absent `Origin` is not treated as trusted on its own, so a query-only `POST`, `PUT`, `PATCH` or `DELETE` is refused with `403 cross-origin request refused` even when the key is correct. Browsers cannot set those headers cross-origin without a preflight this service does not answer, which is what makes the rule worth having. Move the key into a header and the call works:
+
+```bash
+# 403: query-only credential on a state-changing request
+curl -X POST "http://localhost:62001/api/pause?apikey=$KEY"
+
+# 200
+curl -X POST -H "X-Api-Key: $KEY" http://localhost:62001/api/pause
+```
+
+`/newznab/*` and `/sabnzbd/*` are unaffected: Sonarr and Radarr keep using `?apikey=` exactly as before.
+
+**Live updates and reverse proxies.** The dashboard's event stream uses `EventSource`, which cannot set request headers, so `/api/events` carries the key as a query parameter. A reverse proxy in front of iplayer-arr will therefore record the key in its access log for that one request. If that matters to you, exclude `/api/events` from request logging or drop the query string for it.
+
+## Environment variables
+
+The full list lives in the [Configuration Reference](https://github.com/Will-Luck/iplayer-arr/wiki/Configuration-Reference). The ones that control the listener and the key:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `62001` | TCP port to listen on. |
+| `BIND_ADDR` | *(empty)* | Interface to bind. Empty means all interfaces, which is what a published container wants. Set it to `127.0.0.1` to confine the listener to loopback, which suits running the binary directly on a host. |
+| `API_KEY` | *(unset)* | Pins the API key. At least 16 characters. Unset means the stored key is kept, or a 32-character one is generated on first start. |
+| `CONFIG_DIR` | `/config` | Holds the database and the `api_key` file. |
+| `DOWNLOAD_DIR` | `/downloads` | Where completed files land. |
 
 ## Radarr setup
 

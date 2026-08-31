@@ -11,7 +11,7 @@ func TestHandleGetConfig_DownloadDirFromEnv(t *testing.T) {
 	h, _ := testAPI(t)
 	h.DownloadDir = "/data"
 
-	req := httptest.NewRequest("GET", "/api/config", nil)
+	req := authedRequest("GET", "/api/config", nil)
 	req.Header.Set("X-Api-Key", "test-api-key")
 	w := httptest.NewRecorder()
 	h.handleGetConfig(w, req)
@@ -33,7 +33,7 @@ func TestHandleGetConfig_DownloadDirFallbackToDefault(t *testing.T) {
 	h, _ := testAPI(t)
 	h.DownloadDir = ""
 
-	req := httptest.NewRequest("GET", "/api/config", nil)
+	req := authedRequest("GET", "/api/config", nil)
 	req.Header.Set("X-Api-Key", "test-api-key")
 	w := httptest.NewRecorder()
 	h.handleGetConfig(w, req)

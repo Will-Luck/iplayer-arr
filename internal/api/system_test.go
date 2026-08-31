@@ -17,7 +17,7 @@ func TestHandleSystemBasic(t *testing.T) {
 	h, _ := testAPI(t)
 	h.StartedAt = time.Now().Add(-5 * time.Second)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -51,7 +51,7 @@ func TestHandleSystem_NilMgr_RuntimeConfigSafelyZero(t *testing.T) {
 		t.Fatalf("testAPI wired a non-nil mgr; precondition broken")
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -81,7 +81,7 @@ func TestHandleSystem_RuntimeConfigSurfacesManagerValues(t *testing.T) {
 		download.WithWatchdogTimeout(120*time.Second))
 	h.mgr = mgrWithOverride
 
-	req := httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -100,7 +100,7 @@ func TestHandleSystem_RuntimeConfigSurfacesManagerValues(t *testing.T) {
 	mgrDefault := download.NewManager(nil, t.TempDir(), 2, nil, nil, nil, nil)
 	h.mgr = mgrDefault
 
-	req = httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	req = authedRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -120,7 +120,7 @@ func TestHandleSystemNoAuth(t *testing.T) {
 	h, _ := testAPI(t)
 	h.StartedAt = time.Now().Add(-5 * time.Second)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/system", nil)
+	req := authedRequest(http.MethodGet, "/api/system", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -137,7 +137,7 @@ func TestHandleSystemGeoStatus(t *testing.T) {
 		FFmpegVersion: "ffmpeg version 6.0",
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -168,7 +168,7 @@ func TestHandleSystemHistoryCounts(t *testing.T) {
 		st.MoveToHistory(dl.ID)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodGet, "/api/system?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -191,7 +191,7 @@ func TestHandleGeoCheckSuccess(t *testing.T) {
 	h.status = &RuntimeStatus{GeoOK: false}
 	h.GeoProbe = func() bbc.GeoResult { return bbc.GeoResult{Status: bbc.GeoUKOK} }
 
-	req := httptest.NewRequest(http.MethodPost, "/api/system/geo-check?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodPost, "/api/system/geo-check?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -223,7 +223,7 @@ func TestHandleGeoCheckDNSFailed(t *testing.T) {
 		return bbc.GeoResult{Status: bbc.GeoDNSFailed, Detail: "server misbehaving"}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/system/geo-check?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodPost, "/api/system/geo-check?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -249,7 +249,7 @@ func TestHandleGeoCheckNilProbe(t *testing.T) {
 	h, _ := testAPI(t)
 	// geoProbe is nil by default in testAPI
 
-	req := httptest.NewRequest(http.MethodPost, "/api/system/geo-check?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodPost, "/api/system/geo-check?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -263,7 +263,7 @@ func TestHandleGeoCheckNoAuth(t *testing.T) {
 	h.status = &RuntimeStatus{GeoOK: false}
 	h.GeoProbe = func() bbc.GeoResult { return bbc.GeoResult{Status: bbc.GeoUKOK} }
 
-	req := httptest.NewRequest(http.MethodPost, "/api/system/geo-check", nil)
+	req := authedRequest(http.MethodPost, "/api/system/geo-check", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 

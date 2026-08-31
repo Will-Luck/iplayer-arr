@@ -62,6 +62,27 @@ const doctorWhoThreeBrandsPayload = `{
     }
 }`
 
+// testStoreAPIKey is the key the helpers below seed into every store
+// they build. Handler.authenticate fails closed on a nil store and on an
+// unseeded key, so a handler constructed without one answers 401 to
+// everything except t=caps. Tests that need a different key call
+// st.SetConfig themselves after construction, which wins.
+const testStoreAPIKey = "newznab-test-key"
+
+// newTestStore opens a temp BoltDB store with testStoreAPIKey seeded.
+func newTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "newznab-test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.SetConfig("api_key", testStoreAPIKey); err != nil {
+		t.Fatalf("seed api_key: %v", err)
+	}
+	return st
+}
+
 // newHandlerWithBBC builds a Handler whose IBL is pointed at a fake BBC
 // server. Used by handleTVSearch tests.
 func newHandlerWithBBC(t *testing.T, payload string) *Handler {
@@ -73,7 +94,9 @@ func newHandlerWithBBCProber(t *testing.T, payload string, prober qualityProber)
 	srv := fakeBBCSearchServer(t, payload)
 	ibl := bbc.NewIBL(bbc.NewClient())
 	ibl.BaseURL = srv.URL
-	return NewHandler(ibl, nil, nil, prober)
+	// A real seeded store, not nil: the handler fails closed without one,
+	// so a nil store would 401 every test in this file.
+	return NewHandler(ibl, newTestStore(t), nil, prober)
 }
 
 // newHandlerWithBBCProberAndStore wires both a prober and a real
@@ -85,12 +108,7 @@ func newHandlerWithBBCProberAndStore(t *testing.T, payload string, prober qualit
 	ibl := bbc.NewIBL(bbc.NewClient())
 	ibl.BaseURL = srv.URL
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "newznab-test.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
-
+	st := newTestStore(t)
 	return NewHandler(ibl, st, nil, prober), st
 }
 
@@ -104,12 +122,7 @@ func newHandlerWithBBCAndStore(t *testing.T, payload string) (*Handler, *store.S
 	ibl := bbc.NewIBL(bbc.NewClient())
 	ibl.BaseURL = srv.URL
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "newznab-test.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
-
+	st := newTestStore(t)
 	return NewHandler(ibl, st, nil, nil), st
 }
 
@@ -262,7 +275,7 @@ func TestHandleTVSearchDailyMatchByDate(t *testing.T) {
 	// recognise the year+date query and match by air date instead of by
 	// integer season/episode.
 	h := newHandlerWithBBC(t, eastendersOneEpisodePayload)
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=eastenders&season=2026&ep=04%2F06", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=eastenders&season=2026&ep=04%2F06&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -300,7 +313,7 @@ func TestHandleTVSearchTopicalWeeklyFallbackToDate(t *testing.T) {
 		}
 	}`
 	h := newHandlerWithBBC(t, payload)
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=question+time&season=48&ep=23", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=question+time&season=48&ep=23&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -324,7 +337,7 @@ func TestHandleTVSearchTopicalWeeklyFallbackToDate(t *testing.T) {
 func TestHandleTVSearchDailyMismatchByDate(t *testing.T) {
 	// Wrong date should return zero items.
 	h := newHandlerWithBBC(t, eastendersOneEpisodePayload)
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=eastenders&season=2026&ep=01%2F01", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=eastenders&season=2026&ep=01%2F01&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -355,7 +368,7 @@ func TestHandleTVSearchPubDateFromAvailability(t *testing.T) {
 		}
 	}`
 	h := newHandlerWithBBC(t, payload)
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=great+continental+railway+journeys&season=9&ep=11", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=great+continental+railway+journeys&season=9&ep=11&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -456,7 +469,7 @@ func TestHandleTVSearch_FirstSeenBecomesPubDate(t *testing.T) {
 	get := func() string {
 		// No q= and no tvdbid=: the wildcard RSS-sync shape, the only
 		// path allowed to create first-seen stamps.
-		req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+		req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&apikey=newznab-test-key", nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -513,7 +526,7 @@ func TestSearch_QuerySearchDoesNotStamp(t *testing.T) {
 	h, st := newHandlerWithBBCAndStore(t, payload)
 
 	get := func(query string) string {
-		req := httptest.NewRequest("GET", "/newznab/api?"+query, nil)
+		req := httptest.NewRequest("GET", "/newznab/api?apikey=newznab-test-key&"+query, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -589,7 +602,7 @@ func TestSearch_QuerySearchReturnsExistingStamp(t *testing.T) {
 	h, st := newHandlerWithBBCAndStore(t, payload)
 
 	get := func(query string) string {
-		req := httptest.NewRequest("GET", "/newznab/api?"+query, nil)
+		req := httptest.NewRequest("GET", "/newznab/api?apikey=newznab-test-key&"+query, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -650,7 +663,7 @@ func TestSearch_LimitTrimmedItemNotStamped(t *testing.T) {
 	h, st := newHandlerWithBBCAndStore(t, payload)
 
 	get := func(query string) string {
-		req := httptest.NewRequest("GET", "/newznab/api?"+query, nil)
+		req := httptest.NewRequest("GET", "/newznab/api?apikey=newznab-test-key&"+query, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -734,7 +747,7 @@ func TestSearch_BroadcastDateAttrCarriesAvailability(t *testing.T) {
 	)
 	h, _ := newHandlerWithBBCAndStore(t, payload)
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=trawler+wars", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=trawler+wars&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	body := w.Body.String()
@@ -761,7 +774,7 @@ func TestSearch_QualityVariantsShareOnePubDate(t *testing.T) {
 	prober := &mockProber{results: map[string][]int{"m002ttg5": {1080, 720}}}
 	h, _ := newHandlerWithBBCProberAndStore(t, eastendersOneEpisodePayload, prober)
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -791,7 +804,7 @@ func TestSearch_NotYetAvailable_NotStampedUntilEmitted(t *testing.T) {
 	h, st := newHandlerWithBBCProberAndStore(t, eastendersOneEpisodePayload, prober)
 
 	get := func() string {
-		req := httptest.NewRequest("GET", "/newznab/api?t=search", nil)
+		req := httptest.NewRequest("GET", "/newznab/api?t=search&apikey=newznab-test-key", nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -856,7 +869,7 @@ func TestHandleTVSearchFiltersOtherShowsByName(t *testing.T) {
 		}
 	}`
 	h := newHandlerWithBBC(t, payload)
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=little+britain&season=1&ep=1", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=little+britain&season=1&ep=1&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -886,7 +899,7 @@ func TestHandleSearchBrowseHasNoNameFilter(t *testing.T) {
 		}
 	}`
 	h := newHandlerWithBBC(t, payload)
-	req := httptest.NewRequest("GET", "/newznab/api?t=search", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -920,7 +933,7 @@ func TestHandleTVSearchStandardSEStillWorks(t *testing.T) {
 		}
 	}`
 	h := newHandlerWithBBC(t, payload)
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=doctor+who&season=1&ep=3", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=doctor+who&season=1&ep=3&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -938,7 +951,7 @@ func TestHandleTVSearchStandardSEStillWorks(t *testing.T) {
 func TestSearch_ProbedPIDWith1080p_Emits1080p(t *testing.T) {
 	prober := &mockProber{results: map[string][]int{"m002ttg5": {1080, 720, 540}}}
 	h := newHandlerWithBBCProber(t, eastendersOneEpisodePayload, prober)
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -951,7 +964,7 @@ func TestSearch_ProbedPIDWith1080p_Emits1080p(t *testing.T) {
 func TestSearch_ProbedPIDWith720pOnly_OmitsFake1080p(t *testing.T) {
 	prober := &mockProber{results: map[string][]int{"m002ttg5": {720, 540}}}
 	h := newHandlerWithBBCProber(t, eastendersOneEpisodePayload, prober)
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -967,7 +980,7 @@ func TestSearch_ProbedPIDWith720pOnly_OmitsFake1080p(t *testing.T) {
 func TestSearch_ProbeFailure_Emits720pAnd540pFallback(t *testing.T) {
 	prober := &mockProber{results: map[string][]int{"m002ttg5": nil}}
 	h := newHandlerWithBBCProber(t, eastendersOneEpisodePayload, prober)
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -987,7 +1000,7 @@ func TestSearch_NotYetAvailable_SkipsItem(t *testing.T) {
 		notYetAvailable: map[string]bool{"m002ttg5": true},
 	}
 	h := newHandlerWithBBCProber(t, eastendersOneEpisodePayload, prober)
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1011,7 +1024,7 @@ func TestSearch_PrefetchOnlyForFilteredResults_NameFilter(t *testing.T) {
 	)
 	prober := &mockProber{results: map[string][]int{"dw1": {720, 540}, "dw2": {720, 540}}}
 	h := newHandlerWithBBCProber(t, payload, prober)
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=doctor+who", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=doctor+who&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1047,7 +1060,7 @@ func TestSearch_PrefetchOnlyForFilteredResults_SeasonEpisode(t *testing.T) {
 	)
 	prober := &mockProber{results: map[string][]int{"p3": {720, 540}}}
 	h := newHandlerWithBBCProber(t, payload, prober)
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=doctor+who&season=14&ep=3", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=doctor+who&season=14&ep=3&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1071,7 +1084,7 @@ func TestSearch_PrefetchOnlyForFilteredResults_DailyDate(t *testing.T) {
 	)
 	prober := &mockProber{results: map[string][]int{"n1": {720, 540}}}
 	h := newHandlerWithBBCProber(t, payload, prober)
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=newsnight&season=2026&ep=04%2F05", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=newsnight&season=2026&ep=04%2F05&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1085,7 +1098,7 @@ func TestSearch_PrefetchOnlyForFilteredResults_DailyDate(t *testing.T) {
 
 func TestSearch_NoProberConfigured_OmitsExtraQualities(t *testing.T) {
 	h := newHandlerWithBBC(t, eastendersOneEpisodePayload)
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1102,7 +1115,7 @@ func TestSearch_DuplicatePIDFromBrandAndEpisode_ProbesOnce(t *testing.T) {
 	)
 	prober := &mockProber{results: map[string][]int{"dup1": {1080, 720, 540}}}
 	h := newHandlerWithBBCProber(t, payload, prober)
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=doctor+who", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=doctor+who&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1191,7 +1204,7 @@ func TestSearch_DoctorWhoClassicTVDB_OnlyMatchesClassicBrand(t *testing.T) {
 
 	h, _ := newHandlerWithBBCAndStore(t, doctorWhoThreeBrandsPayload)
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=76107&season=1&ep=2", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=76107&season=1&ep=2&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1221,7 +1234,7 @@ func TestSearch_DoctorWhoModernTVDB_OnlyMatchesModernBrand(t *testing.T) {
 
 	h, _ := newHandlerWithBBCAndStore(t, doctorWhoThreeBrandsPayload)
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=78804&season=1&ep=2", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=78804&season=1&ep=2&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1281,7 +1294,7 @@ func TestSearch_DoctorWhoClassicTVDB_WarmCacheRetainsYear(t *testing.T) {
 		t.Fatalf("PutSeriesMapping: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=76107&season=1&ep=2", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=76107&season=1&ep=2&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1329,7 +1342,7 @@ func TestHandleTVSearch_TVDBIDRehydratedFromStore(t *testing.T) {
 
 	// Sonarr's follow-up request: q filled in, tvdbid empty.
 	req := httptest.NewRequest("GET",
-		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=&season=14&ep=3", nil)
+		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=&season=14&ep=3&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1356,7 +1369,7 @@ func TestHandleTVSearch_TVDBIDRehydrationCaseInsensitive(t *testing.T) {
 
 	// Note lower-case q in the request -- mapping is stored with title-case.
 	req := httptest.NewRequest("GET",
-		"/newznab/api?t=tvsearch&q=casualty&tvdbid=&season=1&ep=1", nil)
+		"/newznab/api?t=tvsearch&q=casualty&tvdbid=&season=1&ep=1&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1380,7 +1393,7 @@ func TestHandleTVSearch_TVDBIDNoRehydrationWhenUnknown(t *testing.T) {
 	// deliberately no PutSeriesMapping
 
 	req := httptest.NewRequest("GET",
-		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=&season=14&ep=3", nil)
+		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=&season=14&ep=3&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1410,7 +1423,7 @@ func TestHandleTVSearch_TVDBIDRequestParamWinsOverStore(t *testing.T) {
 
 	// Request supplies the correct tvdbid.
 	req := httptest.NewRequest("GET",
-		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=78804&season=14&ep=3", nil)
+		"/newznab/api?t=tvsearch&q=Doctor+Who&tvdbid=78804&season=14&ep=3&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1505,7 +1518,7 @@ func TestHandleSearch_RSSSyncUsesBrowseFresh(t *testing.T) {
 	h := newHandlerWithBBC(t, "")
 	h.ibl.BaseURL = srv.URL
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=search", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&apikey=newznab-test-key", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
@@ -1535,7 +1548,7 @@ func TestHandleTVSearch_RSSSyncUsesBrowseFresh(t *testing.T) {
 	h.ibl.BaseURL = srv.URL
 
 	// t=tvsearch with no q and no tvdbid is the RSS-sync case.
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&apikey=newznab-test-key", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
@@ -1572,7 +1585,7 @@ func TestWildcardRoute_PerPIDQualityCap(t *testing.T) {
 	h.ibl.BaseURL = srv.URL
 
 	// Wildcard route: 3 PIDs × ≤ 2 qualities = ≤ 6 items.
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&apikey=newznab-test-key", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	wildcardItems := strings.Count(rr.Body.String(), "<item>")
@@ -1589,7 +1602,7 @@ func TestWildcardRoute_PerPIDQualityCap(t *testing.T) {
 	defer srvTargeted.Close()
 	h.ibl.BaseURL = srvTargeted.URL
 
-	req = httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=X", nil)
+	req = httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=X&apikey=newznab-test-key", nil)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	targetedItems := strings.Count(rr.Body.String(), "<item>")
@@ -1615,7 +1628,7 @@ func TestWildcardRoute_ProbeDeadlineEnforced(t *testing.T) {
 	h := newHandlerWithBBCProber(t, "", &hangingProber{})
 	h.ibl.BaseURL = srv.URL
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&apikey=newznab-test-key", nil)
 	rr := httptest.NewRecorder()
 
 	start := time.Now()
@@ -1672,7 +1685,7 @@ func TestWildcardRoute_TotalItemCeiling(t *testing.T) {
 	h := newHandlerWithBBCProber(t, "", prober)
 	h.ibl.BaseURL = srv.URL
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&apikey=newznab-test-key", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
@@ -1721,7 +1734,7 @@ func TestHandleTVSearch_TargetedDoesNotBrowse(t *testing.T) {
 	h.ibl.BaseURL = srv.URL
 
 	// Per-show search.
-	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=Apprentice", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch&q=Apprentice&apikey=newznab-test-key", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if groupHits != 0 {
@@ -1730,7 +1743,7 @@ func TestHandleTVSearch_TargetedDoesNotBrowse(t *testing.T) {
 
 	// tvdbid-resolved search.
 	groupHits = 0
-	req = httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=12345&season=1&ep=1", nil)
+	req = httptest.NewRequest("GET", "/newznab/api?t=tvsearch&tvdbid=12345&season=1&ep=1&apikey=newznab-test-key", nil)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if groupHits != 0 {
@@ -1754,7 +1767,7 @@ func TestHandleSearch_TargetedDoesNotBrowse(t *testing.T) {
 	h := newHandlerWithBBC(t, "")
 	h.ibl.BaseURL = srv.URL
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=Foo", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=Foo&apikey=newznab-test-key", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if groupHits != 0 {
@@ -1773,7 +1786,7 @@ func TestSearch_ConfiguredQualityCeiling_FiltersHigher(t *testing.T) {
 		t.Fatalf("SetConfig: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1796,7 +1809,7 @@ func TestSearch_ConfiguredQualityAny_NoCeiling(t *testing.T) {
 		t.Fatalf("SetConfig: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1816,7 +1829,7 @@ func TestSearch_QualityCeilingAppliesToFallback(t *testing.T) {
 		t.Fatalf("SetConfig: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders", nil)
+	req := httptest.NewRequest("GET", "/newznab/api?t=search&q=eastenders&apikey=newznab-test-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -1922,5 +1935,52 @@ func TestFeedURLsIncludeAPIKey(t *testing.T) {
 				t.Errorf("%s line missing apikey suffix:\n  %s", marker, strings.TrimSpace(ln))
 			}
 		}
+	}
+}
+
+// TestServeHTTP_FailsClosedOnUnseededKey pins the v1.7.0 fix for the
+// fail-open asymmetry. Before it, an empty stored api_key made this
+// handler and the SABnzbd handler accept every request while
+// internal/api rejected them, on the same key and the same store.
+// internal/sabnzbd/handler_test.go carries the parallel test.
+func TestServeHTTP_FailsClosedOnUnseededKey(t *testing.T) {
+	h := newHandlerWithBBC(t, eastendersOneEpisodePayload)
+	if err := h.store.SetConfig("api_key", ""); err != nil {
+		t.Fatalf("blank the key: %v", err)
+	}
+
+	for _, target := range []string{
+		"/newznab/api?t=search&q=foo",
+		"/newznab/api?t=tvsearch&q=foo",
+		"/newznab/api?t=movie&q=foo",
+		"/newznab/api?t=get&id=abc",
+		"/newznab/api?t=search&q=foo&apikey=" + testStoreAPIKey,
+		"/newznab/api?t=search&q=foo&apikey=",
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", target, nil))
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s with an unseeded key = %d, want 401", target, w.Code)
+		}
+	}
+
+	// t=caps stays open: Sonarr probes it before it has the key.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/newznab/api?t=caps", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("t=caps with an unseeded key = %d, want 200", w.Code)
+	}
+}
+
+// TestServeHTTP_FailsClosedOnNilStore: a handler with no persistence
+// cannot verify anything, so it must deny rather than wave callers
+// through. This used to return true.
+func TestServeHTTP_FailsClosedOnNilStore(t *testing.T) {
+	h := NewHandler(nil, nil, nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/newznab/api?t=search&q=foo&apikey=anything", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("search with a nil store = %d, want 401", w.Code)
 	}
 }

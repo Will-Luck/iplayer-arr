@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -35,9 +36,29 @@ func testAPI(t *testing.T) (*Handler, *store.Store) {
 	return h, st
 }
 
-func TestStatusNoAuth(t *testing.T) {
+// authedRequest builds a request that gets past the two gates in front of
+// every /api route: the API key check (X-Api-Key carrying the key testAPI
+// seeds) and, for state-changing methods, the same-origin CSRF check.
+//
+// Tests that exercise a handler's own behaviour use this so they fail on
+// the behaviour rather than on the gate. The gates have dedicated tests:
+// TestAPIRoutePopulationIsAuthenticatedOrAllowlisted for authentication
+// and TestCSRF_OriginCheck for the origin rule.
+func authedRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Header.Set("X-Api-Key", "test-api-key")
+	if isMutatingMethod(method) {
+		req.Header.Set("Origin", "http://"+req.Host)
+	}
+	return req
+}
+
+// TestStatusReportsRuntimeHealth: /api/status was unauthenticated until
+// GHSA-3hfw-5v8p-p588. It reports disk capacity, VPN geo posture and the
+// ffmpeg build, so it now authenticates like the rest of /api.
+func TestStatusReportsRuntimeHealth(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/status", nil)
+	req := authedRequest("GET", "/api/status", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -53,20 +74,20 @@ func TestStatusNoAuth(t *testing.T) {
 	}
 }
 
-func TestDownloadsNoAuth(t *testing.T) {
+func TestDownloadsListWithHeaderAuth(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/downloads", nil)
+	req := authedRequest("GET", "/api/downloads", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
 	if w.Code != 200 {
-		t.Fatalf("expected 200 (no auth required), got %d", w.Code)
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
 
-func TestHistoryListNoAuth(t *testing.T) {
+func TestHistoryList(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/history", nil)
+	req := authedRequest("GET", "/api/history", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -86,9 +107,9 @@ func TestHistoryListNoAuth(t *testing.T) {
 	}
 }
 
-func TestHistoryStatsNoAuth(t *testing.T) {
+func TestHistoryStatsEmpty(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/history/stats", nil)
+	req := authedRequest("GET", "/api/history/stats", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -115,6 +136,11 @@ func TestHistoryStatsNoAuth(t *testing.T) {
 	}
 }
 
+// TestDownloadsWithQueryAuth deliberately does NOT use authedRequest.
+// The helper adds an X-Api-Key header, which would carry the request on
+// its own and let this test keep passing even if query-parameter auth
+// were removed entirely. The credential under test has to be the only
+// one present.
 func TestDownloadsWithQueryAuth(t *testing.T) {
 	h, _ := testAPI(t)
 	req := httptest.NewRequest("GET", "/api/downloads?apikey=test-api-key", nil)
@@ -133,6 +159,11 @@ func TestDownloadsWithQueryAuth(t *testing.T) {
 	}
 }
 
+// TestDownloadsWithBearerAuth is the only test that drives an Authorization:
+// Bearer credential all the way through the router and the middleware, and
+// Bearer is what the SPA sends on every non-SSE call. Same reasoning as
+// TestDownloadsWithQueryAuth: no authedRequest, so the Bearer header is the
+// only credential on the request.
 func TestDownloadsWithBearerAuth(t *testing.T) {
 	h, _ := testAPI(t)
 	req := httptest.NewRequest("GET", "/api/downloads", nil)
@@ -149,7 +180,7 @@ func TestConfigGet(t *testing.T) {
 	h, st := testAPI(t)
 	st.SetConfig("quality", "1080p")
 
-	req := httptest.NewRequest("GET", "/api/config?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/config?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -163,14 +194,15 @@ func TestConfigGet(t *testing.T) {
 	if resp["quality"] != "1080p" {
 		t.Errorf("quality = %q", resp["quality"])
 	}
-	if resp["api_key"] != "test-api-key" {
-		t.Errorf("api_key = %q", resp["api_key"])
-	}
 }
 
-func TestConfigGetIncludesSeededAPIKey(t *testing.T) {
+// TestConfigGetOmitsAPIKey is the disclosure half of
+// GHSA-3hfw-5v8p-p588. This endpoint used to hand the key to any caller;
+// it must not return it now even to an authenticated one. The operator
+// reads the key from <CONFIG_DIR>/api_key instead.
+func TestConfigGetOmitsAPIKey(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/config", nil)
+	req := authedRequest("GET", "/api/config", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -181,8 +213,30 @@ func TestConfigGetIncludesSeededAPIKey(t *testing.T) {
 	var cfg map[string]string
 	json.NewDecoder(w.Body).Decode(&cfg)
 
-	if cfg["api_key"] != "test-api-key" {
-		t.Errorf("api_key = %q", cfg["api_key"])
+	if _, present := cfg["api_key"]; present {
+		t.Errorf("api_key present in the config response: %q", cfg["api_key"])
+	}
+	if strings.Contains(w.Body.String(), "test-api-key") {
+		t.Error("the seeded key appears somewhere in the config response body")
+	}
+	// Sanity: the endpoint still answers with the fields it should.
+	if cfg["quality"] == "" {
+		t.Error("quality missing; the response looks empty rather than redacted")
+	}
+}
+
+// TestConfigGetUnauthenticatedIsRejected: the exact request from the
+// advisory. Before the fix this returned 200 with the key in cleartext.
+func TestConfigGetUnauthenticatedIsRejected(t *testing.T) {
+	h, _ := testAPI(t)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/config", nil))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "test-api-key") {
+		t.Error("the key leaked in the 401 body")
 	}
 }
 
@@ -190,7 +244,7 @@ func TestConfigPut(t *testing.T) {
 	h, st := testAPI(t)
 
 	body := `{"key":"quality","value":"480p"}`
-	req := httptest.NewRequest("PUT", "/api/config?apikey=test-api-key", strings.NewReader(body))
+	req := authedRequest("PUT", "/api/config?apikey=test-api-key", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -208,7 +262,7 @@ func TestConfigPutMaxWorkers(t *testing.T) {
 	h, st := testAPI(t)
 
 	body := `{"key":"max_workers","value":"15"}`
-	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	req := authedRequest("PUT", "/api/config", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -226,7 +280,7 @@ func TestConfigPutBlocksAPIKey(t *testing.T) {
 	h, _ := testAPI(t)
 
 	body := `{"key":"api_key","value":"hacked"}`
-	req := httptest.NewRequest("PUT", "/api/config?apikey=test-api-key", strings.NewReader(body))
+	req := authedRequest("PUT", "/api/config?apikey=test-api-key", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -237,7 +291,7 @@ func TestConfigPutBlocksAPIKey(t *testing.T) {
 
 func TestOverridesList(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/overrides?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/overrides?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -255,7 +309,7 @@ func TestOverridesPutAndList(t *testing.T) {
 	h, _ := testAPI(t)
 
 	body := `{"show_name":"Doctor Who","force_date_based":true}`
-	req := httptest.NewRequest("PUT", "/api/overrides/Doctor+Who?apikey=test-api-key", strings.NewReader(body))
+	req := authedRequest("PUT", "/api/overrides/Doctor+Who?apikey=test-api-key", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -264,7 +318,7 @@ func TestOverridesPutAndList(t *testing.T) {
 	}
 
 	// Now list
-	req = httptest.NewRequest("GET", "/api/overrides?apikey=test-api-key", nil)
+	req = authedRequest("GET", "/api/overrides?apikey=test-api-key", nil)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -284,7 +338,7 @@ func TestOverridesDelete(t *testing.T) {
 	h, st := testAPI(t)
 	st.PutOverride(&store.ShowOverride{ShowName: "Test Show"})
 
-	req := httptest.NewRequest("DELETE", "/api/overrides/Test+Show?apikey=test-api-key", nil)
+	req := authedRequest("DELETE", "/api/overrides/Test+Show?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -305,7 +359,7 @@ func TestHistoryDelete(t *testing.T) {
 	st.PutDownload(dl)
 	st.MoveToHistory("hist_1")
 
-	req := httptest.NewRequest("DELETE", "/api/history/hist_1?apikey=test-api-key", nil)
+	req := authedRequest("DELETE", "/api/history/hist_1?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -323,7 +377,7 @@ func TestManualDownloadNoStarter(t *testing.T) {
 	h, _ := testAPI(t)
 
 	body := `{"pid":"b039d07m","quality":"720p"}`
-	req := httptest.NewRequest("POST", "/api/download?apikey=test-api-key", strings.NewReader(body))
+	req := authedRequest("POST", "/api/download?apikey=test-api-key", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -333,11 +387,15 @@ func TestManualDownloadNoStarter(t *testing.T) {
 	}
 }
 
-func TestEventsEndpointNoAuth(t *testing.T) {
+// TestEventsEndpointAcceptsQueryAuth: EventSource cannot set request
+// headers, so the SSE route has to keep accepting ?apikey=. If this
+// regresses to header-only the dashboard stops receiving live updates
+// with no error the operator can see.
+func TestEventsEndpointAcceptsQueryAuth(t *testing.T) {
 	h, _ := testAPI(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest("GET", "/api/events", nil).WithContext(ctx)
+	req := httptest.NewRequest("GET", "/api/events?apikey=test-api-key", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -347,9 +405,24 @@ func TestEventsEndpointNoAuth(t *testing.T) {
 	}
 }
 
+// TestEventsEndpointRejectsMissingKey: the stream is operator data, so
+// the query-parameter carve-out above must not become a hole.
+func TestEventsEndpointRejectsMissingKey(t *testing.T) {
+	h, _ := testAPI(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest("GET", "/api/events", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
 func TestUnknownRoute(t *testing.T) {
 	h, _ := testAPI(t)
-	req := httptest.NewRequest("GET", "/api/nonexistent?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/nonexistent?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -400,7 +473,7 @@ func TestHistoryListEnvelope(t *testing.T) {
 		{"env_3", "Show Three", store.StatusFailed, 0, 2 * time.Hour},
 	})
 
-	req := httptest.NewRequest("GET", "/api/history?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/history?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -436,7 +509,7 @@ func TestHistoryListStatusFilter(t *testing.T) {
 		{"sf_f1", "Failed A", store.StatusFailed, 0, 2 * time.Hour},
 	})
 
-	req := httptest.NewRequest("GET", "/api/history?apikey=test-api-key&status=completed", nil)
+	req := authedRequest("GET", "/api/history?apikey=test-api-key&status=completed", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -479,7 +552,7 @@ func TestHistoryListPagination(t *testing.T) {
 
 	doGet := func(url string) store.HistoryPage {
 		t.Helper()
-		req := httptest.NewRequest("GET", url, nil)
+		req := authedRequest("GET", url, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -533,7 +606,7 @@ func TestHistoryStats(t *testing.T) {
 		{"hs_f1", "Failed One", store.StatusFailed, 0, 2 * time.Hour},
 	})
 
-	req := httptest.NewRequest("GET", "/api/history/stats?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/history/stats?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -579,7 +652,7 @@ func TestHistoryStatsSinceFilter(t *testing.T) {
 	st.PutHistory(newDL)
 
 	// Stats since 2024-03-01 should only count the new entry.
-	req := httptest.NewRequest("GET", "/api/history/stats?apikey=test-api-key&since=2024-03-01", nil)
+	req := authedRequest("GET", "/api/history/stats?apikey=test-api-key&since=2024-03-01", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -614,7 +687,7 @@ func TestClearAllHistory(t *testing.T) {
 		})
 	}
 
-	req := httptest.NewRequest("DELETE", "/api/history", nil)
+	req := authedRequest("DELETE", "/api/history", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -634,9 +707,18 @@ func TestClearAllHistory(t *testing.T) {
 	}
 }
 
-// TestCSRF_OriginCheck verifies that mutating methods (POST/PUT/DELETE)
-// refuse cross-origin browser requests but allow same-origin browsers
-// and origin-less clients (curl, Sonarr).
+// TestCSRF_OriginCheck verifies the cross-origin rule on state-changing
+// methods. Two properties matter:
+//
+//   - A cross-origin Origin is refused outright.
+//   - An absent Origin is no longer trusted on its own. It is accepted
+//     only when the caller supplies its credential in a request header,
+//     which a page on another origin cannot do without a preflight this
+//     service never answers. curl, Sonarr and Radarr set the header, so
+//     nothing legitimate is affected.
+//
+// Safe methods (GET) are never subject to the check; they still have to
+// authenticate, which is what the credential column exercises.
 func TestCSRF_OriginCheck(t *testing.T) {
 	h, _ := testAPI(t)
 
@@ -645,16 +727,20 @@ func TestCSRF_OriginCheck(t *testing.T) {
 		method     string
 		origin     string
 		host       string
+		headerCred bool
+		queryCred  bool
 		wantStatus int
 	}{
-		{"GET no origin allowed", "GET", "", "iplayer-arr.lan:62001", http.StatusOK},
-		{"GET cross-origin allowed (safe method)", "GET", "https://attacker.com", "iplayer-arr.lan:62001", http.StatusOK},
-		{"DELETE no origin allowed", "DELETE", "", "iplayer-arr.lan:62001", http.StatusOK},
-		{"DELETE same origin allowed", "DELETE", "http://iplayer-arr.lan:62001", "iplayer-arr.lan:62001", http.StatusOK},
-		{"DELETE cross-origin refused", "DELETE", "https://attacker.com", "iplayer-arr.lan:62001", http.StatusForbidden},
-		{"PUT cross-origin refused", "PUT", "https://attacker.com", "iplayer-arr.lan:62001", http.StatusForbidden},
-		{"POST cross-origin refused", "POST", "https://attacker.com", "iplayer-arr.lan:62001", http.StatusForbidden},
-		{"DELETE different port refused", "DELETE", "http://iplayer-arr.lan:9999", "iplayer-arr.lan:62001", http.StatusForbidden},
+		{name: "GET no origin, header credential", method: "GET", host: "iplayer-arr.lan:62001", headerCred: true, wantStatus: http.StatusOK},
+		{name: "GET cross-origin allowed (safe method)", method: "GET", origin: "https://attacker.com", host: "iplayer-arr.lan:62001", headerCred: true, wantStatus: http.StatusOK},
+		{name: "DELETE no origin with header credential allowed", method: "DELETE", host: "iplayer-arr.lan:62001", headerCred: true, wantStatus: http.StatusOK},
+		{name: "DELETE no origin with only a query credential refused", method: "DELETE", host: "iplayer-arr.lan:62001", queryCred: true, wantStatus: http.StatusForbidden},
+		{name: "DELETE no origin and no credential refused", method: "DELETE", host: "iplayer-arr.lan:62001", wantStatus: http.StatusForbidden},
+		{name: "DELETE same origin allowed", method: "DELETE", origin: "http://iplayer-arr.lan:62001", host: "iplayer-arr.lan:62001", headerCred: true, wantStatus: http.StatusOK},
+		{name: "DELETE cross-origin refused", method: "DELETE", origin: "https://attacker.com", host: "iplayer-arr.lan:62001", headerCred: true, wantStatus: http.StatusForbidden},
+		{name: "PUT cross-origin refused", method: "PUT", origin: "https://attacker.com", host: "iplayer-arr.lan:62001", headerCred: true, wantStatus: http.StatusForbidden},
+		{name: "POST cross-origin refused", method: "POST", origin: "https://attacker.com", host: "iplayer-arr.lan:62001", headerCred: true, wantStatus: http.StatusForbidden},
+		{name: "DELETE different port refused", method: "DELETE", origin: "http://iplayer-arr.lan:9999", host: "iplayer-arr.lan:62001", headerCred: true, wantStatus: http.StatusForbidden},
 	}
 
 	for _, tc := range cases {
@@ -672,8 +758,14 @@ func TestCSRF_OriginCheck(t *testing.T) {
 			case "DELETE":
 				target = "/api/history"
 			}
+			if tc.queryCred {
+				target += "?apikey=test-api-key"
+			}
 			req := httptest.NewRequest(tc.method, target, strings.NewReader(`{}`))
 			req.Host = tc.host
+			if tc.headerCred {
+				req.Header.Set("X-Api-Key", "test-api-key")
+			}
 			if tc.origin != "" {
 				req.Header.Set("Origin", tc.origin)
 			}

@@ -5,7 +5,7 @@
 # Subcommands:
 #   build  Build a smoke-tagged image (iplayer-arr:smoke).
 #   up     Start an isolated container on a random high port with tmpfs
-#          volumes, scrape its generated api_key, persist state to
+#          volumes and a per-run API_KEY, persist state to
 #          /tmp/iplayer-arr-smoke.state.
 #   diag   Curl every /api/diag/<name> endpoint and assert verdict==pass.
 #          On success, leaves the container running for inspection.
@@ -15,7 +15,10 @@
 #   * Random high port in 62000-63999 (avoids clashing with services already bound on the host).
 #   * tmpfs /config + /downloads (no host bind, no persistent state).
 #   * Distinct container name (no overlap with prod iplayer-arr).
-#   * api_key scraped from unauthenticated /api/config; no env override.
+#   * api_key injected per run via the API_KEY env var, which beats the
+#     generated value. Nothing is scraped back out of the API: the
+#     dashboard surface authenticates and GET /api/config no longer
+#     returns the key (GHSA-3hfw-5v8p-p588).
 #
 # Usage:
 #   scripts/smoke-test.sh build
@@ -74,22 +77,33 @@ cmd_up() {
     rm -f "$STATE_FILE"
   fi
 
-  local port name
+  local port name key
   port=$(random_high_port)
   name="iplayer-arr-smoke-$RANDOM"
+
+  # Mint a throwaway key and inject it with API_KEY rather than reading
+  # one back out of the API. GET /api/config authenticates now and no
+  # longer returns the key at all (GHSA-3hfw-5v8p-p588).
+  key=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  if [ "${#key}" -ne 32 ]; then
+    echo "smoke-test: could not generate a 32-char API key" >&2
+    exit 1
+  fi
 
   echo "smoke-test: starting $name on port $port"
   docker run -d --rm \
     --name "$name" \
     --tmpfs /config:rw,size=64m \
     --tmpfs /downloads:rw,size=64m \
+    -e API_KEY="$key" \
     -p "127.0.0.1:${port}:62001" \
     "$IMAGE_TAG" >/dev/null
 
-  # Wait up to 30s for /api/status to return 200.
+  # Wait up to 30s for the unauthenticated liveness probe. /api/status
+  # is no longer usable here because it authenticates.
   local i
   for i in $(seq 1 30); do
-    if curl -fsS "http://127.0.0.1:${port}/api/status" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:${port}/api/healthz" >/dev/null 2>&1; then
       break
     fi
     if [ "$i" -eq 30 ]; then
@@ -101,10 +115,18 @@ cmd_up() {
     sleep 1
   done
 
-  local key
-  key=$(curl -fsS "http://127.0.0.1:${port}/api/config" | jq -re '.api_key')
-  if [ -z "$key" ] || [ "$key" = "null" ]; then
-    echo "smoke-test: api_key missing from /api/config" >&2
+  # Regression assertion for GHSA-3hfw-5v8p-p588: unauthenticated
+  # /api/config must be refused, and the key must not come back even
+  # for an authenticated caller.
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/api/config")
+  if [ "$code" != "401" ]; then
+    echo "smoke-test: GET /api/config without a credential returned $code, want 401" >&2
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  if curl -fsS -H "X-Api-Key: ${key}" "http://127.0.0.1:${port}/api/config" | jq -e 'has("api_key")' >/dev/null; then
+    echo "smoke-test: GET /api/config still returns an api_key field" >&2
     docker rm -f "$name" >/dev/null 2>&1 || true
     exit 1
   fi
@@ -171,7 +193,7 @@ usage() {
 Usage: $0 <build|up|diag|down>
 
   build  Build the smoke image (${IMAGE_TAG}).
-  up     Start an isolated container and scrape its api_key.
+  up     Start an isolated container with a per-run API_KEY.
   diag   Hit every /api/diag/<name>; assert verdict==pass.
   down   Stop the container and clear state.
 

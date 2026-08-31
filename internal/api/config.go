@@ -6,7 +6,16 @@ import (
 	"strconv"
 )
 
-var configKeys = []string{"api_key", "quality", "max_workers", "download_dir", "auto_cleanup", "watchdog_timeout_seconds"}
+// configKeys is what GET /api/config returns.
+//
+// api_key is deliberately absent. It used to be here, and because the
+// endpoint was unauthenticated that made the secret readable by anyone
+// who could reach the port (GHSA-3hfw-5v8p-p588). The endpoint now
+// authenticates, but the field stays out: the operator gets the key from
+// <CONFIG_DIR>/api_key or from the API_KEY environment variable, and an
+// endpoint that never returns a secret cannot leak one if a future
+// refactor loosens its route.
+var configKeys = []string{"quality", "max_workers", "download_dir", "auto_cleanup", "watchdog_timeout_seconds"}
 
 var configDefaults = map[string]string{
 	"quality":                  "any",

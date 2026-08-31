@@ -6,14 +6,18 @@ on: [push, pull_request]
 #
 # unit:        gofmt, vet, frontend build, race-detector tests.
 # diag-suite:  builds the container, hits every /api/diag/<name>
-#              endpoint with the per-instance api_key scraped from
-#              the unauthenticated /api/config, asserts verdict==pass.
+#              endpoint with a known api_key, asserts verdict==pass.
 #
-# api_key strategy: iplayer-arr generates a random api_key on first
-# boot and stores it in BoltDB; there is no environment-variable
-# override. The diag-suite job therefore boots the container, reads
-# api_key from GET /api/config (unauthenticated), and uses that value
-# for every diag endpoint call. No external secret is required.
+# api_key strategy: the job mints a random key per run and injects it
+# with the API_KEY environment variable, which takes precedence over
+# the value iplayer-arr would otherwise generate into BoltDB. The key
+# used to be scraped from GET /api/config; that endpoint authenticates
+# now and no longer returns the key at all (GHSA-3hfw-5v8p-p588). No
+# external secret is required: the key is throwaway and lives only for
+# the lifetime of the container.
+#
+# Readiness is polled on /api/healthz rather than /api/status, because
+# /api/status now authenticates.
 #
 # Approved plan: /home/lns/.claude/plans/i-think-we-need-clever-moth.md
 # ---------------------------------------------------------------
@@ -109,10 +113,20 @@ jobs:
           # 62123 surfaced during PR #47 main-push). The empty host
           # port in HOST_IP::62001 triggers automatic assignment; we
           # read the allocated port back via `docker port`.
+          # Mint a throwaway key and inject it, rather than scraping one
+          # back out of the API. API_KEY takes precedence over the
+          # generated value; see cmd/iplayer-arr/main.go resolveAPIKey.
+          KEY=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          if [ "${#KEY}" -ne 32 ]; then
+            echo "::error::Could not generate a 32-char API key (got '${#KEY}' chars)"
+            exit 1
+          fi
+
           docker run -d --rm \
             --name "$NAME" \
             --tmpfs /config:rw,size=64m \
             --tmpfs /downloads:rw,size=64m \
+            -e API_KEY="$KEY" \
             -p "${HOST_IP}::62001" \
             iplayer-arr:ci
 
@@ -126,9 +140,9 @@ jobs:
           echo "NAME=$NAME" >> "$GITHUB_ENV"
           echo "PORT=$PORT" >> "$GITHUB_ENV"
 
-          # Wait up to 30s for /api/status to return 200.
+          # Wait up to 30s for the unauthenticated liveness probe.
           for i in $(seq 1 30); do
-            if curl -fsS "http://${HOST_IP}:${PORT}/api/status" >/dev/null 2>&1; then
+            if curl -fsS "http://${HOST_IP}:${PORT}/api/healthz" >/dev/null 2>&1; then
               echo "iplayer-arr ready after ${i}s"
               break
             fi
@@ -140,11 +154,16 @@ jobs:
             sleep 1
           done
 
-          # /api/config is unauthenticated and exposes the generated api_key.
-          # See internal/api/config.go handleGetConfig.
-          KEY=$(curl -fsS "http://${HOST_IP}:${PORT}/api/config" | jq -re '.api_key')
-          if [ -z "$KEY" ] || [ "$KEY" = "null" ]; then
-            echo "api_key missing from /api/config response"
+          # Regression assertion for GHSA-3hfw-5v8p-p588: the dashboard
+          # API must refuse an unauthenticated caller, and must not hand
+          # back the key even to an authenticated one.
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST_IP}:${PORT}/api/config")
+          if [ "$code" != "401" ]; then
+            echo "::error::GET /api/config without a credential returned $code, want 401"
+            exit 1
+          fi
+          if curl -fsS -H "X-Api-Key: ${KEY}" "http://${HOST_IP}:${PORT}/api/config" | jq -e 'has("api_key")' >/dev/null; then
+            echo "::error::GET /api/config still returns an api_key field"
             exit 1
           fi
 
@@ -241,10 +260,19 @@ jobs:
           # Let Docker pick a free host port (same rationale as
           # diag-suite — avoids collisions with services on the runner
           # host such as cloudflare-tunnel).
+          # Same injected-key strategy as diag-suite: API_KEY beats the
+          # generated value, so nothing has to be scraped back out.
+          KEY=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          if [ "${#KEY}" -ne 32 ]; then
+            echo "::error::Could not generate a 32-char API key (got '${#KEY}' chars)"
+            exit 1
+          fi
+
           docker run -d --rm \
             --name "$NAME" \
             --tmpfs /config:rw,size=64m \
             --tmpfs /downloads:rw,size=64m \
+            -e API_KEY="$KEY" \
             -p "${HOST_IP}::62001" \
             iplayer-arr-smoke:${{ github.sha }}
 
@@ -259,7 +287,7 @@ jobs:
           echo "PORT=$PORT" >> "$GITHUB_ENV"
 
           for i in $(seq 1 30); do
-            if curl -fsS "http://${HOST_IP}:${PORT}/api/status" >/dev/null 2>&1; then
+            if curl -fsS "http://${HOST_IP}:${PORT}/api/healthz" >/dev/null 2>&1; then
               echo "smoke container ready after ${i}s"
               break
             fi
@@ -271,11 +299,31 @@ jobs:
             sleep 1
           done
 
-          KEY=$(curl -fsS "http://${HOST_IP}:${PORT}/api/config" | jq -re '.api_key')
-          if [ -z "$KEY" ] || [ "$KEY" = "null" ]; then
-            echo "api_key missing from /api/config response"
+          # The api_key file is the supported out-of-band delivery
+          # channel now that GET /api/config no longer returns the key.
+          # Assert it exists, matches, and is not world-readable.
+          FILE_KEY=$(docker exec "$NAME" cat /config/api_key | tr -d '\r\n')
+          if [ "$FILE_KEY" != "$KEY" ]; then
+            echo "::error::/config/api_key does not match the injected API_KEY"
             exit 1
           fi
+          MODE=$(docker exec "$NAME" stat -c '%a' /config/api_key)
+          if [ "$MODE" != "600" ]; then
+            echo "::error::/config/api_key mode is $MODE, want 600"
+            exit 1
+          fi
+
+          # Regression assertion for GHSA-3hfw-5v8p-p588.
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST_IP}:${PORT}/api/config")
+          if [ "$code" != "401" ]; then
+            echo "::error::GET /api/config without a credential returned $code, want 401"
+            exit 1
+          fi
+          if curl -fsS -H "X-Api-Key: ${KEY}" "http://${HOST_IP}:${PORT}/api/config" | jq -e 'has("api_key")' >/dev/null; then
+            echo "::error::GET /api/config still returns an api_key field"
+            exit 1
+          fi
+
           echo "KEY=$KEY" >> "$GITHUB_ENV"
 
       - name: Probe diag endpoints against real binaries

@@ -39,7 +39,7 @@ func TestDiagStorage_HappyPath(t *testing.T) {
 	dir := t.TempDir()
 	h.DownloadDir = dir
 
-	req := httptest.NewRequest("GET", "/api/diag/storage?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/storage?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -949,7 +949,7 @@ func TestDiagNetwork_ResolvConfRead(t *testing.T) {
 
 func callDiagStorage(t *testing.T, h *Handler) DiagStorageReport {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/api/diag/storage?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/storage?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -989,7 +989,7 @@ func containsSubstring(haystack []string, needle string) bool {
 // returns the parsed report; fatals on any HTTP-level error.
 func callDiagClock(t *testing.T, h *Handler) DiagClockReport {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/api/diag/clock?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/clock?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -1013,7 +1013,7 @@ func mustParseTime(t *testing.T, s string) time.Time {
 
 func callDiagNetwork(t *testing.T, h *Handler) DiagNetworkReport {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/api/diag/network?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/network?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -1032,7 +1032,7 @@ func callDiagGeo(t *testing.T, h *Handler, query string) DiagGeoReport {
 	if query != "" {
 		url += "&" + strings.TrimPrefix(query, "?")
 	}
-	req := httptest.NewRequest("GET", url, nil)
+	req := authedRequest("GET", url, nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

@@ -7,7 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **The dashboard API now requires authentication, and `GET /api/config` no
+  longer returns the API key.** This is a breaking change; read the upgrade
+  path below before updating.
+
+  Every `/api/*` endpoint was reachable with no credential at all. `GET
+  /api/config` answered HTTP 200 with the 32-character `api_key` in cleartext
+  to anyone who could open the port, and the same unauthenticated surface
+  allowed changing configuration, triggering downloads, reading the log ring
+  buffer and deleting history. Because that key is the same secret that
+  protects `/newznab/*` and `/sabnzbd/*`, disclosing it collapsed the whole
+  access model. Only the indexer and download-client surfaces were ever
+  guarded.
+
+  All `/api/*` routes now authenticate. The single exception is a new
+  `GET /api/healthz` liveness probe, which returns a fixed `{"ok":true}` and
+  reads nothing about the instance. `/api/status`, which reports disk
+  capacity, VPN geo posture and the ffmpeg build, now authenticates like
+  everything else. `/newznab/*` and `/sabnzbd/*` are unchanged, because Sonarr
+  and Radarr authenticate by query parameter and cannot send headers.
+
+  Reported privately by **archnexus707**, who followed responsible disclosure
+  and gave us the time to build the replacement key-delivery path before the
+  endpoint was closed. Thank you.
+
+  **Upgrade path.** Nothing changes for Sonarr or Radarr; leave them alone.
+  For the dashboard:
+
+  1. Read your existing key: `docker exec <container> cat /config/api_key`.
+     The file is written on every start with mode 0600, and your existing
+     generated key is preserved, not regenerated.
+  2. Open the dashboard. The setup wizard opens on a new first step asking for
+     the key. Paste it in. It is checked against the server before being
+     stored, and it is held in that browser's `localStorage`, so each browser
+     or device you use needs it entered once.
+  3. If you script against `/api/*`, add the key to your requests as
+     `Authorization: Bearer <key>`, `X-Api-Key: <key>` or `?apikey=<key>`. All
+     three work on `GET`, but a `POST`, `PUT`, `PATCH` or `DELETE` needs the
+     key in a **header**: the same-origin check no longer treats an absent
+     `Origin` as trusted, so a query-only state-changing call is refused with
+     `403 cross-origin request refused`. Point container health checks and
+     uptime monitors at `/api/healthz`.
+
+  You can also set the key yourself with the new `API_KEY` environment
+  variable, which takes precedence over the stored value. That is now the
+  supported way to pin a key across rebuilds or to rotate one: set a new
+  `API_KEY`, restart, then update the key in the dashboard and in Sonarr and
+  Radarr.
+
+- Every API key comparison is now constant time
+  (`crypto/subtle.ConstantTimeCompare`, via the new `internal/auth` package) at
+  all three sites: the dashboard, the Newznab handler and the SABnzbd handler.
+  A plain string comparison returns at the first differing byte, which leaks
+  the key one byte at a time to a caller who can measure response latency.
+
+- The cross-origin CSRF check no longer treats an absent `Origin` header as
+  trusted for state-changing requests. It now also requires the credential to
+  arrive in a request header, which a page on another origin cannot set
+  without a preflight this service does not answer. Command-line clients and
+  the arr stack are unaffected because they send the header anyway.
+
 ### Added
+- `API_KEY` environment variable. When set and non-blank it is the API key and
+  takes precedence over the value stored in BoltDB. It must be at least 16
+  characters; a shorter value is refused at startup with an explanation rather
+  than accepted. Whitespace-only values are ignored, so a placeholder in a
+  compose file cannot blank the key and lock you out. A short key already in
+  the store is left alone, so no existing install is locked out by the new
+  minimum.
+- The effective API key is written to `<CONFIG_DIR>/api_key` (`/config/api_key`
+  by default) on every start, with mode 0600. This is the supported way to read
+  the key now that the API does not return it. It is never served over HTTP,
+  and the log still records only a four-character prefix.
+- `GET /api/healthz`, an unauthenticated liveness probe returning
+  `{"ok":true}`. Use it for Docker `HEALTHCHECK`, Watchtower and uptime
+  monitoring.
+- `BIND_ADDR` environment variable, alongside the existing `PORT`. Defaults to
+  every interface, exactly as before; set it to `127.0.0.1` to confine the
+  listener to loopback.
+- The setup wizard has a new first step for the API key, and the Config page
+  can show, copy and change it.
 - `/api/search` now reports an `Availability` field per result: `available`,
   `not_yet_available` for an episode BBC has not published yet, or `unknown`
   when the check could not answer. A script driving the SABnzbd endpoint can
@@ -28,6 +108,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hundreds of requests to BBC; anything beyond that is returned with
   `unknown`. The search also still returns results when the check is
   unavailable, slow, or fails.
+
+### Changed
+- `GET /api/config` no longer includes `api_key` in its response, and
+  `/api/status` now authenticates. If you scripted against either, see the
+  upgrade path under Security above.
+- The `/api/*` router is an `http.ServeMux` built from a declared route table
+  rather than a hand-rolled switch. A regression test enumerates that table and
+  fails if any route is registered without authentication and without an entry
+  in the named allowlist, so the fix cannot silently rot as endpoints are added.
+- CI and `scripts/smoke-test.sh` inject a throwaway `API_KEY` per run instead of
+  scraping the key from `/api/config`, and poll `/api/healthz` for readiness
+  instead of `/api/status`. Both now assert that unauthenticated `/api/config`
+  is refused and that the key is absent from the authenticated response.
 
 ### Fixed
 - An episode grabbed before BBC published its playlist no longer sticks as

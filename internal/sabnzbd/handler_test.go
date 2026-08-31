@@ -516,3 +516,43 @@ func TestCategoriesIncludeMovies(t *testing.T) {
 		})
 	}
 }
+
+// TestServeHTTP_FailsClosedOnUnseededKey pins the v1.7.0 fix for the
+// fail-open asymmetry. Before it, an empty stored api_key let every
+// SABnzbd mode through here and in the Newznab handler while
+// internal/api rejected the same request. See the parallel test in
+// internal/newznab/handler_test.go.
+func TestServeHTTP_FailsClosedOnUnseededKey(t *testing.T) {
+	h, st := testHandler(t)
+	if err := st.SetConfig("api_key", ""); err != nil {
+		t.Fatalf("blank the key: %v", err)
+	}
+
+	for _, mode := range []string{"get_cats", "get_config", "fullstatus", "queue", "history", "addurl"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/sabnzbd/api?mode="+mode, nil))
+		body := w.Body.String()
+		if !strings.Contains(body, "API Key Incorrect") {
+			t.Errorf("mode=%s with an unseeded key returned %q, want the API Key Incorrect refusal", mode, body)
+		}
+	}
+
+	// mode=version stays open: Sonarr probes it before attaching the key.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/sabnzbd/api?mode=version", nil))
+	if !strings.Contains(w.Body.String(), "4.0.0") {
+		t.Errorf("mode=version with an unseeded key returned %q, want the version payload", w.Body.String())
+	}
+}
+
+// TestServeHTTP_FailsClosedOnNilStore: no persistence means nothing can
+// be verified, so every guarded mode must be refused.
+func TestServeHTTP_FailsClosedOnNilStore(t *testing.T) {
+	h := NewHandler(nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/sabnzbd/api?mode=queue&apikey=anything", nil))
+	if !strings.Contains(w.Body.String(), "API Key Incorrect") {
+		t.Errorf("mode=queue with a nil store returned %q, want the refusal", w.Body.String())
+	}
+}

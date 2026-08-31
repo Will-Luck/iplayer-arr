@@ -10,6 +10,7 @@ import type {
   HistoryPage,
   HistoryStats,
 } from "./types";
+import { authHeaders, UNAUTHORIZED_EVENT } from "./apikey";
 
 function buildURL(path: string, params?: Record<string, string>): string {
   const url = new URL(path, window.location.origin);
@@ -42,7 +43,10 @@ async function request<T>(
   params?: Record<string, string>,
   options?: ApiOptions,
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  // Every API method funnels through here, so this is the one place the
+  // credential has to be attached. The only exception is the SSE stream
+  // in sse.ts, which cannot set headers and uses ?apikey= instead.
+  const headers: Record<string, string> = { ...authHeaders() };
   if (body) {
     headers["Content-Type"] = "application/json";
   }
@@ -73,6 +77,12 @@ async function request<T>(
       signal: controller.signal,
     });
     if (!res.ok) {
+      if (res.status === 401) {
+        // Tell the app the stored key is missing or stale so it can
+        // reopen the setup wizard. Without this an upgrading operator
+        // gets an empty dashboard and no route back to entering a key.
+        window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+      }
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error ?? res.statusText);
     }
@@ -101,8 +111,33 @@ async function del(path: string, options?: ApiOptions): Promise<void> {
   await request<unknown>("DELETE", path, undefined, undefined, options);
 }
 
+/**
+ * Checks a candidate API key against the server before it is stored.
+ *
+ * Deliberately bypasses request(): it must not dispatch the unauthorized
+ * event (the wizard is already open and asking for a key, so reopening
+ * it would loop) and it must send the candidate rather than whatever is
+ * currently in localStorage. GET /api/config is the probe target because
+ * it is authenticated, cheap and read-only.
+ */
+export async function probeApiKey(key: string): Promise<boolean> {
+  const candidate = key.trim();
+  if (candidate === "") return false;
+  try {
+    const res = await fetch(buildURL("/api/config"), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${candidate}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export const api = {
-  // Status (no auth)
+  // Status. Authenticated like everything else below: it reports disk
+  // capacity, VPN geo posture and the ffmpeg build. /api/healthz is the
+  // only unauthenticated endpoint and the SPA does not call it.
   getStatus: () => get<StatusResponse>("/api/status"),
 
   // Downloads

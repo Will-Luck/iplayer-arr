@@ -70,8 +70,12 @@ export interface ShowOverride {
   custom_name: string;
 }
 
+// GET /api/config deliberately does not return api_key. The endpoint was
+// unauthenticated until GHSA-3hfw-5v8p-p588 and handed the secret to any
+// caller; the field is gone rather than merely gated. The SPA keeps the
+// key in localStorage (see apikey.ts) and the operator obtains it from
+// <CONFIG_DIR>/api_key or the API_KEY environment variable.
 export interface ConfigResponse {
-  api_key: string;
   quality: string;
   max_workers: string;
   download_dir: string;

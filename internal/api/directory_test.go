@@ -27,7 +27,7 @@ func TestHandleListDirectory_UsesEnvDownloadDir(t *testing.T) {
 	// Set DownloadDir to the temp dir; this should win over the store
 	h.DownloadDir = tmpDir
 
-	req := httptest.NewRequest("GET", "/api/downloads/directory", nil)
+	req := authedRequest("GET", "/api/downloads/directory", nil)
 	req.Header.Set("X-Api-Key", "test-api-key")
 	w := httptest.NewRecorder()
 	h.handleListDirectory(w, req)
@@ -62,7 +62,7 @@ func TestHandleListDirectory_SkipsIncomplete(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest("GET", "/api/downloads/directory", nil)
+	req := authedRequest("GET", "/api/downloads/directory", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 

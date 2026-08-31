@@ -231,7 +231,7 @@ func TestHandleLogsNoFilter(t *testing.T) {
 	}
 	h := makeLogsHandler(t, entries)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/logs?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodGet, "/api/logs?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -253,7 +253,7 @@ func TestHandleLogsNoAuth(t *testing.T) {
 	}
 	h := makeLogsHandler(t, entries)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/logs", nil)
+	req := authedRequest(http.MethodGet, "/api/logs", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -271,7 +271,7 @@ func TestHandleLogsFilterByLevel(t *testing.T) {
 	}
 	h := makeLogsHandler(t, entries)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/logs?apikey=test-api-key&level=info", nil)
+	req := authedRequest(http.MethodGet, "/api/logs?apikey=test-api-key&level=info", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -293,7 +293,7 @@ func TestHandleLogsFilterBySearchTerm(t *testing.T) {
 	}
 	h := makeLogsHandler(t, entries)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/logs?apikey=test-api-key&q=download", nil)
+	req := authedRequest(http.MethodGet, "/api/logs?apikey=test-api-key&q=download", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -315,7 +315,7 @@ func TestHandleLogsFilterCombined(t *testing.T) {
 	}
 	h := makeLogsHandler(t, entries)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/logs?apikey=test-api-key&level=error&q=download", nil)
+	req := authedRequest(http.MethodGet, "/api/logs?apikey=test-api-key&level=error&q=download", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -335,7 +335,7 @@ func TestHandleLogsFilterCombined(t *testing.T) {
 func TestHandleLogsEmpty(t *testing.T) {
 	h, _ := testAPI(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/logs?apikey=test-api-key", nil)
+	req := authedRequest(http.MethodGet, "/api/logs?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 

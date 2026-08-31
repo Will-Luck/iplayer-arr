@@ -107,7 +107,7 @@ func TestDiagSonarrHandshake_NoAuth(t *testing.T) {
 // a `verdict: pass` with empty `checks_failed`.
 func TestDiagSonarrHandshake_HappyPath(t *testing.T) {
 	h, _ := testDiagAPI(t, validFeedWithAPIKey, "<?xml?><nzb><file/></nzb>", 200, "application/x-nzb")
-	req := httptest.NewRequest("GET", "/api/diag/sonarr-handshake?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/sonarr-handshake?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -143,7 +143,7 @@ func TestDiagSonarrHandshake_DetectsRegression(t *testing.T) {
 	h, _ := testDiagAPI(t, regressionShapeFeedNoAPIKey,
 		`<?xml version="1.0" encoding="UTF-8"?><error code="100" description="Invalid API Key"/>`,
 		http.StatusUnauthorized, "application/xml")
-	req := httptest.NewRequest("GET", "/api/diag/sonarr-handshake?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/sonarr-handshake?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -179,7 +179,7 @@ func TestDiagSonarrHandshake_NewznabNotWired(t *testing.T) {
 	h, _ := testAPI(t)
 	// Intentionally skip SetNewznabHandler so the diag endpoint must
 	// degrade rather than NPE.
-	req := httptest.NewRequest("GET", "/api/diag/sonarr-handshake?apikey=test-api-key", nil)
+	req := authedRequest("GET", "/api/diag/sonarr-handshake?apikey=test-api-key", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
