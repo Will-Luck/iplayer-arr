@@ -123,6 +123,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is refused and that the key is absent from the authenticated response.
 
 ### Fixed
+- Downloads are now claimed in episode order instead of a fixed scramble. When
+  Sonarr sent a bulk grab, iPlayer-arr worked through it in what looked like a
+  random order, and two shows requested together came out interleaved. The
+  order was not actually random: the queue was read straight out of the
+  database in key order, and the key is a random identifier, so the same
+  scramble came back on every poll and survived restarts. The release title is
+  now parsed once when a download is queued, and the queue is sorted by show,
+  then season, then episode, with date-based releases (daily soaps, sports
+  fixtures) sorted by air date. The worker, the dashboard queue and the
+  SABnzbd queue view all read the same order, so they agree. Anything whose
+  title carries no recognisable show name, which includes every movie grab from
+  Radarr, is queued ahead of the named shows rather than behind them; where such
+  a release also carries no season or episode number, which is the normal case
+  for a movie, it keeps a strict first-come-first-served order. Existing queued
+  downloads are handled without a migration: they simply sort by the time they
+  were added.
+  This does not add any way to reorder or reprioritise the queue by hand from
+  the dashboard. Fixes #51.
 - An episode grabbed before BBC published its playlist no longer sticks as
   permanently failed. It used to fail `not_yet_available` twelve times, land in
   history, and then block every later attempt at the same episode and quality:

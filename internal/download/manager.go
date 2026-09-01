@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
+	"github.com/Will-Luck/iplayer-arr/internal/newznab"
 	"github.com/Will-Luck/iplayer-arr/internal/store"
 )
 
@@ -287,11 +288,24 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 	// Issue #29.
 	outputDir := filepath.Join(m.downloadDir, IncompleteDirName, safeTitle)
 
+	// Recover the episode identity from the release title and persist it
+	// so the queue can be ordered by episode rather than by the random
+	// nzo id. Doing it here covers every enqueue path from one place:
+	// the SABnzbd shim (bulk Sonarr and Radarr grabs, via StartDownload)
+	// and the manual /api download. ParseTitle is total, so a title with
+	// no recognisable numbering just leaves the fields at their zero
+	// values, which the ordering treats as "no identity". GitHub #51.
+	ident := newznab.ParseTitle(title)
+
 	dl := &store.Download{
 		ID:        id,
 		PID:       pid,
 		Quality:   quality,
 		Title:     title,
+		ShowName:  ident.ShowName,
+		Season:    ident.Season,
+		Episode:   ident.Episode,
+		AirDate:   ident.AirDate,
 		Category:  category,
 		Status:    store.StatusPending,
 		OutputDir: outputDir,
