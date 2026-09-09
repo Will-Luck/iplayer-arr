@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-09-09
+
 ### Fixed
 - Authored line breaks inside a caption are kept. The BBC writes a caption's
   line breaks as `<br/>` between styled spans, and those breaks carry meaning
