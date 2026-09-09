@@ -363,6 +363,19 @@ jobs:
             docker rm -f "$NAME" >/dev/null 2>&1 || true
           fi
 
+      # The smoke image is tagged per commit and lives on the host's docker
+      # daemon (shared socket), so without this step every main push leaves
+      # a ~330 MB iplayer-arr-smoke:<sha> image behind forever. Twelve had
+      # accumulated by 2026-09-09. Remove this run's tag, and any older
+      # smoke tags that a failed or cancelled run may have left.
+      - name: Clean up smoke image
+        if: always()
+        run: |
+          docker rmi "iplayer-arr-smoke:${{ github.sha }}" >/dev/null 2>&1 || true
+          for img in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^iplayer-arr-smoke:' || true); do
+            docker rmi "$img" >/dev/null 2>&1 || true
+          done
+
   # mirror-to-github authenticates with a PAT stored as the Gitea
   # Actions secret GH_PAT (source of truth: 1Password item
   # `gh-pat-iplayer-mirror` in Server-Keys vault). The PAT only needs
