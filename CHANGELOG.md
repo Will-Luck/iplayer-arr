@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-09-09
+
 ### Fixed
 - Subtitle lines no longer appear in the wrong order. The BBC splits one
   on-screen caption into several paragraphs with identical start and end
