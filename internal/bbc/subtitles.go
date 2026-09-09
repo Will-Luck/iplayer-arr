@@ -24,9 +24,24 @@ type ttDoc struct {
 	} `xml:"body"`
 }
 
+// srtCue is one emitted SRT block: a timing pair and one or more text lines.
+type srtCue struct {
+	begin, end string
+	lines      []string
+}
+
 // TTMLToSRT converts BBC TTML subtitle data to SRT format.
 // BBC TTML may use period-based timing (HH:MM:SS.mmm) or frame-based timing
 // (HH:MM:SS:FF at 25fps). Text may be wrapped in <span> elements.
+//
+// The BBC splits one on-screen caption into several consecutive <p>
+// elements that share the same begin/end, each placed in its own
+// positioned region (document order is top row to bottom row). SRT
+// carries no positioning, so emitting one cue per <p> yields
+// consecutive cues with identical timestamps and players stack them
+// by their own rule, usually newest on top, which reverses the lines
+// (GitHub issue #53). A run of adjacent same-timing paragraphs is
+// therefore merged into a single multi-line cue in document order.
 func TTMLToSRT(ttml []byte) ([]byte, error) {
 	// Strip XML default namespaces -- Go's encoding/xml silently fails to match
 	// child elements when a default namespace propagates from the root.
@@ -37,8 +52,7 @@ func TTMLToSRT(ttml []byte) ([]byte, error) {
 		return nil, fmt.Errorf("parse TTML: %w", err)
 	}
 
-	var b strings.Builder
-	index := 1
+	var cues []srtCue
 
 	for _, div := range doc.Body.Divs {
 		for _, p := range div.Paragraphs {
@@ -60,9 +74,19 @@ func TTMLToSRT(ttml []byte) ([]byte, error) {
 			begin := toSRTTime(p.Begin)
 			end := toSRTTime(p.End)
 
-			fmt.Fprintf(&b, "%d\n%s --> %s\n%s\n\n", index, begin, end, text)
-			index++
+			// Merge only with the immediately preceding cue: the split
+			// rows of one caption are always adjacent in the document.
+			if n := len(cues); n > 0 && cues[n-1].begin == begin && cues[n-1].end == end {
+				cues[n-1].lines = append(cues[n-1].lines, text)
+				continue
+			}
+			cues = append(cues, srtCue{begin: begin, end: end, lines: []string{text}})
 		}
+	}
+
+	var b strings.Builder
+	for i, c := range cues {
+		fmt.Fprintf(&b, "%d\n%s --> %s\n%s\n\n", i+1, c.begin, c.end, strings.Join(c.lines, "\n"))
 	}
 
 	return []byte(b.String()), nil

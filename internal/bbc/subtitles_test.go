@@ -109,3 +109,62 @@ func TestTTMLToSRT_ZeroMillisAreCanonicalised(t *testing.T) {
 		t.Errorf("SRT output:\n%q\nwant:\n%q", srt, expected)
 	}
 }
+
+// TestTTMLToSRT_SameTimingParagraphsMerge exercises GitHub issue #53.
+// BBC TTML splits one on-screen caption into several <p> elements
+// with identical begin/end, each in its own positioned region
+// (document order is top row to bottom row). Emitting one SRT cue
+// per <p> produces consecutive cues with the same timestamps, and
+// players stack simultaneous cues by their own rule (usually newest
+// on top), reversing the lines. The converter must merge a run of
+// same-timing paragraphs into one multi-line cue in document order.
+// Fixture is a verbatim fragment of Waterloo Road S1E1 (p00c9rpm).
+func TestTTMLToSRT_SameTimingParagraphsMerge(t *testing.T) {
+	ttml := `<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling">
+  <body>
+    <div>
+      <p xml:id="C110_1" region="R9" style="S2" begin="00:08:23.000" end="00:08:25.320"><span style="S3">Lorna... We'll be seeing him every day.</span></p>
+      <p xml:id="C111_1" region="agr_1_18_39_2_after" style="S2" begin="00:08:25.320" end="00:08:29.760"><span style="S4">Just calm down, yeah?</span></p>
+      <p xml:id="C111_2" region="R47" style="S2" begin="00:08:25.320" end="00:08:29.760"><span style="S4">But if he's good-looking and single,</span></p>
+      <p xml:id="C111_3" region="R9" style="S2" begin="00:08:25.320" end="00:08:29.760"><span style="S4">yes, please!</span></p>
+      <p xml:id="C112_1" region="R9" style="S2" begin="00:08:29.760" end="00:08:31.000"><span style="S3">Next cue.</span></p>
+    </div>
+  </body>
+</tt>`
+	srt, err := TTMLToSRT([]byte(ttml))
+	if err != nil {
+		t.Fatalf("TTMLToSRT: %v", err)
+	}
+	expected := "1\n00:08:23,000 --> 00:08:25,320\nLorna... We'll be seeing him every day.\n\n" +
+		"2\n00:08:25,320 --> 00:08:29,760\nJust calm down, yeah?\nBut if he's good-looking and single,\nyes, please!\n\n" +
+		"3\n00:08:29,760 --> 00:08:31,000\nNext cue.\n\n"
+	if string(srt) != expected {
+		t.Errorf("SRT output:\n%q\nwant:\n%q", srt, expected)
+	}
+}
+
+// TestTTMLToSRT_SameTimingAcrossDivsDoesNotMerge pins the merge to a
+// run of adjacent paragraphs: a timing match is only merged when the
+// paragraphs are consecutive. A non-adjacent repeat of an earlier
+// timing (here separated by a different cue) stays a separate cue.
+func TestTTMLToSRT_SameTimingAcrossDivsDoesNotMerge(t *testing.T) {
+	ttml := `<?xml version="1.0"?>
+<tt xmlns="http://www.w3.org/ns/ttml">
+  <body>
+    <div>
+      <p begin="00:00:01.000" end="00:00:02.000">A</p>
+      <p begin="00:00:02.000" end="00:00:03.000">B</p>
+      <p begin="00:00:01.000" end="00:00:02.000">C</p>
+    </div>
+  </body>
+</tt>`
+	srt, err := TTMLToSRT([]byte(ttml))
+	if err != nil {
+		t.Fatalf("TTMLToSRT: %v", err)
+	}
+	expected := "1\n00:00:01,000 --> 00:00:02,000\nA\n\n2\n00:00:02,000 --> 00:00:03,000\nB\n\n3\n00:00:01,000 --> 00:00:02,000\nC\n\n"
+	if string(srt) != expected {
+		t.Errorf("SRT output:\n%q\nwant:\n%q", srt, expected)
+	}
+}

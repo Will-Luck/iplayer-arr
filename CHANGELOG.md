@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Subtitle lines no longer appear in the wrong order. The BBC splits one
+  on-screen caption into several paragraphs with identical start and end
+  times, one per row, positioned by the subtitle file itself. The converter
+  wrote each of those as its own SRT cue, so the `.srt` carried runs of cues
+  with the same timestamps. SRT has no positioning, so the player stacked the
+  simultaneous cues by its own rule, usually newest on top, and the rows came
+  out reversed: the end of a sentence above its beginning. A run of adjacent
+  paragraphs that share the same timing is now merged into a single
+  multi-line cue in document order, which is top row to bottom row. On a
+  real Waterloo Road episode this collapsed 40 such runs and left no cue
+  sharing its timestamps with its neighbour. Already-downloaded `.srt` files
+  are not rewritten; re-grab the episode to get the corrected file. Fixes #53.
+
 ## [1.7.0] - 2026-09-01
 
 ### Security
