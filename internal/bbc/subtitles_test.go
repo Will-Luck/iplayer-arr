@@ -168,3 +168,66 @@ func TestTTMLToSRT_SameTimingAcrossDivsDoesNotMerge(t *testing.T) {
 		t.Errorf("SRT output:\n%q\nwant:\n%q", srt, expected)
 	}
 }
+
+// TestTTMLToSRT_BrIsALineBreak: the BBC authors line breaks inside a
+// paragraph with <br/> between styled spans. Those breaks carry
+// meaning (speaker changes, dialogue splits) and must survive as SRT
+// line breaks rather than being flattened into one space-joined line.
+// Adjacent spans with no <br/> between them stay on one line, with
+// the whitespace exactly as authored (BBC puts the separating space
+// inside the second span). Fixtures are verbatim from Waterloo Road
+// S1E1 (p00c9rpm).
+func TestTTMLToSRT_BrIsALineBreak(t *testing.T) {
+	ttml := `<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling">
+  <body>
+    <div>
+      <p xml:id="C2_1" region="agr_0_20_39_4_after" style="S2 agtas_right" begin="00:00:57.280" end="00:00:59.680"><span style="S4">Look, sir.</span><br/><span style="S4">The headmaster's on the roof.</span></p>
+      <p xml:id="C3_1" region="R9" style="S2" begin="00:01:00.000" end="00:01:02.000"><span style="S5">And your full support?</span><span style="S3"> Absolutely.</span></p>
+      <p xml:id="C4_1" region="R9" style="S2" begin="00:01:03.000" end="00:01:05.000"><span style="S5">Who keeps soiling all this paper?</span><br/><span style="S5">I've not got a dirty bum,</span><br/><span style="S5">I'm the head!</span></p>
+      <p xml:id="C5_1" region="R9" style="S2" begin="00:01:06.000" end="00:01:08.000"><span style="S7">No.</span><span style="S3"> You think I'm turning</span><br/><span style="S3">into a &quot;wife&quot;.</span><span style="S7"> I'm not blaming you.</span></p>
+    </div>
+  </body>
+</tt>`
+	srt, err := TTMLToSRT([]byte(ttml))
+	if err != nil {
+		t.Fatalf("TTMLToSRT: %v", err)
+	}
+	expected := "1\n00:00:57,280 --> 00:00:59,680\nLook, sir.\nThe headmaster's on the roof.\n\n" +
+		"2\n00:01:00,000 --> 00:01:02,000\nAnd your full support? Absolutely.\n\n" +
+		"3\n00:01:03,000 --> 00:01:05,000\nWho keeps soiling all this paper?\nI've not got a dirty bum,\nI'm the head!\n\n" +
+		"4\n00:01:06,000 --> 00:01:08,000\nNo. You think I'm turning\ninto a \"wife\". I'm not blaming you.\n\n"
+	if string(srt) != expected {
+		t.Errorf("SRT output:\n%q\nwant:\n%q", srt, expected)
+	}
+}
+
+// TestTTMLToSRT_EscapedAngleBracketsSurvive: text containing &lt; and
+// &gt; must come out as literal < and >, not be eaten as if it were a
+// tag. Also pins that source-formatting whitespace (newlines and
+// indentation between spans) collapses to a single space rather than
+// becoming a line break: only <br/> is a line break.
+func TestTTMLToSRT_EscapedAngleBracketsSurvive(t *testing.T) {
+	ttml := `<?xml version="1.0"?>
+<tt xmlns="http://www.w3.org/ns/ttml">
+  <body>
+    <div>
+      <p begin="00:00:01.000" end="00:00:02.000">
+        <span>Press &lt;A&gt; to start</span>
+        <span>then &lt;B&gt;.</span>
+      </p>
+      <p begin="00:00:03.000" end="00:00:04.000">Tom &amp; Jerry<br />
+        <span>  spaced   out  </span></p>
+    </div>
+  </body>
+</tt>`
+	srt, err := TTMLToSRT([]byte(ttml))
+	if err != nil {
+		t.Fatalf("TTMLToSRT: %v", err)
+	}
+	expected := "1\n00:00:01,000 --> 00:00:02,000\nPress <A> to start then <B>.\n\n" +
+		"2\n00:00:03,000 --> 00:00:04,000\nTom & Jerry\nspaced out\n\n"
+	if string(srt) != expected {
+		t.Errorf("SRT output:\n%q\nwant:\n%q", srt, expected)
+	}
+}

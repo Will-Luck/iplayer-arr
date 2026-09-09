@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Authored line breaks inside a caption are kept. The BBC writes a caption's
+  line breaks as `<br/>` between styled spans, and those breaks carry meaning
+  (a speaker change, a dialogue split). The converter dropped them and joined
+  the rows into one long line, leaving the player to wrap wherever it liked.
+  Each `<br/>` is now an SRT line break, so the caption reads as authored.
+  Adjacent spans with no break between them stay on one line with the
+  spacing exactly as authored. On the same Waterloo Road episode used for
+  1.7.1, multi-line cues went from 25 to 404 with no change to any cue's
+  timing or wording. Follow-up to #53.
+- Escaped angle brackets in dialogue (`&lt;` and `&gt;`, used for sound
+  effect captions such as `< SNORING`) can no longer be mistaken for markup
+  and stripped, because tags are now removed before entities are decoded.
+
 ## [1.7.1] - 2026-09-09
 
 ### Fixed
