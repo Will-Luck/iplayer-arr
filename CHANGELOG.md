@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-09-11
+
 ### Added
 - The pending queue can be reordered from the dashboard. Each queued row
   has move-to-top, up, down and move-to-bottom controls, and the worker
