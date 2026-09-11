@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Older programmes are no longer advertised at 1080p when the BBC cannot
+  serve it, and a 1080p grab of one no longer fails first and falls back.
+  Two checks were trusting the wrong signal. The quality probe took
+  mediaselector's `height="1080"` at face value, but on the `iptv-all`
+  mediaset that attribute names the packaging profile, not an encoded
+  rendition; Waterloo Road series 5 and 6 report 1080 there while their
+  HLS masters top out at 720p. And the hidden-1080p probe treated an HTTP
+  200 on the `video=12000000` rewrite as proof, but USP answers 200
+  whenever the audio track matches and, when the video track does not
+  exist, quietly serves audio only. ffmpeg finished that in seconds,
+  ffprobe found no video stream, the truncation gate fired, and the retry
+  degraded to 720p. A mediaselector 1080 claim is now verified against
+  the HLS master and, when the master lists less, the hidden rewrite is
+  fetched and must carry real `video=` segments before 1080p is believed;
+  a phantom is replaced by the highest height the master actually lists.
+  Episodes that genuinely have a hidden 1080p (Waterloo Road S06E07) are
+  unaffected. On first start after upgrading, quality-cache rows carrying
+  a 1080 are dropped once so affected programmes re-probe. Fixes #54.
+
 ## [1.7.2] - 2026-09-09
 
 ### Fixed

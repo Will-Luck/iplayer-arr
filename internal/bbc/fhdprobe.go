@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -61,7 +62,48 @@ func (c *Client) ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (fhdUR
 	if err != nil {
 		return "", false, fmt.Errorf("fetch master playlist: %w", err)
 	}
+	return c.probeHiddenFHDIn(ctx, hlsMasterURL, body)
+}
 
+// VerifyFHD reports whether BBC can actually serve a 1080p rendition for
+// the given HLS master playlist, and the highest RESOLUTION height the
+// master lists (0 when it carries no RESOLUTION tags).
+//
+// It exists because mediaselector's height attribute cannot be trusted
+// for this: on the iptv-all mediaset the single video element reports
+// the packaging profile (1920x1080 for piff_abr_full_hd), not an
+// encoded rendition. Waterloo Road S06E02 reports 1080 there while its
+// master tops out at 1280x720 and the video=12000000 rewrite serves
+// audio only. GitHub #54.
+//
+// has1080 is true when the master lists a variant of 1080 or more
+// (no rewrite probe issued) or when ProbeHiddenFHD's rewrite serves a
+// genuine video track. err carries the same transient-vs-definitive
+// contract as ProbeHiddenFHD: a non-nil err must not be cached.
+func (c *Client) VerifyFHD(ctx context.Context, hlsMasterURL string) (has1080 bool, maxListed int, err error) {
+	body, err := c.GetCtx(ctx, hlsMasterURL)
+	if err != nil {
+		return false, 0, fmt.Errorf("fetch master playlist: %w", err)
+	}
+	maxListed = maxPlaylistHeight(body)
+	if maxListed >= 1080 {
+		return true, maxListed, nil
+	}
+	_, found, err := c.probeHiddenFHDIn(ctx, hlsMasterURL, body)
+	if err != nil {
+		return false, maxListed, err
+	}
+	return found, maxListed, nil
+}
+
+// maxVariantPlaylistBytes bounds the media playlist read in
+// probeHiddenFHDIn. A 60-minute episode's playlist is ~55 KB; a
+// three-hour film is under 200 KB.
+const maxVariantPlaylistBytes = 4 << 20
+
+// probeHiddenFHDIn is ProbeHiddenFHD after the master playlist fetch,
+// shared with VerifyFHD so the master is fetched once.
+func (c *Client) probeHiddenFHDIn(ctx context.Context, hlsMasterURL string, body []byte) (fhdURL string, found bool, err error) {
 	bestURL, err := pickHighestBandwidthVariant(hlsMasterURL, body)
 	if err != nil {
 		return "", false, err
@@ -74,8 +116,7 @@ func (c *Client) ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (fhdUR
 	// SD-only guard: if every variant in the master playlist is below
 	// 720p, this is genuinely SD-only content (e.g. pre-2010 BBC
 	// programmes). BBC only hides 1080p on content that already has
-	// 720p+ in the manifest. USP will return HTTP 200 for the
-	// rewritten URL but serve audio-only, causing a truncated file.
+	// 720p+ in the manifest, so there is nothing to probe for.
 	// maxPlaylistHeight returns 0 if no RESOLUTION tags are present,
 	// in which case we skip the guard and proceed with the probe.
 	if maxH := maxPlaylistHeight(body); maxH > 0 && maxH < 720 {
@@ -85,28 +126,74 @@ func (c *Client) ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (fhdUR
 
 	rewritten := fhdVariantRewrite.ReplaceAllString(bestURL, "video=12000000")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rewritten, nil)
+	// GET, not HEAD. USP answers 200 on the rewrite whenever the
+	// audio track matches, and if the requested video track does not
+	// exist it drops that filter and serves the audio track alone. A
+	// 200 therefore proves nothing on its own; the media playlist has
+	// to be read and its segments checked for a video track. Skipping
+	// this check produced a 16-second audio-only "1080p" download that
+	// ffprobe reported as having no video stream. GitHub #54.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rewritten, nil)
 	if err != nil {
-		return "", false, fmt.Errorf("build HEAD request: %w", err)
+		return "", false, fmt.Errorf("build FHD probe request: %w", err)
 	}
 	req.Header.Set("User-Agent", RandomUserAgent())
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", false, fmt.Errorf("HEAD %s: %w", rewritten, err)
+		return "", false, fmt.Errorf("GET %s: %w", rewritten, err)
 	}
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
+		media, err := io.ReadAll(io.LimitReader(resp.Body, maxVariantPlaylistBytes))
+		if err != nil {
+			// Transport failure mid-body. Caller must not cache.
+			return "", false, fmt.Errorf("read FHD variant playlist: %w", err)
+		}
+		if !hasVideoSegments(media) {
+			// Definitive-absence: BBC has no 1080p track for this
+			// programme and the rewrite serves audio only. Cacheable.
+			log.Printf("FHD probe: rewrite answered 200 but serves no video track (audio-only rendition); no 1080p for %s", hlsMasterURL)
+			return "", false, nil
+		}
 		return rewritten, true, nil
 	case http.StatusNotFound, http.StatusGone:
 		// Definitive-absence — cacheable as "no 1080p for this show".
 		return "", false, nil
 	default:
 		// Transient (429, 5xx, 401/403, etc). Caller must not cache.
-		return "", false, fmt.Errorf("FHD HEAD returned %d", resp.StatusCode)
+		return "", false, fmt.Errorf("FHD probe returned %d", resp.StatusCode)
 	}
+}
+
+// hasVideoSegments reports whether an HLS media playlist carries at
+// least one segment URI with a video track. USP names each segment
+// after the tracks it muxes, so an audio-only rendition's segments read
+// `...-audio_eng_1=128000-N.ts` while a real one reads
+// `...-audio_eng_1=128000-video=12000000-N.ts`. Only URIs that follow
+// an #EXTINF tag count, so a master playlist (whose variant URIs also
+// contain `video=`) never passes.
+func hasVideoSegments(body []byte) bool {
+	pendingSegment := false
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+			continue
+		case strings.HasPrefix(line, "#EXTINF"):
+			pendingSegment = true
+		case strings.HasPrefix(line, "#"):
+			continue
+		default:
+			if pendingSegment && strings.Contains(line, "video=") {
+				return true
+			}
+			pendingSegment = false
+		}
+	}
+	return false
 }
 
 // pickHighestBandwidthVariant walks an HLS master playlist body and

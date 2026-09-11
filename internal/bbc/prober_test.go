@@ -60,11 +60,24 @@ type fakeFHDProber struct {
 	found bool
 	err   error
 	calls int32
+
+	// VerifyFHD answer, used when mediaselector already claims 1080
+	// (GitHub #54). Zero values mean "no 1080, master lists nothing",
+	// so tests exercising a 1080 claim must set these explicitly.
+	verifyHas1080   bool
+	verifyMaxListed int
+	verifyErr       error
+	verifyCalls     int32
 }
 
 func (f *fakeFHDProber) ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (string, bool, error) {
 	atomic.AddInt32(&f.calls, 1)
 	return "https://example.com/stream-video=12000000.m3u8", f.found, f.err
+}
+
+func (f *fakeFHDProber) VerifyFHD(ctx context.Context, hlsMasterURL string) (bool, int, error) {
+	atomic.AddInt32(&f.verifyCalls, 1)
+	return f.verifyHas1080, f.verifyMaxListed, f.verifyErr
 }
 
 type fakeCacheStore struct {
@@ -236,7 +249,7 @@ func TestPrefetch_FHDProbeError_PreservesExistingHeights(t *testing.T) {
 	}
 }
 
-func TestPrefetch_1080InManifest_SkipsFHDProbe(t *testing.T) {
+func TestPrefetch_1080InManifest_VerifiesInsteadOfProbing(t *testing.T) {
 	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
 	ms := &fakeMediaSelector{byVPID: map[string]*StreamSet{
 		"vpid-p1": {Video: []VideoStream{
@@ -245,14 +258,17 @@ func TestPrefetch_1080InManifest_SkipsFHDProbe(t *testing.T) {
 			{Height: 540, Bitrate: 700, Format: "hls", URL: "https://example.com/master.m3u8"},
 		}},
 	}}
-	fhd := &fakeFHDProber{}
+	fhd := &fakeFHDProber{verifyHas1080: true, verifyMaxListed: 1080}
 	st := newFakeCacheStore()
 
 	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
 	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
 
 	if fhd.calls != 0 {
-		t.Errorf("expected FHD probe to be skipped when 1080 already in manifest, got %d calls", fhd.calls)
+		t.Errorf("expected the hidden-FHD probe to be skipped when 1080 already in manifest, got %d calls", fhd.calls)
+	}
+	if fhd.verifyCalls != 1 {
+		t.Errorf("expected the 1080 claim to be verified once, got %d calls", fhd.verifyCalls)
 	}
 	heights := out.Heights["p1"]
 	// Must not contain duplicate 1080.
@@ -264,6 +280,120 @@ func TestPrefetch_1080InManifest_SkipsFHDProbe(t *testing.T) {
 	}
 	if count1080 != 1 {
 		t.Errorf("expected exactly one 1080 in heights, got %d: %v", count1080, heights)
+	}
+}
+
+// --- GitHub #54: mediaselector's 1080 claim is verified, not trusted ---
+//
+// For the iptv-all mediaset BBC returns a single video element whose
+// height is the packaging profile (1920x1080 for piff_abr_full_hd), not
+// an encoded rendition. Waterloo Road S06E02 reports 1080 there while
+// its HLS master tops out at 720p and the FHD rewrite serves audio only.
+
+func phantom1080MediaSelector() *fakeMediaSelector {
+	return &fakeMediaSelector{byVPID: map[string]*StreamSet{
+		"vpid-p1": {Video: []VideoStream{
+			{Height: 1080, Width: 1920, Bitrate: 8490, Format: "hls", URL: "https://example.com/master.m3u8"},
+		}},
+	}}
+}
+
+func TestPrefetch_Phantom1080_ReplacedByMasterMax(t *testing.T) {
+	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
+	ms := phantom1080MediaSelector()
+	fhd := &fakeFHDProber{verifyHas1080: false, verifyMaxListed: 720}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "waterloo road"}})
+
+	got := out.Heights["p1"]
+	if len(got) != 1 || got[0] != 720 {
+		t.Errorf("expected phantom 1080 replaced by the master's 720, got %v", got)
+	}
+	if st.data["p1"] == nil {
+		t.Fatal("expected cache write on definitive verification")
+	}
+	if cached := st.data["p1"].Heights; len(cached) != 1 || cached[0] != 720 {
+		t.Errorf("expected cached heights [720], got %v", cached)
+	}
+}
+
+func TestPrefetch_Verified1080_KeepsItAndAddsMasterMax(t *testing.T) {
+	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
+	ms := phantom1080MediaSelector()
+	fhd := &fakeFHDProber{verifyHas1080: true, verifyMaxListed: 720}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "waterloo road"}})
+
+	got := out.Heights["p1"]
+	if len(got) != 2 || got[0] != 1080 || got[1] != 720 {
+		t.Errorf("expected [1080 720] when the hidden 1080 is real, got %v", got)
+	}
+}
+
+func TestPrefetch_Verify1080TransientError_KeepsClaimSkipsCache(t *testing.T) {
+	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
+	ms := phantom1080MediaSelector()
+	fhd := &fakeFHDProber{verifyErr: errors.New("FHD probe returned 503")}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "waterloo road"}})
+
+	got := out.Heights["p1"]
+	if len(got) != 1 || got[0] != 1080 {
+		t.Errorf("expected the unverified claim kept for this response, got %v", got)
+	}
+	if len(st.data) != 0 {
+		t.Errorf("expected no cache write on transient verify error, got %d entries", len(st.data))
+	}
+}
+
+func TestPrefetch_Phantom1080_NoResolutionTags_KeepsClaim(t *testing.T) {
+	// The master carries no RESOLUTION tags so there is no listed height
+	// to fall back to; the claim is left alone rather than emptied.
+	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
+	ms := phantom1080MediaSelector()
+	fhd := &fakeFHDProber{verifyHas1080: false, verifyMaxListed: 0}
+	st := newFakeCacheStore()
+
+	p := NewQualityProber(pl, ms, fhd, st, 1, time.Second)
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "waterloo road"}})
+
+	got := out.Heights["p1"]
+	if len(got) != 1 || got[0] != 1080 {
+		t.Errorf("expected claim kept when the master lists no heights, got %v", got)
+	}
+}
+
+func TestReplaceHeight(t *testing.T) {
+	tests := []struct {
+		name    string
+		heights []int
+		with    int
+		want    []int
+	}{
+		{"single phantom", []int{1080}, 720, []int{720}},
+		{"phantom above real", []int{1080, 720, 540}, 720, []int{720, 540}},
+		{"replacement inserted in order", []int{1080, 540}, 720, []int{720, 540}},
+		{"no replacement height", []int{1080, 720}, 0, []int{720}},
+		{"nothing to remove", []int{720, 540}, 720, []int{720, 540}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replaceHeight(tt.heights, 1080, tt.with)
+			if len(got) != len(tt.want) {
+				t.Fatalf("replaceHeight(%v) = %v, want %v", tt.heights, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("replaceHeight(%v) = %v, want %v", tt.heights, got, tt.want)
+				}
+			}
+		})
 	}
 }
 

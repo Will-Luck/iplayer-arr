@@ -38,6 +38,7 @@ type vpidToStreamsResolver interface {
 
 type fhdProber interface {
 	ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (fhdURL string, found bool, err error)
+	VerifyFHD(ctx context.Context, hlsMasterURL string) (has1080 bool, maxListed int, err error)
 }
 
 type qualityCacheStore interface {
@@ -317,9 +318,31 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (hei
 	// internal/download/ffmpeg.go ~181 (log + fall through to bestURL)
 	// and the caching contract in ProbeHiddenFHD's doc string
 	// ("Callers that cache must NOT cache this branch").
+	//
+	// A 1080 that mediaselector itself reports is verified rather than
+	// trusted. On the iptv-all mediaset the single video element's
+	// height is the packaging profile, not an encoded rendition, so
+	// old programmes (Waterloo Road S05/S06) report 1080 while their
+	// HLS master tops out at 720p. Advertising that 1080p sent Sonarr
+	// a release whose download came back audio-only. When the claim
+	// fails verification the 1080 is swapped for the master's real
+	// top height; when it holds, that height is added beneath it so
+	// the feed carries a 720p fallback either way. GitHub #54.
 	fhdProbeTransientErr := false
-	if !containsInt(heights, 1080) && len(heights) > 0 && heights[0] >= 720 {
-		if bestHLS := pickBestHLSURL(streams.Video); bestHLS != "" {
+	if bestHLS := pickBestHLSURL(streams.Video); bestHLS != "" && len(heights) > 0 && heights[0] >= 720 {
+		if containsInt(heights, 1080) {
+			has1080, maxListed, err := p.fhdProber.VerifyFHD(probeCtx, bestHLS)
+			switch {
+			case err != nil:
+				log.Printf("quality probe: fhd verify transient err pid=%s err=%v (keeping %v, skipping cache)", item.PID, err, heights)
+				fhdProbeTransientErr = true
+			case !has1080 && maxListed > 0:
+				log.Printf("quality probe: mediaselector reports 1080 for pid=%s but BBC serves at most %dp (no hidden 1080p); advertising %dp", item.PID, maxListed, maxListed)
+				heights = replaceHeight(heights, 1080, maxListed)
+			case has1080 && maxListed > 0 && maxListed < 1080 && !containsInt(heights, maxListed):
+				heights = insertHeight(heights, maxListed)
+			}
+		} else {
 			_, found, err := p.fhdProber.ProbeHiddenFHD(probeCtx, bestHLS)
 			switch {
 			case err != nil:
@@ -387,6 +410,33 @@ func pickBestHLSURL(streams []VideoStream) string {
 		}
 	}
 	return bestURL
+}
+
+// replaceHeight returns heights with every occurrence of old removed and
+// with (when non-zero and not already present) inserted, keeping the
+// descending order the feed relies on. GitHub #54.
+func replaceHeight(heights []int, old, with int) []int {
+	out := make([]int, 0, len(heights)+1)
+	for _, h := range heights {
+		if h != old {
+			out = append(out, h)
+		}
+	}
+	if with > 0 {
+		out = insertHeight(out, with)
+	}
+	return out
+}
+
+// insertHeight returns heights with h added, deduplicated and sorted
+// descending.
+func insertHeight(heights []int, h int) []int {
+	if containsInt(heights, h) {
+		return heights
+	}
+	out := append(append([]int{}, heights...), h)
+	sort.Sort(sort.Reverse(sort.IntSlice(out)))
+	return out
 }
 
 func containsInt(haystack []int, needle int) bool {

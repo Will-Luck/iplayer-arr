@@ -258,6 +258,23 @@ func main() {
 		log.Printf("purged %d stale first-seen entries", n)
 	}
 
+	// One-off after GitHub #54: quality-cache rows written before the
+	// 1080 claim was verified may advertise a 1080p BBC cannot serve,
+	// and the cache has no TTL. Drop every row carrying 1080 once so
+	// those programmes re-probe under the new check; a marker key
+	// keeps this from running again.
+	const fhdVerifyPurgeKey = "quality_cache_fhd_verify_purged"
+	if done, _ := st.GetConfig(fhdVerifyPurgeKey); done != "1" {
+		if n, err := st.PurgeQualityCacheWithHeight(1080); err != nil {
+			log.Printf("WARNING: quality-cache 1080 purge failed: %v", err)
+		} else {
+			log.Printf("purged %d quality-cache rows carrying an unverified 1080p (GitHub #54); they re-probe on next search", n)
+			if err := st.SetConfig(fhdVerifyPurgeKey, "1"); err != nil {
+				log.Printf("WARNING: could not record quality-cache purge marker: %v", err)
+			}
+		}
+	}
+
 	// startup health checks
 	log.Println("running startup health checks...")
 

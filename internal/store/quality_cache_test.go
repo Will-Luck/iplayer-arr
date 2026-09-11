@@ -48,6 +48,49 @@ func TestQualityCache_PutGetRoundtrip(t *testing.T) {
 	}
 }
 
+// GitHub #54: rows written before the 1080 claim was verified may carry
+// a phantom 1080. The one-off upgrade purge drops exactly those rows and
+// leaves every other row untouched, so they re-probe under the new check.
+func TestQualityCache_PurgeWithHeight(t *testing.T) {
+	s := newTestStore(t)
+	rows := []*QualityCache{
+		{PID: "phantom1", ShowName: "waterloo road", Heights: []int{1080}},
+		{PID: "phantom2", ShowName: "waterloo road", Heights: []int{1080, 720}},
+		{PID: "hd", ShowName: "eastenders", Heights: []int{720, 540}},
+		{PID: "sd", ShowName: "old", Heights: []int{396}},
+		{PID: "empty", ShowName: "none", Heights: nil},
+	}
+	for _, r := range rows {
+		if err := s.PutQualityCache(r); err != nil {
+			t.Fatalf("put %s: %v", r.PID, err)
+		}
+	}
+
+	n, err := s.PurgeQualityCacheWithHeight(1080)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("expected 2 rows purged, got %d", n)
+	}
+	for _, pid := range []string{"phantom1", "phantom2"} {
+		if got, _ := s.GetQualityCache(pid); got != nil {
+			t.Errorf("expected %s purged, still present: %+v", pid, got)
+		}
+	}
+	for _, pid := range []string{"hd", "sd", "empty"} {
+		if got, _ := s.GetQualityCache(pid); got == nil {
+			t.Errorf("expected %s kept, but it was purged", pid)
+		}
+	}
+
+	// Idempotent: a second pass finds nothing.
+	n, err = s.PurgeQualityCacheWithHeight(1080)
+	if err != nil || n != 0 {
+		t.Errorf("second purge: n=%d err=%v, want 0 nil", n, err)
+	}
+}
+
 func TestQualityCache_GetMiss_NilNilNoError(t *testing.T) {
 	s := newTestStore(t)
 	got, err := s.GetQualityCache("b0notthere")

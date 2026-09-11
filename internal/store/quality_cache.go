@@ -43,6 +43,44 @@ func (s *Store) PutQualityCache(qc *QualityCache) error {
 	})
 }
 
+// PurgeQualityCacheWithHeight removes every cache entry whose Heights
+// contain h and returns how many were removed. Used once at startup
+// after the GitHub #54 upgrade: rows probed before the 1080 claim was
+// verified may carry a phantom 1080, and the cache has no TTL, so they
+// have to be dropped explicitly to re-probe under the new check.
+func (s *Store) PurgeQualityCacheWithHeight(h int) (int, error) {
+	purged := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketQualityCache)
+		var toDelete [][]byte
+		if err := b.ForEach(func(k, v []byte) error {
+			var qc QualityCache
+			if err := json.Unmarshal(v, &qc); err != nil {
+				return nil // skip malformed entries
+			}
+			for _, got := range qc.Heights {
+				if got == h {
+					key := make([]byte, len(k))
+					copy(key, k)
+					toDelete = append(toDelete, key)
+					break
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, k := range toDelete {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+		}
+		purged = len(toDelete)
+		return nil
+	})
+	return purged, err
+}
+
 // DeleteQualityCache removes the cache entry for a single PID.
 // Missing entries are treated as success.
 func (s *Store) DeleteQualityCache(pid string) error {
