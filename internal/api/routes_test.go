@@ -20,10 +20,9 @@ const probeSegment = "population-probe-x"
 // requested. Patterns here only ever carry a trailing {name...} wildcard,
 // so truncating at the brace and appending a filler segment is enough.
 func concreteProbePath(pattern string) string {
-	if i := strings.Index(pattern, "{"); i >= 0 {
-		return pattern[:i] + probeSegment
-	}
-	return pattern
+	// Replace every {wildcard} segment, keeping any literal suffix after
+	// it (e.g. "/api/downloads/{id}/move" must still end in "/move").
+	return regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(pattern, probeSegment)
 }
 
 // TestAPIRoutePopulationIsAuthenticatedOrAllowlisted is the regression

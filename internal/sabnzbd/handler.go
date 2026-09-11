@@ -157,6 +157,15 @@ func (h *Handler) handleQueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{"status": true})
 		return
 	}
+	// mode=queue&name=priority&value=<nzo_id>&value2=<priority> is
+	// SABnzbd's post-hoc priority change. Same mapping as the add-time
+	// parameter. GitHub #51.
+	if name == "priority" {
+		value := r.URL.Query().Get("value")
+		h.applySabPriority(value, r.URL.Query().Get("value2"))
+		writeJSON(w, map[string]interface{}{"status": true})
+		return
+	}
 
 	downloads, _ := h.store.ListDownloads()
 	var slots []map[string]interface{}
@@ -322,10 +331,49 @@ func (h *Handler) handleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sonarr sends its "Recent Priority" / "Older Priority" setting as
+	// SABnzbd's priority parameter on every add. Honour it as a queue
+	// move so a Force or High grab jumps the queue and a Low one waits
+	// at the back. GitHub #51.
+	h.applySabPriority(id, r.URL.Query().Get("priority"))
+
 	writeJSON(w, map[string]interface{}{
 		"status":  true,
 		"nzo_ids": []string{id},
 	})
+}
+
+// sabPriorityToMove maps SABnzbd's priority scale to a queue move.
+// SABnzbd: -100 default, -2 paused, -1 low, 0 normal, 1 high, 2 force.
+// Force and High both go to the top (iplayer-arr has one worker pool,
+// there is nothing between "next" and "soon"); Low goes to the bottom;
+// everything else leaves the natural order alone. Returns "" for no
+// move.
+func sabPriorityToMove(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "2", "1":
+		return store.MoveTop
+	case "-1":
+		return store.MoveBottom
+	default:
+		return ""
+	}
+}
+
+// applySabPriority applies a SABnzbd priority value to a queued download
+// as a move. Best-effort: a row that has already been claimed is left
+// alone, and errors are logged rather than failing the add, because the
+// download itself has been accepted.
+func (h *Handler) applySabPriority(nzoID, raw string) {
+	op := sabPriorityToMove(raw)
+	if op == "" || h.store == nil {
+		return
+	}
+	if _, err := h.store.MoveDownload(nzoID, op); err != nil {
+		log.Printf("[sabnzbd] priority %s for %s: %v (ignored)", raw, nzoID, err)
+		return
+	}
+	log.Printf("[sabnzbd] priority %s for %s: moved to %s", raw, nzoID, op)
 }
 
 func (h *Handler) extractFromRequest(r *http.Request) (pid, quality, nzbFilename string, err error) {

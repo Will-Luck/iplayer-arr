@@ -9,6 +9,7 @@ import type {
   SystemInfo,
   HistoryPage,
   HistoryStats,
+  QueueMove,
 } from "./types";
 import { authHeaders, UNAUTHORIZED_EVENT } from "./apikey";
 
@@ -150,6 +151,10 @@ export const api = {
     meta?: { subtitle?: string; series?: number; episodeNum?: number; position?: number; airDate?: string },
   ) => post<{ id: string }>("/api/download", { pid, quality, title, category, ...meta }),
   cancelDownload: (id: string) => del(`/api/downloads/${encodeURIComponent(id)}`),
+  // Reposition a pending download; resolves with the pending queue in
+  // its new order. GitHub #51.
+  moveDownload: (id: string, to: QueueMove) =>
+    post<Download[]>(`/api/downloads/${encodeURIComponent(id)}/move`, { to }),
 
   // History
   listHistory: (params?: Record<string, string>) => get<HistoryPage>("/api/history", params),

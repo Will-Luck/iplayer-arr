@@ -45,6 +45,18 @@ const PATHS: Record<string, Renderer> = {
   ),
   "chevron-up": () => <polyline points="18 15 12 9 6 15" />,
   "chevron-down": () => <polyline points="6 9 12 15 18 9" />,
+  "chevrons-up": () => (
+    <>
+      <polyline points="17 11 12 6 7 11" />
+      <polyline points="17 18 12 13 7 18" />
+    </>
+  ),
+  "chevrons-down": () => (
+    <>
+      <polyline points="7 13 12 18 17 13" />
+      <polyline points="7 6 12 11 17 6" />
+    </>
+  ),
   refresh: () => (
     <>
       <polyline points="23 4 23 10 17 10" />

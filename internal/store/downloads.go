@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -99,6 +100,12 @@ func (s *Store) ListDownloads() ([]*Download, error) {
 func sortDownloadQueue(dls []*Download) {
 	sort.Slice(dls, func(i, j int) bool {
 		a, b := dls[i], dls[j]
+		// Operator-set priority wins over the natural order so a moved
+		// row jumps its show grouping. Ties (the common case, all zero)
+		// fall through to the episode-order keys. GitHub #51.
+		if a.Priority != b.Priority {
+			return a.Priority > b.Priority
+		}
 		if a.ShowName != b.ShowName {
 			return a.ShowName < b.ShowName
 		}
@@ -118,6 +125,149 @@ func sortDownloadQueue(dls []*Download) {
 		// the ordering total.
 		return a.ID < b.ID
 	})
+}
+
+// Queue move operations accepted by MoveDownload.
+const (
+	MoveTop    = "top"
+	MoveUp     = "up"
+	MoveDown   = "down"
+	MoveBottom = "bottom"
+)
+
+var (
+	ErrDownloadNotFound   = errors.New("download not found")
+	ErrDownloadNotPending = errors.New("download is not pending")
+	ErrInvalidMove        = errors.New("invalid move")
+)
+
+// MoveDownload repositions one pending download within the pending
+// queue and returns the queue in its new order. GitHub #51.
+//
+// Only pending rows take part. A row that is resolving, downloading,
+// converting, or failed-awaiting-retry is already past the point where
+// order matters (the worker has claimed it, or the retry clock decides),
+// so moving it is refused with ErrDownloadNotPending rather than
+// silently reordering something the caller cannot see move.
+//
+// The pending rows are read, sorted with the same comparator the claim
+// loop uses, the target is shifted to its new index, and every pending
+// row is renumbered so Priority runs from len at the front down to 1
+// at the back. That materialises the whole order explicitly, so "up"
+// swaps exactly one neighbour even when the two rows tied on Priority,
+// and the result survives restarts. The back row stops at 1, never 0,
+// so rows that arrive after a renumber (Priority 0) always append
+// behind the arranged block instead of sorting into it by show name,
+// which is the behaviour an operator who just arranged the queue
+// expects.
+//
+// The read, shift and writes happen inside one Bolt update transaction,
+// so a worker claim cannot interleave: either the worker's status write
+// lands before this and the row is refused as not pending, or it lands
+// after and overwrites only the row it holds, whose Priority no longer
+// matters because it has been claimed.
+func (s *Store) MoveDownload(id, op string) ([]*Download, error) {
+	switch op {
+	case MoveTop, MoveUp, MoveDown, MoveBottom:
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidMove, op)
+	}
+
+	var pending []*Download
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketDownloads)
+		pending = pending[:0]
+		var target *Download
+		if err := b.ForEach(func(k, v []byte) error {
+			var dl Download
+			if err := json.Unmarshal(v, &dl); err != nil {
+				return err
+			}
+			if dl.ID == id {
+				target = &dl
+			}
+			if dl.Status == StatusPending {
+				pending = append(pending, &dl)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if target == nil {
+			return ErrDownloadNotFound
+		}
+		if target.Status != StatusPending {
+			return ErrDownloadNotPending
+		}
+
+		sortDownloadQueue(pending)
+		idx := -1
+		for i, dl := range pending {
+			if dl.ID == id {
+				idx = i
+				break
+			}
+		}
+		newIdx := idx
+		switch op {
+		case MoveTop:
+			newIdx = 0
+		case MoveUp:
+			newIdx = idx - 1
+		case MoveDown:
+			newIdx = idx + 1
+		case MoveBottom:
+			newIdx = len(pending) - 1
+		}
+		if newIdx < 0 {
+			newIdx = 0
+		}
+		if newIdx > len(pending)-1 {
+			newIdx = len(pending) - 1
+		}
+		if newIdx != idx {
+			moved := pending[idx]
+			pending = append(pending[:idx], pending[idx+1:]...)
+			pending = append(pending[:newIdx], append([]*Download{moved}, pending[newIdx:]...)...)
+		}
+
+		for i, dl := range pending {
+			want := len(pending) - i
+			if dl.Priority == want {
+				continue
+			}
+			dl.Priority = want
+			data, err := json.Marshal(dl)
+			if err != nil {
+				return fmt.Errorf("marshal download: %w", err)
+			}
+			if err := b.Put([]byte(dl.ID), data); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pending, nil
+}
+
+// PendingDownloads returns the pending rows in claim order, the same
+// slice MoveDownload returns, for callers that need the queue after a
+// change made elsewhere.
+func (s *Store) PendingDownloads() ([]*Download, error) {
+	all, err := s.ListDownloads()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Download, 0, len(all))
+	for _, dl := range all {
+		if dl.Status == StatusPending {
+			out = append(out, dl)
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) DeleteDownload(id string) error {

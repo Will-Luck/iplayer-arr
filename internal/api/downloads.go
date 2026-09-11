@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -224,6 +225,51 @@ func (h *Handler) handleManualDownload(w http.ResponseWriter, r *http.Request) {
 // distinguish "already finished" from "never existed". Same trust model
 // as handleDeleteHistory and handleDeleteDirectory: the dashboard surface
 // is unauthenticated. Issue #27.
+// handleMoveDownload serves POST /api/downloads/{id}/move with body
+// {"to": "top" | "up" | "down" | "bottom"}. It repositions one pending
+// download in the queue and returns the pending queue in its new order,
+// which the dashboard renders directly. Other connected dashboards get
+// the same list on the queue:reordered SSE event. A row that is no
+// longer pending (claimed by a worker, or failed and waiting on its
+// retry clock) is refused with 409 rather than moved, because its
+// position no longer decides anything. GitHub #51.
+func (h *Handler) handleMoveDownload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		return
+	}
+	var req struct {
+		To string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	queue, err := h.store.MoveDownload(id, req.To)
+	switch {
+	case errors.Is(err, store.ErrInvalidMove):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to must be one of top, up, down, bottom"})
+		return
+	case errors.Is(err, store.ErrDownloadNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "download not found"})
+		return
+	case errors.Is(err, store.ErrDownloadNotPending):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "download is no longer pending"})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if queue == nil {
+		queue = []*store.Download{}
+	}
+	if h.hub != nil {
+		h.hub.Broadcast("queue:reordered", queue)
+	}
+	writeJSON(w, http.StatusOK, queue)
+}
+
 func (h *Handler) handleCancelDownload(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/downloads/")
 	id = strings.TrimSuffix(id, "/")

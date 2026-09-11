@@ -1,5 +1,5 @@
 import { createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
-import type { Download, StatusResponse, SystemInfo, HistoryStats } from "../types";
+import type { Download, StatusResponse, SystemInfo, HistoryStats, QueueMove } from "../types";
 import { api } from "../api";
 import { connectSSE } from "../sse";
 import { confirmDialog } from "../confirm";
@@ -300,6 +300,27 @@ export default function Dashboard() {
     }
   }
 
+  // Reposition a pending download in the queue. The server answers with
+  // the whole pending queue in its new order, which replaces the local
+  // list outright; there is no optimistic shuffle because the server's
+  // renumbering is the only source of truth for where a row lands. A
+  // 409 means a worker claimed the row between render and click, so the
+  // list is reloaded to show that. GitHub #51.
+  async function moveDownload(dl: Download, to: QueueMove) {
+    const key = `move:${dl.id}`;
+    if (isPending(key)) return;
+    markPending(key);
+    try {
+      const next = await api.moveDownload(dl.id, to);
+      setQueue(next);
+    } catch (e) {
+      addToast("error", e instanceof Error ? e.message : "Failed to move download");
+      loadData();
+    } finally {
+      unmarkPending(key);
+    }
+  }
+
   function splitDownloads(downloads: Download[]) {
     const act: Download[] = [];
     const q: Download[] = [];
@@ -457,6 +478,11 @@ export default function Dashboard() {
         const d = data as { paused: boolean };
         setPaused(d.paused);
       },
+      // Another dashboard (or Sonarr via a SABnzbd priority) reordered
+      // the queue; take the server's list as is. GitHub #51.
+      "queue:reordered": (data) => {
+        setQueue(data as Download[]);
+      },
       "download:failed": (data) => {
         const dl = data as Download;
         setActive((prev) => {
@@ -613,7 +639,7 @@ export default function Dashboard() {
           <Card.Body padded={false}>
             <div class="max-h-[300px] overflow-y-auto">
               <For each={queue()}>
-                {(dl) => (
+                {(dl, index) => (
                   <div class="border-b border-border-subtle px-4 py-3 last:border-b-0">
                     <div class="mb-1 flex items-center justify-between gap-3">
                       <span class="truncate text-sm font-medium">
@@ -621,6 +647,40 @@ export default function Dashboard() {
                       </span>
                       <div class="flex shrink-0 items-center gap-2">
                         <Badge variant="pending">pending</Badge>
+                        <div class="flex items-center" role="group" aria-label={`Reorder ${dl.title || dl.pid}`}>
+                          <IconButton
+                            icon="chevrons-up"
+                            size="sm"
+                            aria-label={`Move ${dl.title || dl.pid} to the top of the queue`}
+                            title="Move to top"
+                            disabled={index() === 0 || isPending(`move:${dl.id}`)}
+                            onClick={() => moveDownload(dl, "top")}
+                          />
+                          <IconButton
+                            icon="chevron-up"
+                            size="sm"
+                            aria-label={`Move ${dl.title || dl.pid} up one place`}
+                            title="Move up"
+                            disabled={index() === 0 || isPending(`move:${dl.id}`)}
+                            onClick={() => moveDownload(dl, "up")}
+                          />
+                          <IconButton
+                            icon="chevron-down"
+                            size="sm"
+                            aria-label={`Move ${dl.title || dl.pid} down one place`}
+                            title="Move down"
+                            disabled={index() === queue().length - 1 || isPending(`move:${dl.id}`)}
+                            onClick={() => moveDownload(dl, "down")}
+                          />
+                          <IconButton
+                            icon="chevrons-down"
+                            size="sm"
+                            aria-label={`Move ${dl.title || dl.pid} to the bottom of the queue`}
+                            title="Move to bottom"
+                            disabled={index() === queue().length - 1 || isPending(`move:${dl.id}`)}
+                            onClick={() => moveDownload(dl, "bottom")}
+                          />
+                        </div>
                         <IconButton
                           icon="cross"
                           tone="danger"

@@ -1,3 +1,5 @@
+export type QueueMove = "top" | "up" | "down" | "bottom";
+
 export interface Download {
   id: string;
   pid: string;
@@ -23,6 +25,7 @@ export interface Download {
   failure_code: string;
   retryable: boolean;
   retry_count: number;
+  priority: number;
   created_at: string;
   started_at: string;
   completed_at: string;

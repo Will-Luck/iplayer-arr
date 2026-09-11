@@ -98,6 +98,7 @@ func (h *Handler) registerRoutes(rr *routeRegistry) {
 	rr.handle("GET", "/api/downloads/directory", h.handleListDirectory, true)
 	rr.handle("DELETE", "/api/downloads/directory/{folder...}", h.handleDeleteDirectory, true)
 	rr.handle("DELETE", "/api/downloads/{id...}", h.handleCancelDownload, true)
+	rr.handle("POST", "/api/downloads/{id}/move", h.handleMoveDownload, true)
 	rr.handle("POST", "/api/download", h.handleManualDownload, true)
 	rr.handle("POST", "/api/pause", h.handlePause, true)
 	rr.handle("POST", "/api/resume", h.handleResume, true)

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The pending queue can be reordered from the dashboard. Each queued row
+  has move-to-top, up, down and move-to-bottom controls, and the worker
+  claims in the order shown, so a season grab can be told which episode
+  to fetch next. The order is stored, survives a restart, and is shared
+  live with every open dashboard. Rows a worker has already picked up
+  cannot be moved (the request is refused rather than pretending), and
+  grabs that arrive after the queue has been arranged join the back of
+  it rather than slotting in by show name. Completes #51.
+- Sonarr's "Recent Priority" and "Older Priority" download-client
+  settings now take effect. A grab sent as Force or High goes to the
+  front of the queue, Low goes to the back, Normal keeps episode order.
+  SABnzbd's post-hoc `queue&name=priority` call is honoured the same way.
+
 ## [1.7.3] - 2026-09-11
 
 ### Fixed

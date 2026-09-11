@@ -45,11 +45,17 @@ type Download struct {
 	// synchronised season-grab cluster cannot silently burn its stall budget
 	// and be lost. Bounded by maxStallCredits so a genuinely dead stream
 	// still reaches permanence and is handed to Sonarr for re-grab. GitHub #50.
-	StallCredits int       `json:"stall_credits"`
-	CreatedAt    time.Time `json:"created_at"`
-	StartedAt    time.Time `json:"started_at"`
-	CompletedAt  time.Time `json:"completed_at"`
-	FileExists   *bool     `json:"file_exists,omitempty"`
+	StallCredits int `json:"stall_credits"`
+	// Priority orders the pending queue ahead of every other key: a
+	// higher value is claimed sooner. Zero is the default for every
+	// arrival, so untouched queues keep the show/season/episode order.
+	// MoveDownload renumbers the pending rows when the operator (or a
+	// SABnzbd priority from Sonarr) repositions one. GitHub #51.
+	Priority    int       `json:"priority"`
+	CreatedAt   time.Time `json:"created_at"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at"`
+	FileExists  *bool     `json:"file_exists,omitempty"`
 }
 
 type Programme struct {
