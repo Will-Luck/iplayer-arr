@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-09-11
+
 ### Fixed
 - Older programmes are no longer advertised at 1080p when the BBC cannot
   serve it, and a 1080p grab of one no longer fails first and falls back.
