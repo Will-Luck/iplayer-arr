@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -545,5 +546,112 @@ func TestProcessDownload_AllSuppliersRefusedFallsBack(t *testing.T) {
 	}
 	if hist.CDNFailures != 0 {
 		t.Errorf("history CDNFailures = %d, want 0", hist.CDNFailures)
+	}
+}
+
+// writeFakeFFprobe puts an ffprobe on PATH that reports a 720-line video
+// stream, so a completed attempt does not depend on a real ffprobe.
+func writeFakeFFprobe(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ffprobe"), []byte("#!/bin/sh\necho 720\n"), 0o755); err != nil {
+		t.Fatalf("write fake ffprobe: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// succeedWithOutput wraps ff so that a nil error also leaves a (sparse)
+// output file large enough to clear the truncation gate.
+func succeedWithOutput(ff *fakeFFmpeg) func(context.Context, FFmpegJob) error {
+	return func(ctx context.Context, job FFmpegJob) error {
+		if err := ff.run(ctx, job); err != nil {
+			return err
+		}
+		f, err := os.Create(job.OutputPath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		return f.Truncate(200 << 20)
+	}
+}
+
+// A download that succeeds on a retry must not carry the earlier attempt's
+// failure into history: no failure code, error, retry flag or retry time.
+// The counters and the supplier record stay. GitHub #55 follow-up.
+func TestProcessDownload_RetrySuccessClearsFailureState(t *testing.T) {
+	cases := []struct {
+		name            string
+		firstErr        error
+		wantCDNFailures int
+		wantFailed      []string
+		wantSupplier    string
+	}{
+		{
+			name:            "after a supplier refusal",
+			firstErr:        errors.New("ffmpeg: exit status 8 | stderr: Error opening input files: Server returned 403 Forbidden (access denied)"),
+			wantCDNFailures: 0,
+			wantFailed:      []string{"mf_akamai"},
+			wantSupplier:    "mf_cloudfront",
+		},
+		{
+			name:            "after a CDN failure",
+			firstErr:        errors.New("ffmpeg: exit status 1 | stderr: Invalid data found when processing input"),
+			wantCDNFailures: 1,
+			wantFailed:      nil,
+			wantSupplier:    "mf_akamai",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeFakeFFprobe(t)
+			m, st := newSupplierHarness(t, mediaXML("mf_akamai", "mf_cloudfront"))
+			ff := &fakeFFmpeg{errs: []error{tc.firstErr, nil}}
+			m.runFFmpeg = succeedWithOutput(ff)
+
+			dl := enqueueAndGet(t, m, st, "b055ok", "720p")
+			m.processDownload(context.Background(), dl)
+			if dl.Status != store.StatusFailed || !dl.Retryable || dl.RetryAfter.IsZero() || dl.FailureCode == "" {
+				t.Fatalf("first attempt: Status=%q Retryable=%v RetryAfter=%v FailureCode=%q, want a retryable failure",
+					dl.Status, dl.Retryable, dl.RetryAfter, dl.FailureCode)
+			}
+
+			m.processDownload(context.Background(), dl)
+
+			if len(ff.jobs) != 2 {
+				t.Fatalf("ffmpeg ran %d times, want 2", len(ff.jobs))
+			}
+			hist, err := st.GetHistory(dl.ID)
+			if err != nil || hist == nil {
+				t.Fatalf("GetHistory: %v, %v", hist, err)
+			}
+			if hist.Status != store.StatusCompleted {
+				t.Fatalf("history Status = %q, want %q", hist.Status, store.StatusCompleted)
+			}
+			if hist.FailureCode != "" {
+				t.Errorf("history FailureCode = %q, want empty", hist.FailureCode)
+			}
+			if hist.Error != "" {
+				t.Errorf("history Error = %q, want empty", hist.Error)
+			}
+			if hist.Retryable {
+				t.Error("history Retryable = true, want false")
+			}
+			if !hist.RetryAfter.IsZero() {
+				t.Errorf("history RetryAfter = %v, want zero", hist.RetryAfter)
+			}
+			if hist.RetryCount != 1 {
+				t.Errorf("history RetryCount = %d, want 1 (kept as a record)", hist.RetryCount)
+			}
+			if hist.CDNFailures != tc.wantCDNFailures {
+				t.Errorf("history CDNFailures = %d, want %d (kept as a record)", hist.CDNFailures, tc.wantCDNFailures)
+			}
+			if !reflect.DeepEqual(hist.FailedSuppliers, tc.wantFailed) {
+				t.Errorf("history FailedSuppliers = %v, want %v (kept as a record)", hist.FailedSuppliers, tc.wantFailed)
+			}
+			if hist.Supplier != tc.wantSupplier {
+				t.Errorf("history Supplier = %q, want %q", hist.Supplier, tc.wantSupplier)
+			}
+		})
 	}
 }

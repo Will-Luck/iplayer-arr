@@ -353,6 +353,14 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	dl.Status = store.StatusCompleted
 	dl.Progress = 100
 	dl.CompletedAt = time.Now()
+	// A retry that succeeds drops the earlier attempt's failure, so the
+	// history row does not read as a pending retry. RetryCount,
+	// CDNFailures, Supplier and FailedSuppliers stay as a record of how
+	// the download got here. GitHub #55.
+	dl.FailureCode = ""
+	dl.Error = ""
+	dl.Retryable = false
+	dl.RetryAfter = time.Time{}
 	if err := m.store.PutDownload(dl); err != nil {
 		log.Printf("store update on complete: %v", err)
 	}
