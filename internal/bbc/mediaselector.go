@@ -193,7 +193,10 @@ func (ms *MediaSelector) parseResponse(body []byte) (*StreamSet, error) {
 		}
 	}
 
-	sort.Slice(result.Video, func(i, j int) bool {
+	// Stable, so streams of equal height and bitrate keep mediaselector's
+	// order and the downloader's "first HLS entry" is the first supplier
+	// the BBC listed. sort.Slice only keeps it for 12 or fewer entries.
+	sort.SliceStable(result.Video, func(i, j int) bool {
 		if result.Video[i].Height != result.Video[j].Height {
 			return result.Video[i].Height > result.Video[j].Height
 		}
