@@ -1,0 +1,3 @@
+[in#0 @ 0x7dc44266d8c0] Error opening input: Server returned 4XX Client Error, but not one of 40{0,1,3,4}
+Error opening input file http://media.cdn.test:8000/s410/master.m3u8.
+Error opening input files: Server returned 4XX Client Error, but not one of 40{0,1,3,4}

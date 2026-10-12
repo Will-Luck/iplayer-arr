@@ -1,0 +1,3 @@
+[in#0 @ 0x7dc4bb10c8c0] Error opening input: Server returned 401 Unauthorized (authorization failed)
+Error opening input file http://media.cdn.test:8000/s401/master.m3u8.
+Error opening input files: Server returned 401 Unauthorized (authorization failed)

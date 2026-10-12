@@ -1,0 +1,9 @@
+[tcp @ 0x71ba47bd8ec0] Connection to tcp://media.cdn.test:8001 failed: Connection refused
+[tcp @ 0x71ba47aeaec0] Connection to tcp://media.cdn.test:8001 failed: Connection refused
+[tcp @ 0x71ba47a9fe40] Connection to tcp://media.cdn.test:8001 failed: Connection refused
+[tcp @ 0x57c85be49f00] Connection to tcp://media.cdn.test:8001 failed: Connection refused
+[tcp @ 0x71ba47a91ec0] Connection to tcp://media.cdn.test:8001 failed: Connection refused
+[tcp @ 0x71ba47947f00] Connection to tcp://media.cdn.test:8001 failed: Connection refused
+[in#0 @ 0x71ba432748c0] Error opening input: Connection refused
+Error opening input file http://media.cdn.test:8001/master.m3u8.
+Error opening input files: Connection refused

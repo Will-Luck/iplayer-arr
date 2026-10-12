@@ -1,6 +1,8 @@
 package download
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -272,6 +274,56 @@ func TestSupplierRefusal(t *testing.T) {
 			reason, ok := supplierRefusal(c.err)
 			if ok != c.wantOK || reason != c.wantReason {
 				t.Errorf("supplierRefusal() = (%q, %v), want (%q, %v)", reason, ok, c.wantReason, c.wantOK)
+			}
+		})
+	}
+}
+
+// The testdata files are stderr captured from the app image's ffmpeg 8.0.1
+// (Alpine), run with buildFFmpegArgs' arguments against a local server that
+// answered each status, a closed port, and a name that does not resolve.
+// Each capture goes through RunFFmpeg's own line split, progress filter,
+// diagnostic tail and error wrapping, so the matcher sees what the worker
+// sees. GitHub #55.
+func TestSupplierRefusal_RealFFmpegStderr(t *testing.T) {
+	cases := []struct {
+		file       string
+		exit       int
+		wantReason string
+		wantOK     bool
+	}{
+		{"http-401.txt", 8, "HTTP 401", true},
+		{"http-403.txt", 8, "HTTP 403", true},
+		{"http-404.txt", 8, "HTTP 404", true},
+		{"http-410.txt", 8, "HTTP 4xx", true},
+		{"http-429.txt", 8, "HTTP 429", true},
+		{"connection-refused.txt", 145, "connection refused", true},
+		{"dns-failure.txt", 251, "DNS failure", true},
+		{"http-500.txt", 8, "", false},
+		// A 200 playlist whose segment answers 403: at -loglevel error
+		// ffmpeg only reports invalid data, so this keeps the degrade path.
+		{"segment-403.txt", 183, "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.file, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join("testdata", "ffmpeg-8.0.1-stderr", c.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var diag []string
+			sc := bufio.NewScanner(bytes.NewReader(raw))
+			sc.Split(scanFFmpegLines)
+			for sc.Scan() {
+				if _, ok := parseProgress(sc.Text()); ok {
+					continue
+				}
+				diag = appendDiagLine(diag, sc.Text(), ffmpegStderrTail)
+			}
+			runErr := wrapRunError(fmt.Errorf("exit status %d", c.exit), false, diag)
+
+			reason, ok := supplierRefusal(runErr)
+			if ok != c.wantOK || reason != c.wantReason {
+				t.Errorf("supplierRefusal(%q) = (%q, %v), want (%q, %v)", runErr, reason, ok, c.wantReason, c.wantOK)
 			}
 		})
 	}

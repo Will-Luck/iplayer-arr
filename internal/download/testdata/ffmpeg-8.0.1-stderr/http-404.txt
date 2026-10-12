@@ -1,0 +1,3 @@
+[in#0 @ 0x735f1bc9b8c0] Error opening input: Server returned 404 Not Found
+Error opening input file http://media.cdn.test:8000/s404/master.m3u8.
+Error opening input files: Server returned 404 Not Found

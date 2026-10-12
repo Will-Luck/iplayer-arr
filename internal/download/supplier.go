@@ -35,7 +35,9 @@ func (e *supplierRefusedError) Unwrap() error { return e.Err }
 // strings from libavutil/error.c ("Server returned 403 Forbidden (access
 // denied)", and "Server returned 4XX Client Error, but not one of
 // 40{0,1,3,4}" for codes it has no name for, such as 410) and the http
-// protocol's "HTTP error 403 Forbidden" line.
+// protocol's "HTTP error 403 Forbidden" line. That last one is a warning,
+// so it never reaches the tail at the -loglevel error that buildFFmpegArgs
+// sets. testdata/ffmpeg-8.0.1-stderr holds the real output.
 var ffmpegHTTP4xxRe = regexp.MustCompile(`(?:Server returned|HTTP error) (4\d\d|4XX)\b`)
 
 // supplierRefusal reports whether a failed ffmpeg run was the supplier

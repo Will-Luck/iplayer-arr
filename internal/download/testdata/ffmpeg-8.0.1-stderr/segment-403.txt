@@ -1,0 +1,4 @@
+[hls @ 0x7dc5c688e380] Error when loading first segment 'http://media.cdn.test:8000/seg403/seg0.ts'
+[in#0 @ 0x7dc5c20188c0] Error opening input: Invalid data found when processing input
+Error opening input file http://media.cdn.test:8000/seg403/media.m3u8.
+Error opening input files: Invalid data found when processing input

@@ -1,0 +1,3 @@
+[in#0 @ 0x7e78926848c0] Error opening input: Server returned 429 Too Many Requests
+Error opening input file http://media.cdn.test:8000/s429/master.m3u8.
+Error opening input files: Server returned 429 Too Many Requests

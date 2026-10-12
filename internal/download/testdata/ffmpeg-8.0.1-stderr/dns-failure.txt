@@ -1,0 +1,9 @@
+[tcp @ 0x7986cc89fec0] Failed to resolve hostname missing.cdn.invalid: Name does not resolve
+[tcp @ 0x7986cc7b1ec0] Failed to resolve hostname missing.cdn.invalid: Name does not resolve
+[tcp @ 0x7986cc766e40] Failed to resolve hostname missing.cdn.invalid: Name does not resolve
+[tcp @ 0x5f03095f4f00] Failed to resolve hostname missing.cdn.invalid: Name does not resolve
+[tcp @ 0x7986cc758ec0] Failed to resolve hostname missing.cdn.invalid: Name does not resolve
+[tcp @ 0x7986cc60ef00] Failed to resolve hostname missing.cdn.invalid: Name does not resolve
+[in#0 @ 0x7986c7f3b8c0] Error opening input: I/O error
+Error opening input file http://missing.cdn.invalid/master.m3u8.
+Error opening input files: I/O error

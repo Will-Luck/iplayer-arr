@@ -1,0 +1,3 @@
+[in#0 @ 0x74a4162888c0] Error opening input: Server returned 5XX Server Error reply
+Error opening input file http://media.cdn.test:8000/s500/master.m3u8.
+Error opening input files: Server returned 5XX Server Error reply
