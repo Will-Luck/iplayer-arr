@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -233,6 +236,49 @@ func TestResolveHLSVariant_CancelledContextIsNotARefusal(t *testing.T) {
 	}
 	if prober.calls != 0 {
 		t.Errorf("FHD probe ran %d time(s) on a cancelled ctx, want 0", prober.calls)
+	}
+}
+
+// GitHub #55: RunFFmpeg hands the *MasterPlaylistError back to the worker
+// and never starts ffmpeg on the refused master URL. A fake ffmpeg on PATH
+// leaves a marker if it is run at all.
+func TestRunFFmpeg_RefusedMasterNeverReachesFFmpeg(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Error(w, "Forbidden", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	binDir := t.TempDir()
+	marker := filepath.Join(binDir, "ffmpeg-ran")
+	script := fmt.Sprintf("#!/bin/sh\ntouch '%s'\nexit 1\n", marker)
+	if err := os.WriteFile(filepath.Join(binDir, "ffmpeg"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake ffmpeg: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	job := FFmpegJob{
+		StreamURL:    srv.URL + "/vod/master.m3u8",
+		OutputPath:   filepath.Join(t.TempDir(), "out.mp4"),
+		TargetHeight: 720,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := RunFFmpeg(ctx, job)
+
+	var mpErr *MasterPlaylistError
+	if !errors.As(err, &mpErr) {
+		t.Fatalf("RunFFmpeg err = %v (%T), want *MasterPlaylistError", err, err)
+	}
+	if mpErr.Status != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", mpErr.Status, http.StatusForbidden)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Error("ffmpeg ran on the refused master URL")
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("master URL fetched %d time(s), want 1 (the variant lookup only)", n)
 	}
 }
 
