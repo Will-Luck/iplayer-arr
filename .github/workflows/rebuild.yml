@@ -126,6 +126,10 @@ jobs:
           load: true
           platforms: linux/amd64
           tags: iplayer-arr:rebuild-candidate
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.version.outputs.build_date }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             BUILD_DATE=${{ steps.version.outputs.build_date }}
@@ -153,6 +157,10 @@ jobs:
           fi
           echo "VPN tooling present: wg, wg-quick"
 
+      # The labels override the revision, created and version labels the
+      # image would otherwise inherit from ghcr.io/hotio/base, which name
+      # hotio's commit and build rather than ours. release.yml gets the same
+      # three from docker/metadata-action. GitHub #55.
       - uses: docker/build-push-action@v6
         if: steps.check.outputs.changed == 'true'
         with:
@@ -162,6 +170,10 @@ jobs:
           tags: |
             ghcr.io/will-luck/iplayer-arr:latest
             docker.io/willluck/iplayer-arr:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.version.outputs.build_date }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             BUILD_DATE=${{ steps.version.outputs.build_date }}
