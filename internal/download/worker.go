@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -134,18 +135,12 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	// effectiveQual only diverges from it on an actual degrade, so the
 	// first attempt is byte-for-byte the prior behaviour.
 	// FailCodeStalled is deliberately excluded from the gate; see
-	// shouldDegrade. Issue #56.
-	targetHeight := qualityToHeight(dl.Quality)
-	effectiveQual := dl.Quality
-	if shouldDegrade(dl) {
-		if degraded := degradeHeight(targetHeight, dl.CDNFailures); degraded != targetHeight {
-			log.Printf("download %s: degrading quality after %d CDN failure(s): %dp -> %dp",
-				dl.ID, dl.CDNFailures, targetHeight, degraded)
-			targetHeight = degraded
-			if tag := heightToQualityTag(targetHeight); tag != "" {
-				effectiveQual = tag
-			}
-		}
+	// shouldDegrade. Issue #56. A supplier refusal does not count either;
+	// it changes supplier instead (GitHub #55).
+	targetHeight, effectiveQual := attemptQuality(dl)
+	if requested := qualityToHeight(dl.Quality); targetHeight != requested {
+		log.Printf("download %s: degrading quality after %d CDN failure(s): %dp -> %dp",
+			dl.ID, dl.CDNFailures, requested, targetHeight)
 	}
 
 	// 1. Resolve playlist
@@ -187,13 +182,24 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		return
 	}
 
-	// 3. Pick stream matching requested quality
+	// 3. Pick stream matching requested quality, avoiding any supplier
+	// that refused an earlier attempt. GitHub #55.
 	for _, s := range streams.Video {
 		log.Printf("available stream: %dx%d %dkbps fmt=%s supplier=%s", s.Width, s.Height, s.Bitrate, s.Format, s.Supplier)
 	}
-	stream := pickStream(streams.Video, effectiveQual)
-	log.Printf("picked stream: %dx%d %dkbps fmt=%s (requested %s, effective %s)", stream.Width, stream.Height, stream.Bitrate, stream.Format, dl.Quality, effectiveQual)
+	stream := pickStream(streams.Video, effectiveQual, dl.FailedSuppliers...)
+	log.Printf("picked stream: %dx%d %dkbps fmt=%s supplier=%s (requested %s, effective %s)", stream.Width, stream.Height, stream.Bitrate, stream.Format, stream.Supplier, dl.Quality, effectiveQual)
+	if len(dl.FailedSuppliers) > 0 {
+		if slices.Contains(dl.FailedSuppliers, stream.Supplier) {
+			log.Printf("download %s: every supplier offering this stream has refused before (%s); trying %s again",
+				dl.ID, strings.Join(dl.FailedSuppliers, ", "), stream.Supplier)
+		} else {
+			log.Printf("download %s: avoiding supplier(s) that refused before: %s",
+				dl.ID, strings.Join(dl.FailedSuppliers, ", "))
+		}
+	}
 	dl.StreamURL = stream.URL
+	dl.Supplier = stream.Supplier
 	if err := m.store.PutDownload(dl); err != nil {
 		log.Printf("store update after stream pick: %v", err)
 	}
@@ -262,6 +268,17 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 			// stall itself is seen in-cooldown and has its budget frozen.
 			m.throttle.recordStall(dl.ID)
 			m.failDownload(dl, store.FailCodeStalled, ffErr)
+			return
+		}
+		// The supplier refused the stream (HTTP 4xx, connection refused,
+		// DNS failure): keep the ffmpeg_error code, but record the supplier
+		// so the next attempt picks another one at the same quality instead
+		// of degrading. GitHub #55.
+		if reason, ok := supplierRefusal(ffErr); ok {
+			m.failDownload(dl, store.FailCodeFFmpeg, &supplierRefusedError{
+				Supplier: stream.Supplier, Reason: reason, Err: ffErr,
+			})
+			logSupplierRefusal(dl, stream.Supplier, reason, streams.Video)
 			return
 		}
 		m.failDownload(dl, store.FailCodeFFmpeg, ffErr)
@@ -401,7 +418,14 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 		}
 	default:
 		dl.RetryCount++
-		if code == store.FailCodeFFmpeg || code == store.FailCodeTruncated {
+		// A supplier refusal is recorded against the supplier instead of
+		// CDNFailures: it says nothing about whether the rendition was too
+		// big, so the next attempt changes supplier, not quality. The code
+		// and the retry budget are unchanged. GitHub #55.
+		var refusal *supplierRefusedError
+		if errors.As(err, &refusal) {
+			dl.FailedSuppliers = addFailedSupplier(dl.FailedSuppliers, refusal.Supplier)
+		} else if code == store.FailCodeFFmpeg || code == store.FailCodeTruncated {
 			dl.CDNFailures++
 		}
 		dl.Retryable = dl.RetryCount < maxRetries
@@ -490,39 +514,51 @@ func (m *Manager) release(id string) {
 }
 
 // pickStream selects the stream matching the requested quality string.
-// Quality strings are like "720p", "1080p", "480p". If no exact match,
-// pick the closest available stream (preferring the best quality).
-func pickStream(streams []bbc.VideoStream, quality string) bbc.VideoStream {
+// Quality strings are like "720p", "1080p", "480p". The candidates are the
+// streams at the smallest height distance from the request (the exact
+// height when one is listed). Among them the first HLS entry wins, else the
+// first entry, in mediaselector order: the exact-match and closest-match
+// cases agree on the first, not the last (GitHub PR #56). HLS is
+// preferred because resolveHLSVariant can probe for unlisted 1080p
+// variants that BBC hides from manifests.
+//
+// excluded names suppliers that refused an earlier attempt. Candidates
+// from other suppliers are preferred; if every candidate is excluded, the
+// exclusion is ignored. It only chooses between candidates, so a refusal
+// never costs height. GitHub #55.
+func pickStream(streams []bbc.VideoStream, quality string, excluded ...string) bbc.VideoStream {
+	if len(streams) == 0 {
+		return bbc.VideoStream{}
+	}
 	targetHeight := qualityToHeight(quality)
 
-	// Prefer HLS for exact height match -- our resolveHLSVariant can probe
-	// for unlisted 1080p variants that BBC hides from manifests.
-	for _, s := range streams {
-		if s.Height == targetHeight && s.Format == "hls" {
-			return s
-		}
-	}
-
-	// Fall back to any format with exact height match
-	for _, s := range streams {
-		if s.Height == targetHeight {
-			return s
-		}
-	}
-
-	// Closest match, preferring HLS. On a tie, only switch from a non-HLS
-	// pick to an HLS one, so the first HLS entry wins (as in the exact-match
-	// path above) rather than the last.
-	best := streams[0]
-	bestDiff := abs(best.Height - targetHeight)
+	bestDiff := abs(streams[0].Height - targetHeight)
 	for _, s := range streams[1:] {
-		diff := abs(s.Height - targetHeight)
-		if diff < bestDiff || (diff == bestDiff && s.Format == "hls" && best.Format != "hls") {
-			best = s
+		if diff := abs(s.Height - targetHeight); diff < bestDiff {
 			bestDiff = diff
 		}
 	}
-	return best
+
+	var candidates, allowed []bbc.VideoStream
+	for _, s := range streams {
+		if abs(s.Height-targetHeight) != bestDiff {
+			continue
+		}
+		candidates = append(candidates, s)
+		if !slices.Contains(excluded, s.Supplier) {
+			allowed = append(allowed, s)
+		}
+	}
+	if len(allowed) == 0 {
+		allowed = candidates
+	}
+
+	for _, s := range allowed {
+		if s.Format == "hls" {
+			return s
+		}
+	}
+	return allowed[0]
 }
 
 // qualityToHeight converts a quality string like "720p" to a pixel height.
@@ -555,6 +591,28 @@ var qualityLadder = []int{2160, 1080, 720, 540, 396}
 func shouldDegrade(dl *store.Download) bool {
 	return dl.CDNFailures > 0 &&
 		(dl.FailureCode == store.FailCodeFFmpeg || dl.FailureCode == store.FailCodeTruncated)
+}
+
+// attemptQuality returns the target height and quality tag for dl's next
+// attempt: the requested quality, stepped down the ladder by the CDN
+// failure count when shouldDegrade says so (#46). The tag only diverges
+// from dl.Quality on an actual degrade, and keeps dl.Quality when the
+// degraded height has no tag. Split out of processDownload so the
+// supplier-refusal log can predict the next attempt's pick. GitHub #55.
+func attemptQuality(dl *store.Download) (int, string) {
+	targetHeight := qualityToHeight(dl.Quality)
+	if !shouldDegrade(dl) {
+		return targetHeight, dl.Quality
+	}
+	degraded := degradeHeight(targetHeight, dl.CDNFailures)
+	if degraded == targetHeight {
+		return targetHeight, dl.Quality
+	}
+	effectiveQual := dl.Quality
+	if tag := heightToQualityTag(degraded); tag != "" {
+		effectiveQual = tag
+	}
+	return degraded, effectiveQual
 }
 
 // degradeHeight steps the requested height DOWN the quality ladder by

@@ -46,6 +46,17 @@ type Download struct {
 	// and be lost. Bounded by maxStallCredits so a genuinely dead stream
 	// still reaches permanence and is handed to Sonarr for re-grab. GitHub #50.
 	StallCredits int `json:"stall_credits"`
+	// Supplier is the CDN supplier (mediaselector's supplier attribute,
+	// e.g. mf_akamai) of the stream picked for the latest attempt, kept
+	// alongside StreamURL. GitHub #55.
+	Supplier string `json:"supplier,omitempty"`
+	// FailedSuppliers lists the suppliers that refused an attempt, oldest
+	// first: the HLS master playlist answered non-2xx or was unreachable,
+	// or ffmpeg hit an HTTP 4xx, a refused connection or a DNS failure.
+	// The next attempt prefers another supplier at the same height, and a
+	// refusal does not bump CDNFailures, so it never degrades quality.
+	// Never reset, like CDNFailures. GitHub #55.
+	FailedSuppliers []string `json:"failed_suppliers,omitempty"`
 	// Priority orders the pending queue ahead of every other key: a
 	// higher value is claimed sooner. Zero is the default for every
 	// arrival, so untouched queues keep the show/season/episode order.
