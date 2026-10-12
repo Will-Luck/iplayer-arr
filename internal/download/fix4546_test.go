@@ -34,7 +34,7 @@ func TestResolveHLSVariant_HonoursRequestedHeight(t *testing.T) {
 
 	// prober would return a 1080p URL if asked; it must not be asked.
 	prober := &fakeDownloaderProber{fhdURL: "https://example.com/fhd-video=12000000.m3u8", found: true}
-	got := resolveHLSVariant(context.Background(), prober, masterURL, 396)
+	got := resolveOK(t, context.Background(), prober, masterURL, 396)
 	if !strings.Contains(got, "video=800000") {
 		t.Errorf("expected 396p variant (video=800000), got %q", got)
 	}
@@ -48,7 +48,7 @@ func TestResolveHLSVariant_MidLadderHeight(t *testing.T) {
 	masterURL, srv := multiVariantMasterPlaylist(t)
 	defer srv.Close()
 
-	got := resolveHLSVariant(context.Background(), nil, masterURL, 540)
+	got := resolveOK(t, context.Background(), nil, masterURL, 540)
 	if !strings.Contains(got, "video=1500000") {
 		t.Errorf("expected 540p variant (video=1500000), got %q", got)
 	}
@@ -61,7 +61,7 @@ func TestResolveHLSVariant_1080Request_RunsFHDProbe(t *testing.T) {
 	defer srv.Close()
 
 	prober := &fakeDownloaderProber{fhdURL: "https://example.com/fhd-video=12000000.m3u8", found: true}
-	got := resolveHLSVariant(context.Background(), prober, masterURL, 1080)
+	got := resolveOK(t, context.Background(), prober, masterURL, 1080)
 	if got != prober.fhdURL {
 		t.Errorf("expected FHD URL for 1080p request, got %q", got)
 	}
@@ -76,7 +76,7 @@ func TestResolveHLSVariant_NoResolutionTags_FallsBackToBandwidth(t *testing.T) {
 	masterURL, srv := minimalMasterPlaylist(t)
 	defer srv.Close()
 
-	got := resolveHLSVariant(context.Background(), nil, masterURL, 396)
+	got := resolveOK(t, context.Background(), nil, masterURL, 396)
 	if !strings.Contains(got, "video=2700000") {
 		t.Errorf("expected bandwidth fallback (video=2700000), got %q", got)
 	}

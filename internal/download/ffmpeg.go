@@ -302,28 +302,66 @@ func finalizeAwareThreshold(base, grace time.Duration, nearComplete bool) time.D
 	return base
 }
 
+// MasterPlaylistError reports that the HLS master playlist could not be
+// fetched: the supplier's host answered with a non-2xx status, or could not
+// be reached at all. Status is 0 for a transport failure, with the cause in
+// Err. RunFFmpeg returns it instead of handing ffmpeg the same URL, which
+// would only fail the same way, and the worker treats it as a supplier
+// refusal. GitHub #55.
+type MasterPlaylistError struct {
+	Host   string
+	Status int
+	Err    error
+}
+
+func (e *MasterPlaylistError) Error() string {
+	if e.Status != 0 {
+		return strings.TrimSpace(fmt.Sprintf("HLS master playlist on %s returned HTTP %d %s",
+			e.Host, e.Status, http.StatusText(e.Status)))
+	}
+	return fmt.Sprintf("HLS master playlist on %s unreachable: %v", e.Host, e.Err)
+}
+
+func (e *MasterPlaylistError) Unwrap() error { return e.Err }
+
 // resolveHLSVariant fetches the master playlist, finds the highest-
 // bandwidth variant, and delegates FHD probing to the shared helper.
 // Falls back to the highest listed variant if the FHD probe returns
-// not-found OR any error. The ctx argument is the RunFFmpeg ctx and
-// is forwarded to the prober so download cancellation propagates.
+// not-found OR any error. The ctx argument is the RunFFmpeg ctx; it
+// bounds the master fetch and is forwarded to the prober so download
+// cancellation propagates.
+//
+// A non-2xx master response or a transport failure returns a
+// *MasterPlaylistError rather than the master URL (GitHub #55). A 200
+// playlist with no variant lines still returns the master URL, and so
+// does a body that fails to read, as before.
 //
 // NOTE: this function keeps its own master-playlist fetch and bestBW
 // selection for v1.1.0 rather than delegating the entire pipeline to
 // ProbeHiddenFHD. The duplication is documented in the spec's
 // Non-Goals section as an intentional v1.1.0 trade-off; consolidation
 // is a follow-up refactor for a later release.
-func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterURL string, targetHeight int) string {
-	resp, err := http.Get(masterURL)
+func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterURL string, targetHeight int) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, masterURL, nil)
 	if err != nil {
-		log.Printf("failed to fetch master playlist: %v", err)
-		return masterURL
+		return "", fmt.Errorf("HLS master playlist request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		// A cancelled download is not the supplier's fault.
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("fetch HLS master playlist: %w", err)
+		}
+		return "", &MasterPlaylistError{Host: req.URL.Hostname(), Err: err}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", &MasterPlaylistError{Host: req.URL.Hostname(), Status: resp.StatusCode}
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("failed to read master playlist: %v", err)
-		return masterURL
+		return masterURL, nil
 	}
 	log.Printf("master playlist fetched: %d bytes, %d lines", len(body), strings.Count(string(body), "\n"))
 	log.Printf("master playlist content:\n%s", string(body))
@@ -356,7 +394,7 @@ func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterUR
 
 	if bestURL == "" {
 		log.Printf("no variant found in master playlist, returning master URL")
-		return masterURL
+		return masterURL, nil
 	}
 
 	// Default to the highest-bandwidth variant (historical behaviour),
@@ -399,12 +437,12 @@ func resolveHLSVariant(ctx context.Context, prober downloaderFHDProber, masterUR
 			log.Printf("1080p probe error: %v", err)
 		case found:
 			log.Printf("HLS 1080p variant found (unlisted): %s", fhdURL[:min(len(fhdURL), 120)])
-			return fhdURL
+			return fhdURL, nil
 		}
 	}
 
 	log.Printf("HLS variant selected: target=%dp height=%dp bandwidth=%d", targetHeight, selectedHeight, selectedBW)
-	return selectedURL
+	return selectedURL, nil
 }
 
 // hlsVariant is one #EXT-X-STREAM-INF entry parsed from a master
@@ -505,7 +543,11 @@ func RunFFmpeg(ctx context.Context, job FFmpegJob) error {
 	// 1080p. DASH manifests are handled by ffmpeg.
 	if strings.Contains(streamURL, ".m3u8") {
 		log.Printf("resolving HLS variant for: %s", streamURL[:min(len(streamURL), 80)])
-		streamURL = resolveHLSVariant(ctx, job.FHDProber, streamURL, job.TargetHeight)
+		resolved, err := resolveHLSVariant(ctx, job.FHDProber, streamURL, job.TargetHeight)
+		if err != nil {
+			return err
+		}
+		streamURL = resolved
 		log.Printf("resolved stream URL: %s", streamURL[:min(len(streamURL), 80)])
 	} else {
 		log.Printf("not HLS, skipping variant resolution: %s", streamURL[:min(len(streamURL), 80)])
