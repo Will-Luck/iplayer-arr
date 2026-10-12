@@ -43,8 +43,9 @@ var ffmpegHTTP4xxRe = regexp.MustCompile(`(?:Server returned|HTTP error) (4\d\d|
 // resolveHLSVariant (any non-2xx answer, or the host unreachable), or ffmpeg
 // error text showing an HTTP 4xx, a refused connection, or a hostname that
 // would not resolve. A watchdog stall is never a refusal, whatever its
-// stderr tail says. Everything else (5xx, dropped connections, bad data)
-// keeps the ffmpeg_error quality-degrade path.
+// stderr tail says. Any other ffmpeg failure (a 5xx reported by ffmpeg, a
+// dropped connection, bad data) keeps the ffmpeg_error quality-degrade
+// path.
 func supplierRefusal(err error) (reason string, ok bool) {
 	if err == nil || errors.Is(err, ErrStalled) {
 		return "", false
