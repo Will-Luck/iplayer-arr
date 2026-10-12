@@ -112,6 +112,35 @@ func TestPickStream(t *testing.T) {
 	}
 }
 
+// Same height from several suppliers: the closest-match fallback must agree
+// with the exact-match path and keep the first HLS entry, not the last.
+func TestPickStreamTieKeepsFirstHLS(t *testing.T) {
+	streams := []bbc.VideoStream{
+		{URL: "akamai-hls", Height: 1080, Width: 1920, Bitrate: 8490, Format: "hls", Supplier: "mf_akamai"},
+		{URL: "cloudfront-hls", Height: 1080, Width: 1920, Bitrate: 8490, Format: "hls", Supplier: "mf_cloudfront"},
+		{URL: "bidi-hls", Height: 1080, Width: 1920, Bitrate: 8490, Format: "hls", Supplier: "mf_bidi"},
+		{URL: "akamai-dash", Height: 1080, Width: 1920, Bitrate: 8490, Format: "dash", Supplier: "mf_akamai"},
+	}
+
+	for _, q := range []string{"1080p", "720p", "540p", "396p"} {
+		if got := pickStream(streams, q); got.URL != "akamai-hls" {
+			t.Errorf("pickStream(%q) = %s, want akamai-hls", q, got.URL)
+		}
+	}
+}
+
+func TestPickStreamTiePrefersHLSWhenFirstIsDash(t *testing.T) {
+	streams := []bbc.VideoStream{
+		{URL: "akamai-dash", Height: 1080, Format: "dash", Supplier: "mf_akamai"},
+		{URL: "akamai-hls", Height: 1080, Format: "hls", Supplier: "mf_akamai"},
+		{URL: "bidi-hls", Height: 1080, Format: "hls", Supplier: "mf_bidi"},
+	}
+
+	if got := pickStream(streams, "720p"); got.URL != "akamai-hls" {
+		t.Errorf("pickStream(\"720p\") = %s, want akamai-hls", got.URL)
+	}
+}
+
 func TestQualityToHeight(t *testing.T) {
 	tests := []struct {
 		q    string

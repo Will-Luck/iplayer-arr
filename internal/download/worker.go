@@ -510,12 +510,14 @@ func pickStream(streams []bbc.VideoStream, quality string) bbc.VideoStream {
 		}
 	}
 
-	// Closest match, preferring HLS
+	// Closest match, preferring HLS. On a tie, only switch from a non-HLS
+	// pick to an HLS one, so the first HLS entry wins (as in the exact-match
+	// path above) rather than the last.
 	best := streams[0]
 	bestDiff := abs(best.Height - targetHeight)
 	for _, s := range streams[1:] {
 		diff := abs(s.Height - targetHeight)
-		if diff < bestDiff || (diff == bestDiff && s.Format == "hls") {
+		if diff < bestDiff || (diff == bestDiff && s.Format == "hls" && best.Format != "hls") {
 			best = s
 			bestDiff = diff
 		}
