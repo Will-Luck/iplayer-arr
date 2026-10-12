@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- When the BBC lists the same resolution from several suppliers, a grab
+  that is not an exact height match now gets the first HLS supplier in
+  the list, as an exact match already did, instead of the last. A 720p
+  grab of an episode that only lists 1080p streams, and every
+  quality-degraded retry, always landed on the last supplier. GitHub #55 /
+  PR #56, thanks to @amerorchis.
+- A download whose CDN supplier refuses the stream now tries another
+  supplier. When the supplier answers with an HTTP 4xx, refuses the
+  connection or its hostname does not resolve, the next attempt picks a
+  different supplier at the same quality, instead of retrying the same
+  one at a lower quality. The refusal still uses one of the three
+  attempts and is still reported as `ffmpeg_error`. If every supplier has
+  refused, the next attempt goes back to the first one. The log names the
+  supplier, for example `supplier mf_bidi refused (HTTP 403), next
+  attempt will try another supplier`. Every other ffmpeg or truncation
+  failure still steps the quality down as before. GitHub #55.
+- Streams of equal height and bitrate now keep the order the BBC lists
+  them in. The sort only kept it for 12 or fewer streams, so on a longer
+  list the first supplier listed was not guaranteed to come first.
+  GitHub #55.
+- The HLS master playlist's HTTP status is now checked. A master
+  playlist that answered with an error status, or could not be reached,
+  was handed to ffmpeg anyway, which then failed the same way; it now
+  counts as a supplier refusal straight away. The fetch also stops when
+  the download is cancelled. GitHub #55.
+- The weekly base-image rebuild now sets its own
+  `org.opencontainers.image.revision`, `created` and `version` labels.
+  The `:latest` image carried the hotio base image's labels instead, so
+  its revision named a hotio commit rather than the iplayer-arr commit it
+  was built from, and its version was empty. GitHub #55.
+
 ## [1.8.0] - 2026-09-11
 
 ### Added
