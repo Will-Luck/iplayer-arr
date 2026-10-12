@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was handed to ffmpeg anyway, which then failed the same way; it now
   counts as a supplier refusal straight away. The fetch also stops when
   the download is cancelled. GitHub #55.
+- A download that failed and then completed on a retry no longer keeps
+  the failed attempt's `failure_code`, `retryable: true` and
+  `retry_after` in its history entry, so the API no longer reports a
+  finished download as waiting for a retry. Its retry count, CDN failure
+  count and supplier fields are kept as a record. GitHub #55.
 - The weekly base-image rebuild now sets its own
   `org.opencontainers.image.revision`, `created` and `version` labels.
   The `:latest` image carried the hotio base image's labels instead, so
