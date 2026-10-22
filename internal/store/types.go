@@ -46,6 +46,12 @@ type Download struct {
 	// and be lost. Bounded by maxStallCredits so a genuinely dead stream
 	// still reaches permanence and is handed to Sonarr for re-grab. GitHub #50.
 	StallCredits int `json:"stall_credits"`
+	// MetadataFailures counts metadata_unavailable failures, the
+	// download's own budget for "the BBC could not tell us about this
+	// episode" (an HTML error page, an unexpected iBL response, a timeout),
+	// kept apart from RetryCount like StallCount so not-yet-available
+	// attempts cannot use it up. GitHub #57.
+	MetadataFailures int `json:"metadata_failures"`
 	// Supplier is the CDN supplier (mediaselector's supplier attribute,
 	// e.g. mf_akamai) of the stream picked for the latest attempt, kept
 	// alongside StreamURL. GitHub #55.
@@ -155,6 +161,11 @@ const (
 	FailCodeStalled         = "stalled"
 	FailCodeTimeout         = "timeout"
 	FailCodeUnknown         = "unknown"
+
+	// FailCodeMetadataUnavailable: the BBC's programme metadata could not
+	// be fetched or understood. Says nothing about whether the episode is
+	// downloadable, so a later grab supersedes it. GitHub #57.
+	FailCodeMetadataUnavailable = "metadata_unavailable"
 
 	TierFull     = "full"
 	TierPosition = "position"

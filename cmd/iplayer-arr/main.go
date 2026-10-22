@@ -237,6 +237,10 @@ func main() {
 	// longer a valid option. See GH#39.
 	migrateQualityConfig(st)
 
+	// After GitHub #57: let a new grab supersede the downloads that failed
+	// while BBC /programmes was offline.
+	migrateGH57ResolverFailures(st)
+
 	// Persist the resolved DOWNLOAD_DIR to the config store on every start.
 	// The writer side (download.Manager) uses this value injected directly;
 	// the reader side (api/directory.go and sabnzbd/handler.go) reads it
@@ -580,6 +584,29 @@ func migrateQualityConfig(st *store.Store) bool {
 		return false
 	}
 	return true
+}
+
+// migrateGH57ResolverFailures re-codes the rows that failed to resolve
+// while BBC /programmes redirected to its error page (from 2026-10-21), so
+// a new grab of the same episode is no longer handed the dead row. It runs
+// on every start rather than once behind a marker: this version never
+// writes a matching row, so a later run only finds rows written by an
+// older version, for example after a rollback while the outage lasts.
+// Returns the number of rows re-coded. GitHub #57.
+func migrateGH57ResolverFailures(st *store.Store) int {
+	if st == nil {
+		return 0
+	}
+	ids, err := st.RecodeResolverOutageFailures(time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		log.Printf("WARNING: GitHub #57 re-code of failed downloads failed: %v", err)
+		return 0
+	}
+	if len(ids) > 0 {
+		log.Printf("re-coded %d downloads that failed while BBC /programmes was offline (GitHub #57); a new grab of the same episode now retries: %s",
+			len(ids), strings.Join(ids, ", "))
+	}
+	return len(ids)
 }
 
 // numCPUDefault returns the NumCPU-aware default for max_workers.

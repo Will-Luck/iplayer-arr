@@ -1,10 +1,15 @@
 package bbc
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -46,7 +51,107 @@ func (c *Client) GetCtx(ctx context.Context, url string) ([]byte, error) {
 	return c.doWithRetryCtx(ctx, url, c.maxRetry)
 }
 
+// ErrNotJSON matches a *NotJSONError: the BBC answered a JSON endpoint
+// with an HTML page or an empty body. GitHub #57.
+var ErrNotJSON = errors.New("not a JSON response")
+
+// NotJSONError reports a JSON endpoint that answered with an HTML page or
+// an empty body. From 2026-10-21 every BBC /programmes URL redirected to
+// /error.html ("BBC: Service Temporarily Unavailable"); handing that page
+// to json.Unmarshal surfaced as "invalid character '<'", which told the
+// user nothing. GitHub #57.
+type NotJSONError struct {
+	URL         string
+	FinalURL    string // after redirects
+	ContentType string
+	PageTitle   string // <title> of an HTML body, if any
+}
+
+func (e *NotJSONError) Error() string {
+	if e.PageTitle == "" && e.ContentType == "" {
+		return fmt.Sprintf("BBC returned an empty response instead of JSON for %s", e.URL)
+	}
+	msg := fmt.Sprintf("BBC returned an HTML page instead of JSON for %s", e.URL)
+	var detail []string
+	if e.FinalURL != "" && e.FinalURL != e.URL {
+		detail = append(detail, "redirected to "+e.FinalURL)
+	}
+	if e.PageTitle != "" {
+		detail = append(detail, fmt.Sprintf("page title %q", e.PageTitle))
+	}
+	if len(detail) > 0 {
+		msg += " (" + strings.Join(detail, ", ") + ")"
+	}
+	return msg
+}
+
+func (e *NotJSONError) Is(target error) bool { return target == ErrNotJSON }
+
+// GetJSONCtx is GetCtx for endpoints that must answer with JSON. A 2xx
+// whose body is HTML (by Content-Type or by a leading '<') or empty is
+// returned as a *NotJSONError rather than as a body, and is not retried:
+// the BBC edge caches its error page for a minute, so an immediate retry
+// only fetches the same page. A body with no Content-Type still passes
+// when it does not start with '<'. A UTF-8 BOM is stripped, since
+// encoding/json rejects one. GitHub #57.
+func (c *Client) GetJSONCtx(ctx context.Context, url string) ([]byte, error) {
+	res, err := c.fetchWithRetryCtx(ctx, url, c.maxRetry)
+	if err != nil {
+		return nil, err
+	}
+	body := bytes.TrimPrefix(res.body, []byte("\xef\xbb\xbf"))
+	trimmed := bytes.TrimSpace(body)
+	mediaType, _, _ := mime.ParseMediaType(res.contentType)
+	isHTML := mediaType == "text/html" || mediaType == "application/xhtml+xml" ||
+		(len(trimmed) > 0 && trimmed[0] == '<')
+	if !isHTML && len(trimmed) > 0 {
+		return body, nil
+	}
+	nj := &NotJSONError{URL: url, FinalURL: res.finalURL}
+	if isHTML {
+		nj.ContentType = res.contentType
+		if nj.ContentType == "" {
+			nj.ContentType = "text/html"
+		}
+		nj.PageTitle = htmlTitle(res.body)
+	}
+	return nil, nj
+}
+
+var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+// htmlTitle returns the page's <title>, whitespace collapsed and capped,
+// looking only at the first 64 KiB.
+func htmlTitle(body []byte) string {
+	if len(body) > 64<<10 {
+		body = body[:64<<10]
+	}
+	m := titleRe.FindSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	title := strings.Join(strings.Fields(string(m[1])), " ")
+	if r := []rune(title); len(r) > 120 {
+		title = string(r[:120])
+	}
+	return title
+}
+
 func (c *Client) doWithRetryCtx(ctx context.Context, url string, maxAttempts int) ([]byte, error) {
+	res, err := c.fetchWithRetryCtx(ctx, url, maxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	return res.body, nil
+}
+
+type fetchResult struct {
+	body        []byte
+	finalURL    string
+	contentType string
+}
+
+func (c *Client) fetchWithRetryCtx(ctx context.Context, url string, maxAttempts int) (*fetchResult, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -83,7 +188,11 @@ func (c *Client) doWithRetryCtx(ctx context.Context, url string, maxAttempts int
 			continue
 		}
 
-		return body, nil
+		return &fetchResult{
+			body:        body,
+			finalURL:    resp.Request.URL.String(),
+			contentType: resp.Header.Get("Content-Type"),
+		}, nil
 	}
 	return nil, fmt.Errorf("after %d attempts: %w", maxAttempts, lastErr)
 }

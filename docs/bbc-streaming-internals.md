@@ -4,10 +4,11 @@ Implementation reference for the BBC streaming layer. Technical description only
 
 ## Overview
 
-iplayer-arr fetches BBC media via a two-stage resolution chain:
+iplayer-arr fetches BBC media via a three-stage resolution chain:
 
 1. **IBL search** (`internal/bbc/ibl.go`) queries BBC's public programme index to find matching brands and episodes.
-2. **Mediaselector resolution** (`internal/bbc/mediaselector.go`) exchanges a media version ID (VPID) for a set of stream URLs spanning multiple bitrates and delivery formats.
+2. **Version resolution** (`internal/bbc/playlist.go`) reads IBL's `/episodes/{pid}` and picks the episode's version ID (VPID): the first version, in IBL order, that is not audio-described, signed, simulcast or webcast and has already started. A programme with only audio-described or signed versions resolves to one of those. Until v1.8.1 this step read `www.bbc.co.uk/programmes/{pid}/playlist.json`, which BBC took offline on 2026-10-21 (GitHub #57).
+3. **Mediaselector resolution** (`internal/bbc/mediaselector.go`) exchanges the VPID for a set of stream URLs spanning multiple bitrates and delivery formats.
 
 Once a stream URL is selected, the downloader in `internal/download/ffmpeg.go` passes it to ffmpeg for segment-level retrieval.
 
@@ -34,6 +35,7 @@ Some premium BBC content (certain films, occasional drama series) uses Widevine 
 | Concern | File |
 |---|---|
 | IBL search / episode listing | `internal/bbc/ibl.go` |
+| Episode PID -> VPID (IBL `/episodes/{pid}`) | `internal/bbc/playlist.go` |
 | Mediaselector (VPID -> streams) | `internal/bbc/mediaselector.go` |
 | HLS master playlist + variant probing | `internal/bbc/fhdprobe.go` |
 | Quality detection / cache | `internal/bbc/prober.go` |

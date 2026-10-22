@@ -3,6 +3,7 @@ package bbc
 import (
 	"context"
 	"errors"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -699,5 +700,123 @@ func TestPrefetch_GenericError_NotMarkedNotYetAvailable(t *testing.T) {
 	}
 	if out.Heights["p1"] != nil {
 		t.Errorf("expected nil heights on generic error, got %v", out.Heights["p1"])
+	}
+}
+
+// GitHub #57: a PID that only has an audio-described or signed version
+// probes that version alone (audio-described is 396p only). Its heights
+// must not go into the no-TTL cache, for the PID or its show siblings.
+func TestPrefetch_AccessibilityOnlyIsNotCached(t *testing.T) {
+	pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{
+		"ad1": {VPID: "vpid-ad1", AccessibilityOnly: true},
+	}}
+	ms := &fakeMediaSelector{byVPID: map[string]*StreamSet{
+		"vpid-ad1": {Video: []VideoStream{{Height: 396, Bitrate: 500, Format: "hls", URL: "https://example.com/ad.m3u8", Supplier: "mf_akamai"}}},
+	}}
+	st := newFakeCacheStore()
+	p := NewQualityProber(pl, ms, &fakeFHDProber{}, st, 1, time.Second)
+
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "ad1", ShowName: "signed show"}, {PID: "ad2", ShowName: "signed show"}})
+
+	if got := out.Heights["ad1"]; len(got) != 1 || got[0] != 396 {
+		t.Errorf("heights = %v, want [396] for this response", got)
+	}
+	if st.writes != 0 {
+		t.Errorf("cache writes = %d, want 0", st.writes)
+	}
+}
+
+// Just after a broadcast, mediaselector can serve the new version only
+// from live-channel suppliers at 720p, before the 1080p on-demand files
+// exist. Caching that would hide the 1080p for good.
+func TestPrefetch_LiveSuppliersAreNotCached(t *testing.T) {
+	cases := []struct {
+		name      string
+		suppliers []string
+		wantCache bool
+	}{
+		{"all live", []string{"akamai_live_uk", "bbc_bidi_live_uk"}, false},
+		{"mixed", []string{"mf_akamai", "akamai_live_uk"}, true},
+		{"mixed, live first", []string{"akamai_live_uk", "mf_akamai"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var video []VideoStream
+			for _, s := range tc.suppliers {
+				video = append(video, VideoStream{Height: 720, Bitrate: 5000, Format: "hls", URL: "https://example.com/" + s + ".m3u8", Supplier: s})
+			}
+			pl := &fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}
+			ms := &fakeMediaSelector{byVPID: map[string]*StreamSet{"vpid-pv1": {Video: video}}}
+			st := newFakeCacheStore()
+			p := NewQualityProber(pl, ms, &fakeFHDProber{}, st, 1, time.Second)
+
+			out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "pv1", ShowName: "show"}})
+
+			if got := out.Heights["pv1"]; len(got) == 0 || got[0] != 720 {
+				t.Errorf("heights = %v, want 720 first", got)
+			}
+			if cached := st.data["pv1"] != nil; cached != tc.wantCache {
+				t.Errorf("cached = %v, want %v", cached, tc.wantCache)
+			}
+		})
+	}
+}
+
+// The real resolver against iBL captures: a live programme reads as not
+// yet available and the BBC error page as a transient failure; neither
+// is cached. GitHub #57.
+func TestPrefetch_RealResolverOutcomesAreNotCached(t *testing.T) {
+	t.Run("live", func(t *testing.T) {
+		srv := newIBLEpisodeServer(t, map[string]string{"m00334lv": "episode_m00334lv.json"})
+		st := newFakeCacheStore()
+		p := NewQualityProber(newFixtureResolver(srv.URL, fixtureNow), &fakeMediaSelector{}, &fakeFHDProber{}, st, 1, time.Second)
+
+		out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "m00334lv", ShowName: "Politics Live"}})
+		if !out.NotYetAvailable["m00334lv"] {
+			t.Error("a live programme must be reported not yet available")
+		}
+		if st.writes != 0 {
+			t.Errorf("cache writes = %d, want 0", st.writes)
+		}
+	})
+	t.Run("error page", func(t *testing.T) {
+		srv, _ := newErrorPageServer(t)
+		st := newFakeCacheStore()
+		p := NewQualityProber(newFixtureResolver(srv.URL, fixtureNow), &fakeMediaSelector{}, &fakeFHDProber{}, st, 1, time.Second)
+
+		out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "m0033jgh", ShowName: "UEFA Champions League"}})
+		if out.Heights["m0033jgh"] != nil || out.NotYetAvailable["m0033jgh"] {
+			t.Errorf("heights = %v, nya = %v; want a transient failure", out.Heights["m0033jgh"], out.NotYetAvailable["m0033jgh"])
+		}
+		if st.writes != 0 {
+			t.Errorf("cache writes = %d, want 0", st.writes)
+		}
+	})
+}
+
+// The live-supplier guard against real mediaselector replies: Politics
+// Live (m00334lt) minutes after broadcast, served only by *_live_uk
+// suppliers, and the #57 clip (m0033jgj) served by on-demand suppliers.
+func TestLiveSuppliersOnly_RealMediaselectorReplies(t *testing.T) {
+	ms := NewMediaSelector(NewClient())
+	cases := map[string]bool{
+		"mediaselector_m00334lt_after_broadcast.xml": true,
+		"mediaselector_m0033jgj.xml":                 false,
+	}
+	for file, want := range cases {
+		body, err := os.ReadFile("testdata/ibl/" + file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		set, err := ms.parseResponse(body)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		if len(set.Video) == 0 {
+			t.Fatalf("%s: no video streams", file)
+		}
+		if got := liveSuppliersOnly(set.Video); got != want {
+			t.Errorf("%s: liveSuppliersOnly = %v, want %v", file, got, want)
+		}
 	}
 }

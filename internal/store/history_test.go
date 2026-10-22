@@ -2,6 +2,8 @@ package store
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -311,5 +313,84 @@ func TestClearHistory(t *testing.T) {
 	all, _ = s.ListHistory()
 	if len(all) != 0 {
 		t.Errorf("expected 0 history entries after clear, got %d", len(all))
+	}
+}
+
+// GitHub #57: from 2026-10-21 every resolve failed against BBC's error
+// page and was recorded as stream_unavailable, which a later grab cannot
+// supersede. The one-off re-code turns exactly those rows into
+// metadata_unavailable and touches nothing else.
+func TestRecodeResolverOutageFailures(t *testing.T) {
+	s := testStore(t)
+	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	outageErr := "playlist resolve: parse playlist: invalid character '<' looking for beginning of value"
+	outageAt := time.Date(2026, 10, 21, 12, 2, 0, 0, time.UTC)
+
+	rows := []*Download{
+		{ID: "a_outage", PID: "m0033jgh", Quality: "1080p", Status: StatusFailed,
+			FailureCode: FailCodeUnavailable, Error: outageErr, CompletedAt: outageAt},
+		{ID: "b_no_video", PID: "m0000002", Quality: "1080p", Status: StatusFailed,
+			FailureCode: FailCodeUnavailable, Error: "no video streams for x", CompletedAt: outageAt},
+		{ID: "c_before", PID: "m0000003", Quality: "1080p", Status: StatusFailed,
+			FailureCode: FailCodeUnavailable, Error: "playlist resolve: fetch playlist: HTTP 404: x",
+			CompletedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+		{ID: "d_nya", PID: "m0000004", Quality: "1080p", Status: StatusFailed,
+			FailureCode: FailCodeNotYetAvailable, Error: "playlist resolve: not yet available", CompletedAt: outageAt},
+		{ID: "e_done", PID: "m0000005", Quality: "1080p", Status: StatusCompleted, CompletedAt: outageAt},
+		// matches on code and error but did not fail
+		{ID: "f_not_failed", PID: "m0000006", Quality: "1080p", Status: StatusCompleted,
+			FailureCode: FailCodeUnavailable, Error: outageErr, CompletedAt: outageAt},
+	}
+	for _, dl := range rows {
+		if err := s.PutHistory(dl); err != nil {
+			t.Fatalf("PutHistory %s: %v", dl.ID, err)
+		}
+	}
+	// Still retrying in the queue at upgrade: the outage spent its
+	// RetryCount, which it gets back.
+	active := &Download{ID: "g_active", PID: "m0000007", Quality: "720p", Status: StatusFailed,
+		FailureCode: FailCodeUnavailable, Error: outageErr, Retryable: true, RetryCount: 2, CDNFailures: 1}
+	activeOther := &Download{ID: "h_active_no_video", PID: "m0000008", Quality: "720p", Status: StatusFailed,
+		FailureCode: FailCodeUnavailable, Error: "no video streams for x", Retryable: true, RetryCount: 1}
+	for _, dl := range []*Download{active, activeOther} {
+		if err := s.PutDownload(dl); err != nil {
+			t.Fatalf("PutDownload %s: %v", dl.ID, err)
+		}
+	}
+
+	ids, err := s.RecodeResolverOutageFailures(since)
+	if err != nil {
+		t.Fatalf("RecodeResolverOutageFailures: %v", err)
+	}
+	sort.Strings(ids)
+	if strings.Join(ids, ",") != "a_outage,g_active" {
+		t.Fatalf("re-coded ids = %v, want [a_outage g_active]", ids)
+	}
+
+	g, _ := s.GetDownload("g_active")
+	if g.FailureCode != FailCodeMetadataUnavailable || g.RetryCount != 0 || !g.Retryable || g.CDNFailures != 1 || g.Error != outageErr {
+		t.Errorf("g_active = %+v; want metadata_unavailable, RetryCount 0, still retryable, CDNFailures and Error kept", g)
+	}
+	if h, _ := s.GetDownload("h_active_no_video"); h.FailureCode != FailCodeUnavailable || h.RetryCount != 1 {
+		t.Errorf("h_active_no_video was modified: %+v", h)
+	}
+
+	a, _ := s.GetHistory("a_outage")
+	if a.FailureCode != FailCodeMetadataUnavailable {
+		t.Errorf("a_outage FailureCode = %q, want %q", a.FailureCode, FailCodeMetadataUnavailable)
+	}
+	if a.Error != outageErr || !a.CompletedAt.Equal(outageAt) || a.Status != StatusFailed {
+		t.Errorf("a_outage changed beyond its failure code: %+v", a)
+	}
+	for _, dl := range rows[1:] {
+		got, _ := s.GetHistory(dl.ID)
+		if got == nil || got.FailureCode != dl.FailureCode || got.Error != dl.Error || got.Status != dl.Status {
+			t.Errorf("%s was modified: %+v", dl.ID, got)
+		}
+	}
+
+	again, err := s.RecodeResolverOutageFailures(since)
+	if err != nil || len(again) != 0 {
+		t.Errorf("second run re-coded %v (err %v), want none", again, err)
 	}
 }

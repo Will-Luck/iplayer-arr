@@ -119,9 +119,10 @@ func TestEnqueue_CompletedHistoryStillDedups(t *testing.T) {
 }
 
 // TestEnqueue_NonNotYetAvailableFailureStillDedups is the blast-radius
-// guard on the #52 fix. Only the not-yet-available failure is a "come
-// back later" that deserves a fresh attempt. Every other terminal
-// failure must keep deduping exactly as it did before:
+// guard on the #52 fix. Only the not-yet-available and metadata failures
+// are a "come back later" that deserves a fresh attempt (GitHub #57).
+// Every other terminal failure must keep deduping exactly as it did
+// before:
 //
 //   - truncated / ffmpeg_error would refetch a whole episode that died
 //     at 95%, on every later grab;
@@ -132,8 +133,9 @@ func TestEnqueue_CompletedHistoryStillDedups(t *testing.T) {
 //     FailureCode unset) keeps its existing behaviour untouched.
 //
 // The list is store/types.go's full FailCode enumeration minus
-// not_yet_available, plus the empty-code case, so a newly added failure
-// code is the only way this can silently stop covering the population.
+// not_yet_available and metadata_unavailable, plus the empty-code case,
+// so a newly added failure code is the only way this can silently stop
+// covering the population.
 func TestEnqueue_NonNotYetAvailableFailureStillDedups(t *testing.T) {
 	codes := []string{
 		store.FailCodeGeoBlocked,
@@ -185,7 +187,7 @@ func TestEnqueue_NonNotYetAvailableFailureStillDedups(t *testing.T) {
 				t.Errorf("failure code %q created %d new download rows, want 0", code, len(active))
 			}
 			if hist, _ := st.GetHistory(failed.ID); hist == nil {
-				t.Errorf("failure code %q had its history row deleted; only not_yet_available is superseded", code)
+				t.Errorf("failure code %q had its history row deleted; only not_yet_available and metadata_unavailable are superseded", code)
 			}
 		})
 	}
@@ -265,5 +267,42 @@ func TestEnqueue_NotYetAvailableGrabMustNotError(t *testing.T) {
 	}
 	if dl == nil || dl.Status != store.StatusPending {
 		t.Fatalf("expected a queued pending row for %q, got %+v", id, dl)
+	}
+}
+
+// GitHub #57: a metadata failure means the BBC could not tell us about
+// the episode (from 2026-10-21 every /programmes URL served an error
+// page), not that it cannot be downloaded, so a fresh grab supersedes it
+// exactly like a not-yet-available one.
+func TestEnqueue_MetadataUnavailableFailureIsSuperseded(t *testing.T) {
+	m, st := enqueueHistoryFixture(t)
+
+	dead := &store.Download{
+		ID:               "iparr_dead57",
+		PID:              "m0033jgh",
+		Quality:          "1080p",
+		Title:            "UEFA.Champions.League.Club.Brugge.v.RC.Lens.Highlights.1080p.WEB-DL.AAC.H264-iParr",
+		Status:           store.StatusFailed,
+		FailureCode:      store.FailCodeMetadataUnavailable,
+		MetadataFailures: maxMetadataFailures,
+		Error:            "playlist resolve: fetch episode: BBC returned an HTML page instead of JSON",
+		CompletedAt:      time.Now(),
+	}
+	if err := st.PutHistory(dead); err != nil {
+		t.Fatalf("PutHistory: %v", err)
+	}
+
+	id, err := m.Enqueue(dead.PID, dead.Quality, dead.Title, "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if id == dead.ID {
+		t.Fatalf("Enqueue returned the dead history ID %q, expected a fresh download", dead.ID)
+	}
+	if hist, _ := st.GetHistory(dead.ID); hist != nil {
+		t.Error("the superseded metadata_unavailable row should be deleted")
+	}
+	if dl, _ := st.GetDownload(id); dl == nil || dl.Status != store.StatusPending {
+		t.Errorf("new download = %+v, want a pending row", dl)
 	}
 }

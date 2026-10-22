@@ -2,6 +2,7 @@ package bbc
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -601,5 +602,29 @@ func TestFilmsCtx(t *testing.T) {
 	}
 	if r.Available.IsZero() {
 		t.Error("Available is zero, want non-zero")
+	}
+}
+
+// GitHub #57: an HTML page from iBL must be reported as such on every
+// listing fetch, not as "parse iBL response: invalid character '<'".
+func TestIBL_HTMLPageIsReported(t *testing.T) {
+	srv, _ := newErrorPageServer(t)
+	ibl := NewIBL(NewClient())
+	ibl.BaseURL = srv.URL
+	ctx := context.Background()
+
+	calls := map[string]func() error{
+		"SearchCtx":       func() error { _, err := ibl.SearchCtx(ctx, "Match of the Day", 1); return err },
+		"ListEpisodesCtx": func() error { _, err := ibl.ListEpisodesCtx(ctx, "b007mvsr"); return err },
+		"GroupEpisodes":   func() error { _, err := ibl.GroupEpisodes(ctx, groupPopular, 20); return err },
+		"FilmsCtx":        func() error { _, err := ibl.FilmsCtx(ctx, 10); return err },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			if !errors.Is(err, ErrNotJSON) {
+				t.Errorf("errors.Is(err, ErrNotJSON) = false, err = %v", err)
+			}
+		})
 	}
 }

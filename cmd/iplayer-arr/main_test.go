@@ -236,3 +236,48 @@ func TestMigrateQualityConfig_Idempotent(t *testing.T) {
 		t.Errorf("quality after double migrate = %q, want any", got)
 	}
 }
+
+func seedOutageFailure(t *testing.T, st *store.Store, id string) {
+	t.Helper()
+	if err := st.PutHistory(&store.Download{
+		ID: id, PID: "m0033jgh", Quality: "1080p", Status: store.StatusFailed,
+		FailureCode: store.FailCodeUnavailable,
+		Error:       "playlist resolve: parse playlist: invalid character '<' looking for beginning of value",
+		CompletedAt: time.Date(2026, 10, 22, 10, 8, 16, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("PutHistory: %v", err)
+	}
+}
+
+// GitHub #57 startup re-code: every start re-codes whatever outage rows
+// an older version left, so a rollback to v1.8.1 and back is covered, and
+// a start with nothing left to do changes nothing.
+func TestMigrateGH57ResolverFailures(t *testing.T) {
+	st := testStore(t)
+	seedOutageFailure(t, st, "iparr_outage1")
+
+	if n := migrateGH57ResolverFailures(st); n != 1 {
+		t.Fatalf("first run re-coded %d rows, want 1", n)
+	}
+	if hist, _ := st.GetHistory("iparr_outage1"); hist.FailureCode != store.FailCodeMetadataUnavailable {
+		t.Errorf("FailureCode = %q, want %q", hist.FailureCode, store.FailCodeMetadataUnavailable)
+	}
+	if n := migrateGH57ResolverFailures(st); n != 0 {
+		t.Errorf("run with nothing left re-coded %d rows, want 0", n)
+	}
+
+	// v1.8.1 runs again (rollback) and writes another outage row.
+	seedOutageFailure(t, st, "iparr_outage2")
+	if n := migrateGH57ResolverFailures(st); n != 1 {
+		t.Errorf("run after a rollback re-coded %d rows, want 1", n)
+	}
+	if hist, _ := st.GetHistory("iparr_outage2"); hist.FailureCode != store.FailCodeMetadataUnavailable {
+		t.Errorf("row written after a rollback: FailureCode = %q, want %q", hist.FailureCode, store.FailCodeMetadataUnavailable)
+	}
+}
+
+func TestMigrateGH57ResolverFailures_NilStore(t *testing.T) {
+	if n := migrateGH57ResolverFailures(nil); n != 0 {
+		t.Errorf("nil store re-coded %d rows", n)
+	}
+}

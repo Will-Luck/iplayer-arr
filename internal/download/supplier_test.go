@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -395,20 +394,7 @@ func newSupplierHarness(t *testing.T, mediaXML string) (*Manager, *store.Store) 
 	}
 	t.Cleanup(func() { st.Close() })
 
-	playlistServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"defaultAvailableVersion": map[string]interface{}{
-				"smpConfig": map[string]interface{}{
-					"title": "Supplier Test Programme",
-					"items": []map[string]interface{}{
-						{"kind": "programme", "duration": 1800, "vpid": "p_sup_vpid"},
-					},
-				},
-			},
-			"allAvailableVersions": []interface{}{},
-		})
-	}))
-	t.Cleanup(playlistServer.Close)
+	playlistServer := fakeIBLEpisodes(t, "Supplier Test Programme", "p_sup_vpid", "PT30M")
 
 	mediaSelectorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")

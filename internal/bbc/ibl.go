@@ -59,7 +59,7 @@ var (
 )
 
 // SearchCtx is the context-aware variant of Search. It honours ctx
-// cancellation through Client.GetCtx so callers like BrowseFresh can
+// cancellation through Client.GetJSONCtx so callers like BrowseFresh can
 // bound wall time. Brand/series results are expanded via
 // ListEpisodesCtx, so ctx propagates through pagination as well as
 // the search call itself.
@@ -67,7 +67,7 @@ func (ibl *IBL) SearchCtx(ctx context.Context, query string, page int) ([]IBLRes
 	searchURL := fmt.Sprintf("%s/new-search?q=%s&rights=web&page=%d&per_page=20",
 		ibl.BaseURL, url.QueryEscape(query), page)
 
-	body, err := ibl.client.GetCtx(ctx, searchURL)
+	body, err := ibl.client.GetJSONCtx(ctx, searchURL)
 	if err != nil {
 		return nil, fmt.Errorf("iBL search: %w", err)
 	}
@@ -138,7 +138,7 @@ func (ibl *IBL) ListEpisodesCtx(ctx context.Context, pid string) ([]IBLResult, e
 		epURL := fmt.Sprintf("%s/programmes/%s/episodes?per_page=%d&page=%d",
 			ibl.BaseURL, pid, perPage, page)
 
-		body, err := ibl.client.GetCtx(ctx, epURL)
+		body, err := ibl.client.GetJSONCtx(ctx, epURL)
 		if err != nil {
 			return nil, fmt.Errorf("iBL episodes page %d: %w", page, err)
 		}
@@ -200,7 +200,7 @@ func (ibl *IBL) GroupEpisodes(ctx context.Context, groupID string, perPage int) 
 	gURL := fmt.Sprintf("%s/groups/%s/episodes?per_page=%d",
 		ibl.BaseURL, url.PathEscape(groupID), perPage)
 
-	body, err := ibl.client.GetCtx(ctx, gURL)
+	body, err := ibl.client.GetJSONCtx(ctx, gURL)
 	if err != nil {
 		return nil, fmt.Errorf("iBL group episodes: %w", err)
 	}
@@ -531,7 +531,7 @@ func (ibl *IBL) FilmsCtx(ctx context.Context, limit int) ([]IBLResult, error) {
 	filmsURL := fmt.Sprintf("%s/categories/films/programmes?rights=web&page=1&per_page=%d",
 		ibl.BaseURL, limit)
 
-	body, err := ibl.client.GetCtx(ctx, filmsURL)
+	body, err := ibl.client.GetJSONCtx(ctx, filmsURL)
 	if err != nil {
 		return nil, fmt.Errorf("iBL films browse: %w", err)
 	}

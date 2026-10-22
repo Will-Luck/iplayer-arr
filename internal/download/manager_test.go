@@ -2,12 +2,12 @@ package download
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -298,12 +298,17 @@ func TestProcessNext_ClaimsNotYetAvailableBeyondMaxRetries(t *testing.T) {
 	st, _ := store.Open(filepath.Join(dir, "test.db"))
 	defer st.Close()
 
-	// Real playlist resolver pointed at a server that returns an empty
-	// playlist, so processDownload classifies it as not-yet-available and
-	// calls failDownload (incrementing RetryCount) rather than nil-panicking.
+	// Real playlist resolver pointed at a server that returns iBL's empty
+	// episode list, so processDownload classifies it as not-yet-available
+	// and calls failDownload (incrementing RetryCount) rather than
+	// nil-panicking.
 	playlistServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/episodes/") {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"defaultAvailableVersion":{"smpConfig":{"items":[]}}}`))
+		w.Write([]byte(`{"version":"1.0","schema":"/ibl/v1/schema/ibl.json","episodes":[]}`))
 	}))
 	defer playlistServer.Close()
 
@@ -322,7 +327,7 @@ func TestProcessNext_ClaimsNotYetAvailableBeyondMaxRetries(t *testing.T) {
 	}
 	dl := &store.Download{
 		ID:          "nya-claim",
-		PID:         "p1",
+		PID:         "m00nya01",
 		Status:      store.StatusFailed,
 		FailureCode: store.FailCodeNotYetAvailable,
 		Retryable:   true,
@@ -385,23 +390,8 @@ func TestWorkerLifecycle(t *testing.T) {
 	}
 	defer st.Close()
 
-	// Mock playlist endpoint
-	playlistServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := map[string]interface{}{
-			"defaultAvailableVersion": map[string]interface{}{
-				"smpConfig": map[string]interface{}{
-					"title":   "Test Programme",
-					"summary": "A test programme",
-					"items": []map[string]interface{}{
-						{"kind": "programme", "duration": 1800, "vpid": "p_test_vpid"},
-					},
-				},
-			},
-			"allAvailableVersions": []interface{}{},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer playlistServer.Close()
+	// Mock iBL episode endpoint
+	playlistServer := fakeIBLEpisodes(t, "Test Programme", "p_test_vpid", "PT30M")
 
 	// Mock media selector endpoint - return a dummy stream
 	// The worker will attempt ffmpeg on this URL which will fail,

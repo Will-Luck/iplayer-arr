@@ -27,6 +27,12 @@ const maxRetries = 3
 const maxNotYetAvailableRetries = 12
 const notYetAvailableRetryInterval = 5 * time.Minute
 
+// metadata_unavailable failures (the BBC could not tell us about the
+// episode) retry on the same steady cadence, from their own budget, so a
+// BBC outage of up to an hour keeps Sonarr seeing the grab as Queued
+// rather than Failed. GitHub #57.
+const maxMetadataFailures = 12
+
 // worker polls for pending or retryable downloads every second. Each
 // tick's processNext is wrapped in safeProcessNext so an unexpected
 // panic inside the download pipeline (a nil deref, a third-party
@@ -104,7 +110,7 @@ func (m *Manager) processNext(ctx context.Context, workerID int) {
 		if dl.Status == store.StatusPending {
 			log.Printf("worker %d: picking up pending download %s (%s)", workerID, dl.ID, dl.PID)
 		} else {
-			log.Printf("worker %d: retrying failed download %s (%s), attempt %d", workerID, dl.ID, dl.PID, dl.RetryCount+1)
+			log.Printf("worker %d: retrying failed download %s (%s), attempt %d", workerID, dl.ID, dl.PID, attemptCount(dl)+1)
 		}
 		// Wrap the claimed-window in a deferred scope so a panic inside
 		// processDownload still cancels the worker context and releases
@@ -143,14 +149,22 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 			dl.ID, dl.CDNFailures, requested, targetHeight)
 	}
 
-	// 1. Resolve playlist
+	// 1. Resolve playlist. Both BBC lookups (this and the media selector
+	// below) are bounded by the worker context, so a cancel stops a slow
+	// lookup at once; otherwise the failure it eventually returns would
+	// write the cancelled row back into the queue. GitHub #57.
 	m.setStatus(dl, store.StatusResolving, "")
-	info, err := m.playlist.Resolve(dl.PID)
+	resolveCtx, cancelResolve := context.WithTimeout(ctx, 60*time.Second)
+	info, err := m.playlist.ResolveCtx(resolveCtx, dl.PID)
+	cancelResolve()
 	if err != nil {
+		if m.stopIfCancelled(ctx, dl, "playlist resolve") {
+			return
+		}
 		if errors.Is(err, bbc.ErrNotYetAvailable) {
 			m.failDownload(dl, store.FailCodeNotYetAvailable, fmt.Errorf("playlist resolve: %w", err))
 		} else {
-			m.failDownload(dl, store.FailCodeUnavailable, fmt.Errorf("playlist resolve: %w", err))
+			m.failDownload(dl, store.FailCodeMetadataUnavailable, fmt.Errorf("playlist resolve: %w", err))
 		}
 		return
 	}
@@ -167,8 +181,11 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	m.broadcast("download:status", dl)
 
 	// 2. Resolve media selector
-	streams, err := m.ms.Resolve(info.VPID)
+	streams, err := m.ms.ResolveCtx(ctx, info.VPID)
 	if err != nil {
+		if m.stopIfCancelled(ctx, dl, "media selector") {
+			return
+		}
 		if bbc.IsGeoBlocked(err) {
 			m.failDownload(dl, store.FailCodeGeoBlocked, err)
 		} else {
@@ -373,6 +390,37 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	log.Printf("download %s completed: %s", dl.ID, dl.Title)
 }
 
+// stopIfCancelled reports whether ctx was cancelled during a BBC lookup
+// and, if so, leaves the row as the cancel expects: a user cancel deletes
+// it (CancelDownload), so nothing is written; a shutdown puts it back to
+// pending for the next start. GitHub #57.
+func (m *Manager) stopIfCancelled(ctx context.Context, dl *store.Download, step string) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	if m.IsCancelled(dl.ID) {
+		m.clearCancelled(dl.ID)
+		log.Printf("download %s cancelled by user during %s", dl.ID, step)
+		return true
+	}
+	m.setStatus(dl, store.StatusPending, "")
+	log.Printf("download %s returned to pending (context cancelled during %s)", dl.ID, step)
+	return true
+}
+
+// attemptCount is how many failed attempts the download's current failure
+// code has used from its budget: stalls and metadata failures count their
+// own, everything else shares RetryCount.
+func attemptCount(dl *store.Download) int {
+	switch dl.FailureCode {
+	case store.FailCodeStalled:
+		return dl.StallCount
+	case store.FailCodeMetadataUnavailable:
+		return dl.MetadataFailures
+	}
+	return dl.RetryCount
+}
+
 // setStatus updates a download's status and persists + broadcasts.
 func (m *Manager) setStatus(dl *store.Download, status, errMsg string) {
 	dl.Status = status
@@ -384,10 +432,11 @@ func (m *Manager) setStatus(dl *store.Download, status, errMsg string) {
 }
 
 // failDownload marks a download as failed with the given failure code.
-// GeoBlocked and Expired are permanent; not-yet-available retries on a steady
-// cadence over the publication window; everything else retries with
-// exponential backoff (30s, then 90s; the third failure is permanent) to
-// avoid hammering the BBC CDN.
+// GeoBlocked and Expired are permanent; not-yet-available and
+// metadata_unavailable retry on a steady 5-minute cadence (the latter from
+// its own MetadataFailures budget, GitHub #57); stalls have their own
+// budget; everything else retries with exponential backoff (30s, then 90s;
+// the third failure is permanent) to avoid hammering the BBC CDN.
 func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	dl.Status = store.StatusFailed
 	dl.FailureCode = code
@@ -424,6 +473,16 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 		if dl.Retryable {
 			dl.RetryAfter = m.now().Add(notYetAvailableRetryInterval)
 		}
+	case store.FailCodeMetadataUnavailable:
+		// Own budget (MetadataFailures), like stalls, so attempts already
+		// spent waiting for BBC to publish cannot turn one BBC blip into a
+		// permanent failure. GitHub #57.
+		dl.MetadataFailures++
+		limit = maxMetadataFailures
+		dl.Retryable = dl.MetadataFailures < maxMetadataFailures
+		if dl.Retryable {
+			dl.RetryAfter = m.now().Add(notYetAvailableRetryInterval)
+		}
 	default:
 		dl.RetryCount++
 		// A supplier refusal is recorded against the supplier instead of
@@ -457,10 +516,7 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	}
 
 	m.broadcast("download:failed", dl)
-	count := dl.RetryCount
-	if code == store.FailCodeStalled {
-		count = dl.StallCount
-	}
+	count := attemptCount(dl)
 	if dl.Retryable {
 		log.Printf("download %s failed (%s): %v [retry %d/%d, backoff %v]", dl.ID, code, err, count, limit, time.Until(dl.RetryAfter).Round(time.Second))
 	} else {

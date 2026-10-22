@@ -243,14 +243,17 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 		return existing.ID, nil
 	}
 
-	// A history entry short-circuits the enqueue, with exactly one
-	// exception: a not-yet-available failure. Before issue #52 the
-	// status-blind lookup handed that dead ID back to every later grab
-	// of the same pid+quality, so an episode grabbed before BBC
+	// A history entry short-circuits the enqueue, with two exceptions:
+	// a not-yet-available failure and a metadata failure. Before issue
+	// #52 the status-blind lookup handed that dead ID back to every later
+	// grab of the same pid+quality, so an episode grabbed before BBC
 	// published its playlist -- failed by the worker after
 	// maxNotYetAvailableRetries and moved to history -- could never be
-	// retried, even once BBC published it. That failure alone means
-	// "come back later", so it is the only one a fresh grab supersedes.
+	// retried, even once BBC published it. A metadata failure means the
+	// BBC could not tell us about the episode at the time (GitHub #57:
+	// every /programmes URL served an error page from 2026-10-21). Both
+	// mean "come back later", so they are the only ones a fresh grab
+	// supersedes.
 	//
 	// Every other terminal failure keeps deduping as before, on purpose.
 	// Retrying a truncated or ffmpeg_error row refetches a whole episode
@@ -263,7 +266,8 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 	hist, _ := m.store.FindHistoryByPIDQuality(pid, quality)
 	if hist != nil {
 		supersede := hist.Status == store.StatusFailed &&
-			hist.FailureCode == store.FailCodeNotYetAvailable
+			(hist.FailureCode == store.FailCodeNotYetAvailable ||
+				hist.FailureCode == store.FailCodeMetadataUnavailable)
 		if !supersede {
 			return hist.ID, nil
 		}
@@ -271,8 +275,8 @@ func (m *Manager) Enqueue(pid, quality, title, category string) (string, error) 
 			// Non-fatal: the retry is worth more than the tidy-up.
 			// Worst case the stale row lingers and the next lookup
 			// still prefers a non-failed entry over it.
-			log.Printf("enqueue %s/%s: clearing stale not-yet-available history %s: %v",
-				pid, quality, hist.ID, err)
+			log.Printf("enqueue %s/%s: clearing stale %s history %s: %v",
+				pid, quality, hist.FailureCode, hist.ID, err)
 		}
 	}
 

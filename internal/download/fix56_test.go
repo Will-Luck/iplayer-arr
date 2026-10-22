@@ -2,7 +2,6 @@ package download
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -185,22 +184,7 @@ func newSeamHarness(t *testing.T) (*Manager, *store.Store) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	playlistServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := map[string]interface{}{
-			"defaultAvailableVersion": map[string]interface{}{
-				"smpConfig": map[string]interface{}{
-					"title":   "Seam Test Programme",
-					"summary": "A test programme",
-					"items": []map[string]interface{}{
-						{"kind": "programme", "duration": 1800, "vpid": "p_seam_vpid"},
-					},
-				},
-			},
-			"allAvailableVersions": []interface{}{},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	t.Cleanup(playlistServer.Close)
+	playlistServer := fakeIBLEpisodes(t, "Seam Test Programme", "p_seam_vpid", "PT30M")
 
 	mediaSelectorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")

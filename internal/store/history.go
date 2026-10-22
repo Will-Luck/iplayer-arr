@@ -223,3 +223,59 @@ func (s *Store) ClearHistory() (int, error) {
 	})
 	return count, err
 }
+
+// RecodeResolverOutageFailures re-codes the rows that failed to resolve
+// while BBC /programmes was offline (GitHub #57): failed,
+// stream_unavailable, an error starting "playlist resolve: ". In history
+// (completed on or after since) they become metadata_unavailable, which a
+// later grab of the same pid+quality supersedes. Rows still retrying in
+// the downloads bucket also start again with RetryCount 0, since the
+// outage spent it (an earlier CDN failure on the same row is forgiven
+// too, at most one extra attempt). Nothing else about a row changes and no other row is touched;
+// v1.8.2 never writes this combination, so running it again only finds
+// rows an older version wrote. Returns the ids it re-coded.
+func (s *Store) RecodeResolverOutageFailures(since time.Time) ([]string, error) {
+	var ids []string
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		for _, bucket := range [][]byte{bucketHistory, bucketDownloads} {
+			b := tx.Bucket(bucket)
+			var updates []*Download
+			if err := b.ForEach(func(k, v []byte) error {
+				var dl Download
+				if err := json.Unmarshal(v, &dl); err != nil {
+					return err
+				}
+				if dl.Status != StatusFailed || dl.FailureCode != FailCodeUnavailable ||
+					!strings.HasPrefix(dl.Error, "playlist resolve: ") {
+					return nil
+				}
+				if string(bucket) == string(bucketHistory) && dl.CompletedAt.Before(since) {
+					return nil
+				}
+				updates = append(updates, &dl)
+				return nil
+			}); err != nil {
+				return err
+			}
+			for _, dl := range updates {
+				dl.FailureCode = FailCodeMetadataUnavailable
+				if string(bucket) == string(bucketDownloads) {
+					dl.RetryCount = 0
+				}
+				data, err := json.Marshal(dl)
+				if err != nil {
+					return fmt.Errorf("marshal %s entry: %w", bucket, err)
+				}
+				if err := b.Put([]byte(dl.ID), data); err != nil {
+					return err
+				}
+				ids = append(ids, dl.ID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}

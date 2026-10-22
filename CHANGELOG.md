@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-10-22
+
+### Fixed
+- Downloads and quality checks work again. Since 21 October 2026 the BBC
+  has redirected every `bbc.co.uk/programmes` page to a "Service
+  Temporarily Unavailable" page, including the `playlist.json` that
+  iplayer-arr used to find an episode's stream, so every download failed
+  with `parse playlist: invalid character '<' looking for beginning of
+  value`. iplayer-arr now looks episodes up through iPlayer's own API
+  (iBL), the same one search already uses. GitHub #57.
+- A programme that is airing live is no longer resolved to its live
+  stream: a 24-hour pop-up channel or a programme on air now reads as not
+  yet available until the BBC publishes the on-demand version.
+- A programme that only exists as an audio-described or signed version
+  downloads that version, and its heights are no longer cached, so a
+  396p audio-described version cannot stand in for the programme's
+  qualities.
+- Heights the BBC serves only from live-channel suppliers, which happens
+  at 720p for a few minutes after a broadcast, are no longer cached, so
+  the 1080p version that follows is advertised once it exists. A show's
+  first probed episode also no longer passes uncached heights on to the
+  rest of the show.
+- Cancelling a download while the BBC is slow to answer an episode or
+  stream lookup now stops it at once. Before, the lookup carried on, and
+  the failure it eventually returned put the cancelled download back in
+  the queue.
+
+### Changed
+- When the BBC answers with an HTML page where JSON was expected, the
+  error says so, with the page it redirected to and its title, instead of
+  `invalid character '<'`. This covers search and the episode lookup.
+- A failure to get an episode's details from the BBC (an HTML page, an
+  unexpected response, a timeout) is now reported as
+  `metadata_unavailable` instead of `stream_unavailable`. It retries every
+  5 minutes for up to an hour, from its own retry budget, so Sonarr sees
+  the grab as queued through a short BBC outage. A later grab of the same
+  episode and quality starts afresh instead of being handed the failed
+  entry.
+- An episode PID must be lowercase letters and digits; anything else
+  fails without contacting the BBC.
+
+### Upgrade notes
+- On start, downloads that failed to resolve since 21 October 2026 are
+  re-coded to `metadata_unavailable` (logged with their IDs), so grabbing
+  them again works, and any still retrying start again with a fresh
+  retry budget. Nothing is deleted.
+- Sonarr and Radarr: grabs that failed during the outage are probably on
+  the blocklist. Remove the iplayer-arr entries from 21 October onwards
+  (Activity, Blocklist), then search for the missing episodes.
+- API users: send the same `POST /api/download` again. Short clips such
+  as highlights expire after about a day, so some may no longer be on
+  iPlayer.
+
 ## [1.8.1] - 2026-10-12
 
 ### Fixed

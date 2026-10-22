@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -182,7 +183,7 @@ func (p *QualityProber) PrefetchPIDsIndividually(ctx context.Context, items []Pr
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			heights, nya := p.probeOne(ctx, item)
+			heights, nya, _ := p.probeOne(ctx, item)
 			mu.Lock()
 			result.Heights[item.PID] = heights
 			if nya {
@@ -223,20 +224,26 @@ func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) (
 	// 2. Probe the first PID as the representative for the group. Capture
 	// the leader's not-yet-available flag so a single-PID group (the common
 	// daily-show case) still surfaces it after the fallback loop.
-	leaderHeights, leaderNYA := p.probeOne(ctx, group[0])
+	leaderHeights, leaderNYA, leaderCached := p.probeOne(ctx, group[0])
 
 	if leaderHeights != nil {
-		now := time.Now()
-		for _, sibling := range group[1:] {
-			_ = p.store.PutQualityCache(&store.QualityCache{
-				PID:      sibling.PID,
-				ShowName: sibling.ShowName,
-				Heights:  leaderHeights,
-				ProbedAt: now,
-			})
+		// Siblings inherit the leader's cache row only when the leader's
+		// own answer was cacheable; heights probeOne kept out of the cache
+		// (a transient FHD error, an accessibility-only version, live-only
+		// suppliers) must not reach the cache through the group either.
+		if leaderCached {
+			now := time.Now()
+			for _, sibling := range group[1:] {
+				_ = p.store.PutQualityCache(&store.QualityCache{
+					PID:      sibling.PID,
+					ShowName: sibling.ShowName,
+					Heights:  leaderHeights,
+					ProbedAt: now,
+				})
+			}
 		}
-		log.Printf("show-group probed: show=%q leader=%s heights=%v siblings=%d",
-			group[0].ShowName, group[0].PID, leaderHeights, len(group)-1)
+		log.Printf("show-group probed: show=%q leader=%s heights=%v siblings=%d cached=%v",
+			group[0].ShowName, group[0].PID, leaderHeights, len(group)-1, leaderCached)
 		return leaderHeights, false
 	}
 
@@ -248,7 +255,7 @@ func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) (
 	var fallbackHeights []int
 	anyNotYetAvailable := leaderNYA
 	for _, sibling := range group[1:] {
-		h, nya := p.probeOne(ctx, sibling)
+		h, nya, _ := p.probeOne(ctx, sibling)
 		if h != nil && fallbackHeights == nil {
 			fallbackHeights = h
 		}
@@ -268,11 +275,13 @@ func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) (
 // is nil to signal "probe attempted, no usable answer"). The second
 // return value is true only when the playlist was empty
 // (ErrNotYetAvailable); that branch is never cached so the next probe
-// re-checks once BBC publishes the stream. Issue #44.
-func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (heights []int, notYetAvailable bool) {
+// re-checks once BBC publishes the stream. Issue #44. The third reports
+// whether the heights are (now) in the cache, so a show group only hands
+// cacheable heights on to its siblings.
+func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (heights []int, notYetAvailable bool, cached bool) {
 	// 1. Cache hit short-circuit.
-	if cached, err := p.store.GetQualityCache(item.PID); err == nil && cached != nil {
-		return cached.Heights, false
+	if row, err := p.store.GetQualityCache(item.PID); err == nil && row != nil {
+		return row.Heights, false, true
 	}
 
 	// 2. Per-probe deadline bounded by the parent context.
@@ -284,21 +293,21 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (hei
 	if err != nil {
 		if errors.Is(err, ErrNotYetAvailable) {
 			log.Printf("quality probe: not yet available pid=%s (skipping advertise, no cache)", item.PID)
-			return nil, true
+			return nil, true, false
 		}
 		log.Printf("quality probe failed pid=%s err=%v (playlist)", item.PID, err)
-		return nil, false
+		return nil, false, false
 	}
 	if plInfo.VPID == "" {
 		log.Printf("quality probe failed pid=%s err=no-vpid", item.PID)
-		return nil, false
+		return nil, false, false
 	}
 
 	// 4. mediaselector VPID -> streams; walk heights, dedupe, sort descending.
 	streams, err := p.ms.ResolveCtx(probeCtx, plInfo.VPID)
 	if err != nil {
 		log.Printf("quality probe failed pid=%s err=%v (mediaselector)", item.PID, err)
-		return nil, false
+		return nil, false, false
 	}
 	heights = dedupedSortedHeights(streams.Video)
 
@@ -358,7 +367,23 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (hei
 	// transient error so the next call retries the FHD HEAD instead
 	// of locking in "no 1080" until the cache TTL expires. The
 	// already-resolved heights are still returned for this response.
-	if !fhdProbeTransientErr {
+	//
+	// Two more answers describe a passing state rather than the
+	// programme, and the cache has no TTL (GitHub #57): an
+	// accessibility-only version (audio-described is 396p only), and a
+	// version mediaselector serves only from live-channel suppliers,
+	// which happens for a few minutes after a broadcast, at 720p, before
+	// the on-demand files exist.
+	skipReason := ""
+	switch {
+	case fhdProbeTransientErr:
+		skipReason = "fhd probe transient error"
+	case plInfo.AccessibilityOnly:
+		skipReason = "only an audio-described or signed version"
+	case liveSuppliersOnly(streams.Video):
+		skipReason = "live-channel suppliers only"
+	}
+	if skipReason == "" {
 		if err := p.store.PutQualityCache(&store.QualityCache{
 			PID:      item.PID,
 			ShowName: item.ShowName,
@@ -368,12 +393,30 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (hei
 			log.Printf("quality probe cache write failed pid=%s err=%v", item.PID, err)
 			// Fall through — the result is still usable for this response
 			// even if the cache write failed.
+		} else {
+			cached = true
 		}
+	} else if !fhdProbeTransientErr {
+		log.Printf("quality probe pid=%s: not caching heights %v (%s)", item.PID, heights, skipReason)
 	}
 
 	// 7. Log success at INFO level via the ring buffer (any existing logger).
 	log.Printf("quality probe pid=%s heights=%v", item.PID, heights)
-	return heights, false
+	return heights, false, cached
+}
+
+// liveSuppliersOnly reports whether every stream comes from a
+// live-channel supplier (akamai_live_uk, bbc_bidi_live_uk and so on).
+func liveSuppliersOnly(video []VideoStream) bool {
+	if len(video) == 0 {
+		return false
+	}
+	for _, v := range video {
+		if !strings.HasSuffix(v.Supplier, "_live_uk") {
+			return false
+		}
+	}
+	return true
 }
 
 // dedupedSortedHeights extracts unique Height values from the VideoStream
