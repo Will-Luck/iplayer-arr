@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-24
+
+### Fixed
+- Specials now get the season and episode numbers Sonarr uses. iPlayer
+  lists most specials directly under the show rather than in a series,
+  and iplayer-arr numbered them from their place in that list. Porridge's
+  1973 pilot came out as S01E01 and its Christmas specials as S00E04 and
+  S00E05 (TheTVDB has them as S00E01 to S00E03), Doctor Who's "The
+  Runaway Bride" came out as S01E04, the number of "Aliens of London",
+  and "A Christmas Carol" as S00E15, the number of "Dreamland". Sonarr
+  accepted some of them as the episode they were numbered as, and grabbed
+  the wrong programme. When Sonarr searches by TVDB ID, iplayer-arr now
+  reads the show's episode list from Skyhook, the TheTVDB service Sonarr
+  itself uses. An episode whose title matches exactly one TheTVDB episode
+  that aired within a week of it takes that episode's numbers. This also
+  corrects regular episodes the BBC numbers differently: Doctor Who Series
+  7 and Inside No. 9 Series 3 (the BBC counts a Christmas special as an
+  episode of the series, so the rest of the series was one out), QI
+  (series lettered rather than numbered) and Red Dwarf (series in Roman
+  numerals). An episode of the show whose title matches nothing, and
+  whose number is only a guess from its place in iPlayer's list, takes
+  the number of the one TheTVDB special that aired the same day. Call the
+  Midwife's "Christmas Specials 2024: Part 1" is TheTVDB's "Christmas
+  Special 2024 (1)", and Death in Paradise's "Christmas Special 2022" is
+  "The Death Ghost". On a day with several specials, it takes the one
+  whose title its own contains, so "Mini Episode - The Night of the
+  Doctor" is S00E82. A signed version gives way to the programme it
+  signs. The same goes for a special numbered only within its own group:
+  Call the Midwife's "Christmas Specials 2025: Episode 1" came out as
+  S01E01, the first episode of 2012, and is now S00E17. Other episodes
+  numbered "Episode N" with no series, as in Casualty, keep Series 1
+  (GitHub #32). A special still unmatched keeps the numbering it had,
+  unless that number is a guess of any of these kinds and TheTVDB has a
+  differently titled episode there, aired more than a week away. Then it
+  is left out rather than offered as that episode: The Repair Shop's
+  signed "At Christmas 2025" came out as S00E01, TheTVDB's 2017 Christmas
+  special. Other unmatched episodes keep their numbering, since a
+  bought-in series often reaches iPlayer years after TheTVDB's air date.
+  Daily programmes whose episode title is the date keep their date
+  titles. A title after a label such as "Prequel: " is not matched on its
+  own, so an extra about an episode does not take the episode's number.
+  Episodes numbered from TheTVDB ignore the per-show series and episode
+  overrides, which exist to correct BBC numbering; a custom name and Force
+  Date Based still apply, and a special whose title an override changes
+  is never left out. Each show's episode list is cached for 12 hours,
+  and a failed lookup for 5 minutes. If Skyhook cannot be reached, the
+  search answers with BBC numbering as before.
+  The RSS feed carries no TVDB ID, so it numbers the episodes of shows
+  Sonarr has already searched for by TVDB ID, which iplayer-arr
+  remembers. Those items carry the show's Sonarr title and TVDB ID
+  (`Doctor.Who.2023.S00E05.Joy.to.the.World...`), in place of any custom
+  name, so Sonarr files each under the series whose numbers it has,
+  although iPlayer calls Doctor Who (2005) and Doctor Who (2023) both
+  "Doctor Who". The feed waits up to 5 seconds for Skyhook. A lookup
+  still running then is dropped and tried again at the next poll, and
+  until a list arrives that show keeps BBC numbering. A show whose
+  iPlayer name matches no show Sonarr has searched for by TVDB ID keeps
+  BBC numbering in the feed, and so does a text search for it.
+  GitHub #60.
+
+### Upgrade notes
+- Specials Sonarr imported before this release may be filed as another
+  episode, for example Porridge's "No Way Out" as S00E04 "The Porridge
+  Movie: Doing Time", or Doctor Who's "The Runaway Bride" as S01E04
+  "Aliens of London". They are worth checking. To replace a wrong one,
+  first delete its entry from History on iplayer-arr's dashboard, as the
+  1.8.3 notes below describe, then delete the file in Sonarr and search
+  for the episode again.
+- Series and episode overrides set up to correct specials are no longer
+  needed for episodes TheTVDB numbers, and no longer apply to them. They
+  still apply to everything else.
+
 ## [1.8.3] - 2026-10-24
 
 ### Fixed

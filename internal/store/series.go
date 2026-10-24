@@ -92,6 +92,25 @@ func (s *Store) GetSeriesMappingByName(name string) (*SeriesMapping, error) {
 	return found, err
 }
 
+// ListSeriesMappings returns every stored SeriesMapping, skipping
+// malformed entries as GetSeriesMappingByName does. The RSS feed uses
+// them to number the episodes of shows Sonarr has searched by tvdbid.
+// GitHub #60.
+func (s *Store) ListSeriesMappings() ([]SeriesMapping, error) {
+	var out []SeriesMapping
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketSeries).ForEach(func(_, data []byte) error {
+			var m SeriesMapping
+			if err := json.Unmarshal(data, &m); err != nil {
+				return nil
+			}
+			out = append(out, m)
+			return nil
+		})
+	})
+	return out, err
+}
+
 // errStopIteration short-circuits a bolt.Bucket.ForEach once the target
 // row is found. Any non-nil return from ForEach's callback ends the
 // scan; we use a sentinel so the caller can distinguish "stopped early"

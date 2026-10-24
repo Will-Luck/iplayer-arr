@@ -99,6 +99,15 @@ func GenerateTitle(p *store.Programme, quality string, override *store.ShowOverr
 		if override.ForceDateBased && airDate != "" {
 			return buildDateTitle(name, episode, airDate, quality), store.TierDate
 		}
+	}
+
+	// TheTVDB's numbers are the ones Sonarr expects, so the overrides
+	// that correct BBC numbering do not apply to them. GitHub #60.
+	if p.TVDBNumbered {
+		return buildSxxExxTitle(name, episode, series, episodeNum, quality), store.TierFull
+	}
+
+	if override != nil {
 		if override.ForcePosition {
 			series = 0
 			episodeNum = 0
@@ -156,6 +165,39 @@ func GenerateTitle(p *store.Programme, quality string, override *store.ShowOverr
 
 	// Tier 4: no numbering available; title only.
 	return buildManualTitle(name, episode, quality), store.TierManual
+}
+
+// positionGuess returns the number GenerateTitle gives p, with no
+// override, when BBC data does not say it: S00E<position or MMDD> for a
+// special, S01E<position> for an episode with no numbering, and
+// S01E<N> for a special whose subtitle numbers it with no series
+// ("Christmas Specials 2025: Episode 1"), where Series 1 is only
+// assumed. ok is false when the number comes from the subtitle
+// otherwise, or the title has none.
+// TestGH60_PositionGuessMatchesGenerateTitle keeps the two in step.
+func positionGuess(p *store.Programme) (season, episode int, ok bool) {
+	if isSpecial(p.Episode) && (p.Series == 0 || p.EpisodeNum == 0) {
+		ep := p.Position
+		if ep == 0 && p.AirDate != "" {
+			ep = mmddFromDate(p.AirDate)
+		}
+		if ep > 0 {
+			return 0, ep, true
+		}
+	}
+	if p.Series > 0 && p.EpisodeNum > 0 {
+		if p.SeriesAssumed && isSpecial(p.Episode) {
+			return p.Series, p.EpisodeNum, true
+		}
+		return 0, 0, false
+	}
+	if p.AirDate != "" && isDateSubtitle(p.Episode) {
+		return 0, 0, false
+	}
+	if p.Position > 0 {
+		return 1, p.Position, true
+	}
+	return 0, 0, false
 }
 
 func buildSxxExxTitle(name, episode string, series, ep int, quality string) string {

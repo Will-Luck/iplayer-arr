@@ -93,7 +93,18 @@ type Programme struct {
 	Position     int             `json:"position"`
 	IdentityTier string          `json:"identity_tier"`
 	IsDateBased  bool            `json:"is_date_based"`
-	CachedAt     time.Time       `json:"cached_at"`
+	// TVDBNumbered marks Series and EpisodeNum as TheTVDB's numbers,
+	// which GenerateTitle emits without applying the numbering
+	// overrides. GitHub #60.
+	TVDBNumbered bool `json:"tvdb_numbered,omitempty"`
+	// SeriesAssumed marks Series as the Series 1 iplayer-arr assumes
+	// for an episode number with no series (GitHub #32), not BBC's.
+	SeriesAssumed bool `json:"series_assumed,omitempty"`
+	// TVDBContradicted marks a programme whose only number is a guess
+	// from its iPlayer position, where TheTVDB has another episode at
+	// that number aired more than a week away. GitHub #60.
+	TVDBContradicted bool      `json:"tvdb_contradicted,omitempty"`
+	CachedAt         time.Time `json:"cached_at"`
 }
 
 type QualityOption struct {

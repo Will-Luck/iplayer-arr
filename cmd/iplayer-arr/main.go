@@ -358,6 +358,7 @@ func main() {
 	mux := http.NewServeMux()
 	nzHandler := newznab.NewHandler(ibl, st, ms, prober)
 	nzHandler.SetOnRequest(apiHandler.RecordIndexerRequest)
+	nzHandler.SetEpisodeSource(newznab.NewSkyhookEpisodes())
 	// Wire the newznab handler into the api handler so the v1.5.6
 	// /api/diag/sonarr-handshake endpoint can synthesise a Sonarr
 	// round-trip in-process. Ordering matters: apiHandler is built

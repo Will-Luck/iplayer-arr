@@ -18,6 +18,9 @@ type Handler struct {
 	store  *store.Store
 	ms     *bbc.MediaSelector
 	prober qualityProber // NEW — v1.1.0 quality probe prefetch
+	// episodes, when non-nil, supplies TheTVDB episode lists for searches
+	// that carry a tvdbid. GitHub #60.
+	episodes EpisodeSource
 	// onRequest, when non-nil, is called on every Newznab request so that the
 	// caller can track the last indexer query time.
 	onRequest func()
@@ -36,6 +39,12 @@ func NewHandler(ibl *bbc.IBL, st *store.Store, ms *bbc.MediaSelector, prober qua
 // Newznab request.  Intended for recording LastIndexerRequest timestamps.
 func (h *Handler) SetOnRequest(fn func()) {
 	h.onRequest = fn
+}
+
+// SetEpisodeSource registers where tvdbid searches get TheTVDB episode
+// numbers from. Without one, every episode keeps its BBC numbering.
+func (h *Handler) SetEpisodeSource(src EpisodeSource) {
+	h.episodes = src
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

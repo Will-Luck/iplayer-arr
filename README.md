@@ -28,7 +28,9 @@ iplayer-arr solves this with a 4-tier resolution chain:
 3. **Date** -- no numbering at all, air date used as the episode identifier (2026.01.15)
 4. **Manual** -- title only, last resort
 
-When the auto-resolved numbering still doesn't match TheTVDB (common with specials, reboots, or shows where the BBC counts differently), per-show overrides let you adjust series/episode offsets, force date-based numbering, or remap programme names -- all from the web UI.
+When Sonarr searches by TVDB ID, iplayer-arr also reads the show's episode list from Skyhook (the TheTVDB service Sonarr uses) and gives any episode whose title and air date match a TheTVDB episode that episode's season and episode numbers. That is what puts specials in Season 0 with the numbers Sonarr expects, and it corrects series the BBC counts differently. A special the BBC and TheTVDB title differently is matched by the day it aired. The RSS feed, which carries no TVDB ID, numbers the same way for shows Sonarr has searched by TVDB ID before.
+
+When the numbering still doesn't match TheTVDB (common with reboots, or episodes the BBC titles differently), per-show overrides let you adjust series/episode offsets, force date-based numbering, or remap programme names -- all from the web UI. The series and episode overrides only apply to episodes that were not matched to TheTVDB.
 
 ## Features
 

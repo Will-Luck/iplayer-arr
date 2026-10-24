@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestOpenClose(t *testing.T) {
@@ -201,6 +203,35 @@ func TestSeriesMapping(t *testing.T) {
 	got, _ := s.GetSeriesMapping("78804")
 	if got == nil || got.ShowName != "Doctor Who" {
 		t.Errorf("GetSeriesMapping = %v", got)
+	}
+}
+
+func TestListSeriesMappings(t *testing.T) {
+	s := testStore(t)
+	for _, m := range []*SeriesMapping{
+		{TVDBId: "78804", ShowName: "Doctor Who (2005)", Year: 2005},
+		{TVDBId: "449991", ShowName: "Doctor Who (2023)", Year: 2023},
+	} {
+		if err := s.PutSeriesMapping(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketSeries).Put([]byte("bad"), []byte("{"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ListSeriesMappings()
+	if err != nil {
+		t.Fatalf("ListSeriesMappings: %v", err)
+	}
+	names := map[string]string{}
+	for _, m := range got {
+		names[m.TVDBId] = m.ShowName
+	}
+	if len(got) != 2 || names["78804"] != "Doctor Who (2005)" || names["449991"] != "Doctor Who (2023)" {
+		t.Errorf("ListSeriesMappings = %+v, want the two good mappings", got)
 	}
 }
 

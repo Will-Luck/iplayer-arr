@@ -310,11 +310,47 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	// found, though not always first ("Gladiators (2024)" put "Election
 	// 2024" first), which is why hasExactTitle checks every hit.
 	exactOnly := wantName != "" && hasExactTitle(wantName, hitTitles, results)
-	for _, res := range results {
+
+	progs := make([]*store.Programme, len(results))
+	for i, res := range results {
+		progs[i] = IBLResultToProgramme(res)
+	}
+
+	// Number episodes from TheTVDB before the season/episode filter, so
+	// a search for S00E04 finds the special TheTVDB has there. Only the
+	// searched show's episodes are numbered, so not when its name is
+	// unknown (the tvdbid lookup failed and the search fell back to
+	// "BBC"). Daily searches, by air date or by year as the season, keep
+	// their date titles. GitHub #60.
+	if h.episodes != nil && tvdbid != "" && wantName != "" && filterDate == "" && filterSeason < 1900 {
+		eps, err := h.episodes.Episodes(r.Context(), tvdbid)
+		if err != nil {
+			log.Printf("[tvsearch] TheTVDB episodes for tvdbid=%s unavailable, keeping BBC numbering: %v", tvdbid, err)
+		} else {
+			// A companion brand ("Show: Something") can be among the
+			// programmes when iPlayer has nothing titled exactly as the
+			// show, so only the show's own programmes are numbered by
+			// their air date alone.
+			n := newTVDBIndex(eps).numberFromTVDB(progs, func(p *store.Programme) bool {
+				return nameMatches(p.Name, wantName) && (!exactOnly || exactNameMatch(p.Name, wantName))
+			}, func(p *store.Programme) bool {
+				return exactNameMatch(p.Name, wantName)
+			})
+			log.Printf("[tvsearch] tvdbid=%s: %d episodes numbered from TheTVDB", tvdbid, n)
+		}
+	}
+	// The RSS feed has no tvdbid, so it numbers from the series Sonarr
+	// has searched before. GitHub #60.
+	var browseSeries map[string]*store.SeriesMapping
+	if wildcardBrowse && h.episodes != nil && h.store != nil {
+		browseSeries = h.numberBrowseFromTVDB(r.Context(), progs)
+	}
+
+	for i, res := range results {
 		if _, dup := seen[res.PID]; dup {
 			continue
 		}
-		prog := IBLResultToProgramme(res)
+		prog := progs[i]
 		if exactOnly && !exactNameMatch(prog.Name, wantName) {
 			continue
 		}
@@ -388,6 +424,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		prog      *store.Programme
 		override  *store.ShowOverride
 		qualities []string
+		tvdbid    string
 	}
 	var emits []emitItem
 	itemCount := 0
@@ -418,6 +455,28 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			override, _ = h.store.GetOverride(prog.Name)
 		}
 
+		// A special's guessed number that TheTVDB has for another
+		// episode would have Sonarr grab it as that episode ("At
+		// Christmas 2025 - Signed" as The Repair Shop's 2017 special).
+		// Unless an override renumbers it, leave it out. GitHub #60.
+		if prog.TVDBContradicted && !overridesNumbering(prog, override) {
+			log.Printf("[tvsearch] %s %q left out: TheTVDB has another episode at its guessed number", res.PID, prog.Episode)
+			continue
+		}
+		// A feed item numbered from a stored series goes out under that
+		// series' name, not a custom one, so the name, numbers and tvdbid
+		// all point at one series.
+		itemTVDB := tvdbid
+		if m := browseSeries[res.PID]; m != nil {
+			prog.Name = m.ShowName
+			itemTVDB = m.TVDBId
+			if override != nil && override.CustomName != "" {
+				o := *override
+				o.CustomName = ""
+				override = &o
+			}
+		}
+
 		ceiling := h.qualityCeilingHeight()
 		var qualities []string
 		if probe.Heights[res.PID] != nil {
@@ -437,7 +496,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			continue
 		}
 		itemCount += len(qualities)
-		emits = append(emits, emitItem{res: res, prog: prog, override: override, qualities: qualities})
+		emits = append(emits, emitItem{res: res, prog: prog, override: override, qualities: qualities, tvdbid: itemTVDB})
 	}
 
 	// Stamp each emitted PID with the time it first appeared in the
@@ -534,8 +593,8 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 				html.EscapeString(title), baseURL(r), guid, apiKeyParam, baseURL(r), guid, apiKeyParam, pubDate,
 				baseURL(r), guid, apiKeyParam, size, cat, size)
 
-			if tvdbid != "" {
-				item += fmt.Sprintf("\n      <newznab:attr name=\"tvdbid\" value=\"%s\" />", html.EscapeString(tvdbid))
+			if e.tvdbid != "" {
+				item += fmt.Sprintf("\n      <newznab:attr name=\"tvdbid\" value=\"%s\" />", html.EscapeString(e.tvdbid))
 			}
 
 			if tier == store.TierManual {
@@ -588,16 +647,17 @@ func IBLResultToProgramme(r bbc.IBLResult) *store.Programme {
 		series = 1
 	}
 	return &store.Programme{
-		PID:        r.PID,
-		Name:       r.Title,
-		Episode:    r.Subtitle,
-		Series:     series,
-		EpisodeNum: r.EpisodeNum,
-		Position:   r.Position,
-		AirDate:    r.AirDate,
-		Channel:    r.Channel,
-		Thumbnail:  r.Thumbnail,
-		Duration:   r.Duration,
+		PID:           r.PID,
+		Name:          r.Title,
+		Episode:       r.Subtitle,
+		Series:        series,
+		SeriesAssumed: series != r.Series,
+		EpisodeNum:    r.EpisodeNum,
+		Position:      r.Position,
+		AirDate:       r.AirDate,
+		Channel:       r.Channel,
+		Thumbnail:     r.Thumbnail,
+		Duration:      r.Duration,
 	}
 }
 
@@ -742,6 +802,21 @@ func heightsToTags(heights []int) []string {
 		}
 	}
 	return out
+}
+
+// overridesNumbering reports whether an override changes the title
+// GenerateTitle gives p other than by its name. Many settings leave a
+// guessed number alone: a special keeps S00E<position> whatever the
+// offsets say.
+func overridesNumbering(p *store.Programme, o *store.ShowOverride) bool {
+	if o == nil {
+		return false
+	}
+	numbering := *o
+	numbering.CustomName = ""
+	with, _ := GenerateTitle(p, "720p", &numbering)
+	without, _ := GenerateTitle(p, "720p", nil)
+	return with != without
 }
 
 // exactNameMatch reports whether progName equals wantName, ignoring case

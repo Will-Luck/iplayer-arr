@@ -187,7 +187,7 @@ export default function Overrides() {
         </Card.Header>
         <Card.Body>
           <p class="text-sm text-text-secondary">
-            Override how specific shows are numbered. Force date-based for daily shows; adjust series and episode offsets for mismatched numbering.
+            Override how specific shows are numbered. Force date-based for daily shows; adjust series and episode offsets for mismatched numbering. Episodes matched to TheTVDB keep TheTVDB's numbers unless Date-based is ticked: Force series and the offsets only change the rest.
           </p>
         </Card.Body>
         <Card.Body padded={false}>
