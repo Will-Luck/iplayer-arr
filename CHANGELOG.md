@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-10-24
+
 ### Fixed
 - A Sonarr search for a show no longer returns its companion programme
   under the show's name. iPlayer lists a companion whose BBC title is the
@@ -28,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not accept for a standard (non-daily) series, and programmes such
   as "EastEnders: Christmas 1986 - 2007" were numbered as the show's
   first episodes (EastEnders S01E01, S01E02). GitHub #58.
+- Video downloads are now constant frame rate, with every frame at its
+  exact time, so they should play smoothly. Every video download from the
+  BBC's HLS streams was affected, whatever its frame rate, not only 50 fps
+  ones. The BBC's packager writes timestamps that mark most B-frames to be
+  shown before they are decoded, and ffmpeg's copy into MP4 "guessed" new
+  timestamps for each of them, so MediaInfo showed a variable frame rate
+  with a maximum of 90,000 fps, frames were shown out of step, and on some
+  programmes the picture stuttered badly. ffmpeg now ignores the stream's
+  decode timestamps and rebuilds them from the presentation timestamps,
+  which are right, so nothing is guessed. Audio sync is unchanged. Files
+  downloaded before this fix stay as they are; the upgrade notes say how
+  to replace them. GitHub #59.
 
 ### Upgrade notes
 - Shows with a companion on iPlayer include The Celebrity Traitors, The
@@ -48,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the episode and quality and does not check the name again. Remove
   pending iplayer-arr releases for them from Sonarr's queue (Activity,
   Queue) so Sonarr searches again.
+- An affected file shows a variable frame rate with a maximum of 90,000
+  fps in MediaInfo; a file that shows a constant frame rate does not need
+  replacing. To replace a file downloaded before the GitHub #59 fix,
+  first delete its entry from History on iplayer-arr's dashboard, unless
+  Sonarr or Radarr has already removed it (their "Remove Completed"
+  setting for the download client does that). Then delete the file in
+  Sonarr or Radarr and search for it again. While the old entry is still
+  in History, iplayer-arr answers the new grab with the old, completed
+  download, and nothing new is downloaded. Only programmes still on
+  iPlayer can be downloaded again.
 
 ## [1.8.2] - 2026-10-22
 

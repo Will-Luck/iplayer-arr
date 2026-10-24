@@ -525,6 +525,27 @@ func buildFFmpegArgs(streamURL, outputPath string) []string {
 	}
 	args = append(args, ffmpegReconnectArgs...)
 	args = append(args,
+		// BBC's HLS packager moves every video PTS back by the first
+		// frame's composition offset but leaves DTS alone, so most
+		// B-frames arrive with DTS > PTS. Copied as-is, the ffmpeg CLI
+		// rewrites each of those packets "by guess" (pts = dts = the
+		// median of pts, dts and the last DTS + 1), and the MP4 gets
+		// 1-tick and, at 50 fps, 40-60 ms sample durations (how long
+		// depends on the encode's reorder depth): variable frame rate,
+		// frames shown out of step, stutter. The "Invalid DTS ...
+		// replacing by guess" warnings sit below -loglevel error, so
+		// nothing in our logs shows it.
+		//
+		// igndts is an INPUT option and must precede -i. It has
+		// libavformat drop the container DTS of every packet that has a
+		// PTS and rebuild it from the PTS and the stream's reorder depth,
+		// so nothing is guessed. PTS is kept, so every frame keeps its
+		// presentation time and A/V sync is unchanged. On correctly
+		// packaged input (DTS the reorder depth behind PTS, as in BBC's
+		// DASH streams) the output timestamps are the same with or
+		// without it, so it stays harmless if the BBC fixes its packager.
+		// GitHub #59.
+		"-fflags", "+igndts",
 		"-y",
 		"-i", streamURL,
 		"-c:v", "copy",
