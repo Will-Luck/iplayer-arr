@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A Sonarr search for a show no longer returns its companion programme
+  under the show's name. iPlayer lists a companion whose BBC title is the
+  show's name followed by a colon (`<Show>: <something>`), such as "The
+  Celebrity Traitors: Uncloaked", "MasterChef: The Professionals" or "Top
+  Gear: Extra Gear", as a programme of its own beside the main show, and
+  it often uses the main show's episode numbers. iplayer-arr returned
+  those episodes renamed to the main show, with its episode numbers and
+  TVDB ID, so Sonarr saw two releases for the same episode and could grab
+  the companion. Now, when iPlayer has a programme titled exactly the
+  searched name, only that programme is returned. Companions are still
+  found when Sonarr tracks them as their own series, and a show iPlayer
+  lists only under a longer name ("Talking Tom Heroes: Suddenly Super"
+  for "Talking Tom Heroes") is still found under its Sonarr name.
+  Other programmes titled the same way are no longer offered for the
+  main show either. In every case found, iplayer-arr had offered them
+  under a title Sonarr could not use correctly: one-off specials such as
+  "Gavin & Stacey: A Fond Farewell" had a date in the title, which Sonarr
+  does not accept for a standard (non-daily) series, and programmes such
+  as "EastEnders: Christmas 1986 - 2007" were numbered as the show's
+  first episodes (EastEnders S01E01, S01E02). GitHub #58.
+
+### Upgrade notes
+- Shows with a companion on iPlayer include The Celebrity Traitors, The
+  Traitors, MasterChef, The Apprentice, Gladiators, Top Gear, Race Across
+  the World and Doctor Who. Episodes Sonarr imported for them before this
+  release may be companion content, for example an Uncloaked episode filed
+  as The Celebrity Traitors. They are worth checking; delete any wrong
+  file and search for the episode again. After-shows such as Uncloaked,
+  Unleashed or You're Fired! run about half an hour, shorter than the
+  main episode, but length does not help with MasterChef: The
+  Professionals, whose episodes run about an hour like MasterChef's.
+  Check those against the episode's air date or synopsis on TVDB.
+  MasterChef is the show most likely to have wrong files: for series 16
+  to 18, iPlayer has one MasterChef episode each but 21 episodes of The
+  Professionals with the same series numbers.
+- Releases of these shows that Sonarr already holds as pending can still
+  be grabbed after the upgrade, because the NZB download link carries only
+  the episode and quality and does not check the name again. Remove
+  pending iplayer-arr releases for them from Sonarr's queue (Activity,
+  Queue) so Sonarr searches again.
+
 ## [1.8.2] - 2026-10-22
 
 ### Fixed

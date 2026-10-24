@@ -55,18 +55,19 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	isWildcard := q == ""
 
 	var results []bbc.IBLResult
+	var hitTitles []string
 	var err error
 	if isWildcard {
 		results, err = h.wildcardBrowse(r.Context())
 	} else {
-		results, err = h.ibl.Search(q, 1)
+		results, hitTitles, err = h.ibl.SearchTitles(q, 1)
 	}
 	if err != nil {
 		writeEmptyRSS(w)
 		return
 	}
 
-	h.writeResultsRSS(w, r, results, 0, 0, "", filterName, 0, "", isWildcard, parseLimitParam(r))
+	h.writeResultsRSS(w, r, results, hitTitles, 0, 0, "", filterName, 0, "", isWildcard, parseLimitParam(r))
 }
 
 func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +138,7 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	isWildcard := q == "" && tvdbid == ""
 
 	var results []bbc.IBLResult
+	var hitTitles []string
 	var err error
 	if isWildcard {
 		results, err = h.wildcardBrowse(r.Context())
@@ -144,7 +146,7 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 		if q == "" {
 			q = "BBC"
 		}
-		results, err = h.ibl.Search(q, 1)
+		results, hitTitles, err = h.ibl.SearchTitles(q, 1)
 	}
 	if err != nil {
 		writeEmptyRSS(w)
@@ -162,7 +164,7 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	// so detect the daily shape and filter by air date instead.
 	filterDate := parseDailySearchDate(seasonStr, epStr)
 
-	h.writeResultsRSS(w, r, results, season, ep, filterDate, filterName, filterYear, tvdbid, isWildcard, parseLimitParam(r))
+	h.writeResultsRSS(w, r, results, hitTitles, season, ep, filterDate, filterName, filterYear, tvdbid, isWildcard, parseLimitParam(r))
 }
 
 // parseLimitParam reads Sonarr's `limit=N` query parameter, the
@@ -213,7 +215,11 @@ func parseDailySearchDate(seasonStr, epStr string) string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, mm, dd)
 }
 
-func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid string, wildcardBrowse bool, limit int) {
+// writeResultsRSS filters results by name, S/E or air date and year,
+// then renders them as Newznab RSS. hitTitles are the iBL search-hit
+// titles from IBL.SearchTitles (nil for the wildcard browse); they decide
+// whether nameMatches' subtitle extension may apply. GitHub #58.
+func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, hitTitles []string, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid string, wildcardBrowse bool, limit int) {
 	var items []string
 	wantName := strings.TrimSpace(filterName)
 
@@ -238,11 +244,80 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	var filtered []filteredItem
 	var probeItems []bbc.ProbeItem
 	seen := make(map[string]struct{}, len(results))
+	// nameMatches lets "Show: Subtitle" answer a search for "Show" because
+	// some BBC brands carry a subtitle the TVDB name lacks: "Talking Tom
+	// Heroes: Suddenly Super" is the only brand iBL has for TVDB's
+	// "Talking Tom Heroes". When iBL also has something titled exactly
+	// wantName, the extension is switched off: anything not titled
+	// exactly wantName is dropped here, and the colon-extended titles
+	// are the only others nameMatches would have let through. Letting one
+	// through would rename it to wantName below and stamp it with this
+	// search's tvdbid, so Sonarr would take it as the parent's episode.
+	// GitHub #58.
+	//
+	// Two kinds of title are dropped here, both on purpose:
+	//   - Companion brands with a TVDB series of their own ("The Celebrity
+	//     Traitors: Uncloaked", "Doctor Who: Unleashed", "MasterChef: The
+	//     Professionals"). They often reuse the parent's numbering, so
+	//     they collide with real parent episodes. They stay findable
+	//     under their own name, which matches exactly.
+	//   - Parent content with no TVDB series of its own (none was found
+	//     for the examples below). In every case measured, v1.8.2 titled
+	//     it in one of two wrong ways, so nothing correct is lost:
+	//       - An episode-type one-off with no numbers, e.g. m0026d9p
+	//         "Gavin & Stacey: A Fond Farewell" (TVDB 80435 S00E18), got
+	//         a date-style title (Gavin.and.Stacey.2025.01.01...), and
+	//         Sonarr rejects a daily-style release for a Standard series
+	//         before it maps episodes (ValidateParsedEpisodeInfo).
+	//         TestGH58_ParentOneOffSpecialDroppedByDesign.
+	//       - A one-off brand expanded from its own listing, e.g.
+	//         m0025c1l "EastEnders: Christmas 1986 - 2007", got SxxExx
+	//         titles from its own positions, so its 1986 episodes went
+	//         out as EastEnders.S01E01 and S01E02, numbered as the
+	//         series' first episodes. TestGH58_DailySearchSkipsColonBrand.
+	//
+	// The search-hit titles count as well as the expanded results, so a
+	// parent brand whose episode listing failed (SearchCtx skips it) still
+	// switches the extension off: a transient iBL error must not let the
+	// companion back in.
+	//
+	// An exact title from another era ("Show (1992-2000)") counts too,
+	// although disambiguateByYear drops it further down. So for "Show
+	// (2024)", an in-era "Show: Sub" with no bare "Show" beside it is
+	// dropped, and the search usually returns nothing where v1.8.2
+	// returned the extension renamed. That is deliberate. An era-aware
+	// check would let "Doctor Who: Unleashed" back in as Doctor Who
+	// (2023) whenever the bare "Doctor Who" brand is missing from the
+	// hits, because only the out-of-era "(1963-1996)" and "(2005-2022)"
+	// brands would be left to compare against. An empty answer is the
+	// safer failure; a wrong programme imported as the episode is not.
+	//
+	// FIXME: disambiguateByYear returns a lone candidate unchanged
+	// (len(progs) <= 1), year or no year. When the old era leaves exactly
+	// one candidate, that old-era episode is emitted under its own title
+	// with this search's tvdbid. That is older than #58 (v1.8.2 does the
+	// same whenever an out-of-era brand is the only match); dropping the
+	// extension only makes a lone candidate more likely. No live example
+	// was found. TestGH58_OutOfEraExactBrandSuppressesExtension pins both
+	// outcomes.
+	//
+	// Known gap, out of scope for #58: hitTitles is only iBL's first
+	// page of search hits (per_page=20). If the parent brand is missing
+	// from it (expired from iPlayer, or ranked lower) while the companion
+	// is still there, hasExactTitle is false and the companion is renamed
+	// and stamped as in v1.8.2. On the 2026-10-24 data the parent was on
+	// page 1 and ranked above its companion for every colliding pair
+	// found, though not always first ("Gladiators (2024)" put "Election
+	// 2024" first), which is why hasExactTitle checks every hit.
+	exactOnly := wantName != "" && hasExactTitle(wantName, hitTitles, results)
 	for _, res := range results {
 		if _, dup := seen[res.PID]; dup {
 			continue
 		}
 		prog := IBLResultToProgramme(res)
+		if exactOnly && !exactNameMatch(prog.Name, wantName) {
+			continue
+		}
 		if !matchesSearchFilter(prog, wantName, filterDate, filterSeason, filterEp) {
 			continue
 		}
@@ -334,9 +409,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		// doesn't (e.g. "Talking Tom Heroes: Suddenly Super" vs
 		// "Talking Tom Heroes"), use the Sonarr-provided name for
 		// title generation so Sonarr can match it back to TVDB.
-		if wantName != "" && !strings.EqualFold(
-			strings.TrimSpace(bareName(prog.Name)),
-			strings.TrimSpace(bareName(wantName))) {
+		if wantName != "" && !exactNameMatch(prog.Name, wantName) {
 			prog.Name = wantName
 		}
 
@@ -671,15 +744,42 @@ func heightsToTags(heights []int) []string {
 	return out
 }
 
+// exactNameMatch reports whether progName equals wantName, ignoring case
+// and the year and country suffixes bareName strips.
+func exactNameMatch(progName, wantName string) bool {
+	return strings.EqualFold(
+		strings.TrimSpace(bareName(progName)),
+		strings.TrimSpace(bareName(wantName)))
+}
+
+// hasExactTitle reports whether iBL returned anything titled exactly
+// wantName: a search hit (a brand counts even when its episode listing
+// failed) or an expanded episode. writeResultsRSS uses it to decide
+// whether the subtitle extension in nameMatches may apply. GitHub #58.
+func hasExactTitle(wantName string, hitTitles []string, results []bbc.IBLResult) bool {
+	for _, t := range hitTitles {
+		if exactNameMatch(t, wantName) {
+			return true
+		}
+	}
+	for _, r := range results {
+		if exactNameMatch(r.Title, wantName) {
+			return true
+		}
+	}
+	return false
+}
+
 // nameMatches reports whether progName matches wantName after stripping
 // year suffixes. Also accepts a BBC subtitle extension ("Show: Subtitle"
-// matches a query for "Show"). GitHub #21.
+// matches a query for "Show"). GitHub #21. writeResultsRSS turns the
+// extension off when an exact match is present (GitHub #58).
 func nameMatches(progName, wantName string) bool {
-	bare := strings.TrimSpace(bareName(progName))
-	want := strings.TrimSpace(bareName(wantName))
-	if strings.EqualFold(bare, want) {
+	if exactNameMatch(progName, wantName) {
 		return true
 	}
+	bare := strings.TrimSpace(bareName(progName))
+	want := strings.TrimSpace(bareName(wantName))
 	if len(bare) > len(want)+2 &&
 		strings.EqualFold(bare[:len(want)], want) &&
 		bare[len(want):len(want)+2] == ": " {

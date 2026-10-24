@@ -64,12 +64,25 @@ var (
 // ListEpisodesCtx, so ctx propagates through pagination as well as
 // the search call itself.
 func (ibl *IBL) SearchCtx(ctx context.Context, query string, page int) ([]IBLResult, error) {
+	results, _, err := ibl.searchCtx(ctx, query, page)
+	return results, err
+}
+
+// SearchTitles is Search plus the title of every search hit, in iBL
+// order. A brand hit's title is listed even when its episode listing
+// could not be fetched, so a caller can tell "iBL has a programme with
+// this exact name" apart from "its episodes did not arrive". GitHub #58.
+func (ibl *IBL) SearchTitles(query string, page int) ([]IBLResult, []string, error) {
+	return ibl.searchCtx(context.Background(), query, page)
+}
+
+func (ibl *IBL) searchCtx(ctx context.Context, query string, page int) ([]IBLResult, []string, error) {
 	searchURL := fmt.Sprintf("%s/new-search?q=%s&rights=web&page=%d&per_page=20",
 		ibl.BaseURL, url.QueryEscape(query), page)
 
 	body, err := ibl.client.GetJSONCtx(ctx, searchURL)
 	if err != nil {
-		return nil, fmt.Errorf("iBL search: %w", err)
+		return nil, nil, fmt.Errorf("iBL search: %w", err)
 	}
 
 	var resp struct {
@@ -79,11 +92,13 @@ func (ibl *IBL) SearchCtx(ctx context.Context, query string, page int) ([]IBLRes
 	}
 
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse iBL response: %w", err)
+		return nil, nil, fmt.Errorf("parse iBL response: %w", err)
 	}
 
 	var results []IBLResult
+	titles := make([]string, 0, len(resp.NewSearch.Results))
 	for _, r := range resp.NewSearch.Results {
+		titles = append(titles, r.Title)
 		channel := r.MasterBrand.Titles.Small
 		thumb := ""
 		if r.Images.Standard != "" {
@@ -110,7 +125,7 @@ func (ibl *IBL) SearchCtx(ctx context.Context, query string, page int) ([]IBLRes
 		}
 	}
 
-	return results, nil
+	return results, titles, nil
 }
 
 // Search is a thin wrapper around SearchCtx with a background context.
