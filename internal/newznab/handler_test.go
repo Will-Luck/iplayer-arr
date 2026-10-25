@@ -1147,15 +1147,15 @@ func TestMatchesSearchFilter_TableDriven(t *testing.T) {
 		filterSeason, filterEp int
 		want                   bool
 	}{
-		{"no filters, all pass", &store.Programme{Name: "Doctor Who"}, "", "", 0, 0, true},
-		{"name match", &store.Programme{Name: "Doctor Who"}, "doctor who", "", 0, 0, true},
-		{"name mismatch", &store.Programme{Name: "EastEnders"}, "doctor who", "", 0, 0, false},
+		{"no filters, all pass", &store.Programme{Name: "Doctor Who"}, "", "", noSeasonFilter, 0, true},
+		{"name match", &store.Programme{Name: "Doctor Who"}, "doctor who", "", noSeasonFilter, 0, true},
+		{"name mismatch", &store.Programme{Name: "EastEnders"}, "doctor who", "", noSeasonFilter, 0, false},
 		{"season match", &store.Programme{Name: "Doctor Who", Series: 14}, "doctor who", "", 14, 0, true},
 		{"season mismatch", &store.Programme{Name: "Doctor Who", Series: 13}, "doctor who", "", 14, 0, false},
 		{"season+ep match", &store.Programme{Name: "Doctor Who", Series: 14, EpisodeNum: 3}, "doctor who", "", 14, 3, true},
 		{"season+ep mismatch", &store.Programme{Name: "Doctor Who", Series: 14, EpisodeNum: 2}, "doctor who", "", 14, 3, false},
-		{"daily date match", &store.Programme{Name: "Newsnight", AirDate: "2026-04-05"}, "newsnight", "2026-04-05", 0, 0, true},
-		{"daily date mismatch", &store.Programme{Name: "Newsnight", AirDate: "2026-04-04"}, "newsnight", "2026-04-05", 0, 0, false},
+		{"daily date match", &store.Programme{Name: "Newsnight", AirDate: "2026-04-05"}, "newsnight", "2026-04-05", noSeasonFilter, 0, true},
+		{"daily date mismatch", &store.Programme{Name: "Newsnight", AirDate: "2026-04-04"}, "newsnight", "2026-04-05", noSeasonFilter, 0, false},
 		// Topical/weekly fallback: programme has no S/E numbering but a
 		// valid AirDate. Sonarr sends integer season/ep (from TVDB) but
 		// iPlayer never numbered the show. Must pass so the emit loop
@@ -1176,14 +1176,14 @@ func TestMatchesSearchFilter_TableDriven(t *testing.T) {
 			"Talking Tom Heroes", "", 1, 1, true},
 		{"partial word before colon is not a match",
 			&store.Programme{Name: "Tom Jones: Live"},
-			"Tom", "", 0, 0, false},
+			"Tom", "", noSeasonFilter, 0, false},
 		{"full colon title exact match",
 			&store.Programme{Name: "Talking Tom Heroes: Suddenly Super", Series: 1, EpisodeNum: 1},
 			"Talking Tom Heroes: Suddenly Super", "", 1, 1, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := matchesSearchFilter(tc.prog, tc.wantName, tc.filterDate, tc.filterSeason, tc.filterEp)
+			got := matchesSearchFilter(tc.prog, nil, tc.wantName, tc.filterDate, tc.filterSeason, tc.filterEp)
 			if got != tc.want {
 				t.Errorf("matchesSearchFilter(%+v, %q, %q, %d, %d) = %v, want %v",
 					tc.prog, tc.wantName, tc.filterDate, tc.filterSeason, tc.filterEp, got, tc.want)
@@ -1492,11 +1492,11 @@ func TestMatchesSearchFilter_CasualtyPositionBasedAcceptsSeasonOne(t *testing.T)
 		AirDate:    "1986-09-20",
 	}
 	prog := IBLResultToProgramme(r)
-	if !matchesSearchFilter(prog, "Casualty", "", 1, 3) {
+	if !matchesSearchFilter(prog, nil, "Casualty", "", 1, 3) {
 		t.Errorf("matchesSearchFilter rejected Casualty position-based item; prog=%+v", prog)
 	}
 	// And a mismatching episode should still be rejected.
-	if matchesSearchFilter(prog, "Casualty", "", 1, 4) {
+	if matchesSearchFilter(prog, nil, "Casualty", "", 1, 4) {
 		t.Errorf("matchesSearchFilter wrongly accepted ep=4 for Casualty E3 item; prog=%+v", prog)
 	}
 }

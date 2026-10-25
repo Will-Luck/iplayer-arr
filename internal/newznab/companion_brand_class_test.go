@@ -48,14 +48,17 @@ func gh58PIDSet(items []gh58Item) []string {
 }
 
 // TVDB 449991 "Doctor Who (2023)", first aired 2024, so filterYear is
-// 2024 and disambiguateByYear runs after the new filter. "Doctor Who
-// (2005-2022)" bare-names to "Doctor Who", so it is what switches
-// exactOnly on here alongside the bare brand. Unleashed reuses the
+// 2024 and disambiguateByYear sees every programme titled exactly
+// Doctor Who, of any era. "Doctor Who (2005-2022)" bare-names to
+// "Doctor Who", so it is what switches exactOnly on here alongside the
+// bare brand, and exactOnly drops Unleashed and the one-offs. Unleashed reuses the
 // parent's numbering ("Season 2: 1. The Robot Revolution"), and the
 // one-offs have no numbers at all, so the topical escape hatch in
 // matchesSearchFilter lets them answer any S/E search. v1.8.2 emitted
 // all of them as Doctor.Who.2023.*; the year bucket then had nothing
-// suffixed that covers 2024 and kept every bare title.
+// suffixed that covers 2024 and kept every bare title. Joy to the World
+// (m0026d24) has no BBC numbers either, but goes out as S01E04 from its
+// position, so it no longer answers S02E01. GitHub #60.
 func TestGH58_DoctorWho2023YearBucketSkipsCompanions(t *testing.T) {
 	items := gh58Search(t, map[string]string{"Doctor Who (2023)": "search_Doctor_Who_2023.json"},
 		gh58DoctorWhoBrands, nil, "t=tvsearch&tvdbid=449991&season=2&ep=1")
@@ -65,15 +68,7 @@ func TestGH58_DoctorWho2023YearBucketSkipsCompanions(t *testing.T) {
 	// name (Doctor.Who.2023.*), update this line.
 	gh58AssertTitle(t, items, "m0029db8",
 		"Doctor.Who.S02E01.Season.2.1.The.Robot.Revolution.720p.WEB-DL.AAC.H264-iParr")
-	emitted := make(map[string]bool)
-	for _, it := range items {
-		emitted[it.PID] = true
-	}
-	for pid := range gh58BrandPIDs(t, "p0gglvqn") {
-		if !emitted[pid] {
-			t.Errorf("parent Doctor Who episode %s missing", pid)
-		}
-	}
+	gh58AssertNone(t, items, map[string]bool{"m0026d24": true}, "Joy to the World, S01E04 by position")
 	gh58AssertNone(t, items, gh58BrandPIDs(t, "m001sx3r"), "Doctor Who: Unleashed")
 	gh58AssertNone(t, items, gh58DoctorWhoOneOffs, "one-off Doctor Who: X")
 	// The other eras match the name exactly but not the year.
@@ -81,33 +76,32 @@ func TestGH58_DoctorWho2023YearBucketSkipsCompanions(t *testing.T) {
 	gh58AssertNone(t, items, gh58BrandPIDs(t, "p0ggwr8l"), "Doctor Who (1963-1996)")
 }
 
-// TVDB 78804 "Doctor Who (2005)", S00E05 (TVDB's "The Infinite Quest").
-// v1.8.2 already answered this from the 2005-2022 brand alone: a
-// suffixed title covers 2005, so disambiguateByYear drops every bare
-// one, Unleashed and the one-offs included. The new filter must not
-// change that answer. Pinned from a v1.8.2 run over the same fixtures.
-// season=00 means no season filter, so every E05 plus the unnumbered
-// specials match; b0074fll (Series 2: 1.) is the one that must not.
-func TestGH58_DoctorWho2005Unchanged(t *testing.T) {
-	items := gh58Search(t, map[string]string{"Doctor Who (2005)": "search_Doctor_Who_2005.json"},
-		gh58DoctorWhoBrands, nil, "t=tvsearch&tvdbid=78804&season=00&ep=5")
+// TVDB 78804 "Doctor Who (2005)". exactOnly drops Unleashed and the
+// one-offs, and a suffixed title covers 2005, so disambiguateByYear
+// drops the bare brand; only the 2005-2022 brand answers, as in v1.8.2.
+// S02E01 is a number the bare brand has too (m0029db8, The Robot
+// Revolution).
+//
+// S00E05 is TVDB's "The Infinite Quest", which iPlayer has only as the
+// one-off b007zv0y "Doctor Who: The Infinite Quest", dropped by
+// exactOnly. v1.8.2 and v1.9.0 answered it with four 2005-2022 programmes numbered
+// otherwise (S01E39, S13E05, S09E05 and S00E25): season=00 was no
+// season filter, and a programme with no BBC numbers answered any
+// search. Now nothing does. GitHub #60.
+func TestGH58_DoctorWho2005AnswersFromItsOwnEra(t *testing.T) {
+	search := func(query string) []gh58Item {
+		return gh58Search(t, map[string]string{"Doctor Who (2005)": "search_Doctor_Who_2005.json"},
+			gh58DoctorWhoBrands, nil, query)
+	}
 
-	want := map[string]string{
-		"m001dhsb": "Doctor.Who.2005-2022.S01E39.The.Power.of.the.Doctor.720p.WEB-DL.AAC.H264-iParr",
-		"m00123l4": "Doctor.Who.2005-2022.S13E05.Survivors.of.the.Flux.720p.WEB-DL.AAC.H264-iParr",
-		"b06kv29n": "Doctor.Who.2005-2022.S09E05.The.Girl.Who.Died.720p.WEB-DL.AAC.H264-iParr",
-		"p02ct985": "Doctor.Who.2005-2022.S00E25.Last.Christmas.720p.WEB-DL.AAC.H264-iParr",
+	items := search("t=tvsearch&tvdbid=78804&season=2&ep=1")
+	gh58AssertTitle(t, items, "b0074fll", "Doctor.Who.2005-2022.S02E01.New.Earth.720p.WEB-DL.AAC.H264-iParr")
+	if got, want := gh58PIDSet(items), []string{"b0074fll"}; !slices.Equal(got, want) {
+		t.Errorf("S02E01: emitted PIDs = %q, want %q", got, want)
 	}
-	for pid, title := range want {
-		gh58AssertTitle(t, items, pid, title)
-	}
-	var wantPIDs []string
-	for pid := range want {
-		wantPIDs = append(wantPIDs, pid)
-	}
-	sort.Strings(wantPIDs)
-	if got := gh58PIDSet(items); !slices.Equal(got, wantPIDs) {
-		t.Errorf("emitted PIDs = %q, want %q", got, wantPIDs)
+
+	if got := gh58PIDSet(search("t=tvsearch&tvdbid=78804&season=00&ep=5")); len(got) != 0 {
+		t.Errorf("S00E05: emitted PIDs = %q, want none", got)
 	}
 }
 
@@ -149,15 +143,26 @@ func TestGH58_CountryTaggedParentSkipsCompanions(t *testing.T) {
 // Gavin.and.Stacey.2025.01.01.*, a daily-style title Sonarr rejects for
 // a Standard series, so the search loses nothing that worked. This test
 // stops a later change from assuming every dropped title is a
-// companion. The parent's three unnumbered specials still answer.
+// companion. The parent's three unnumbered specials still answer the
+// searches for their own numbers. v1.9.0 also offered them for S00E18,
+// numbered otherwise. GitHub #60.
 func TestGH58_ParentOneOffSpecialDroppedByDesign(t *testing.T) {
-	items := gh58Search(t, map[string]string{"Gavin & Stacey": "search_Gavin_and_Stacey.json"},
-		[]string{"b007nf70"}, nil, "t=tvsearch&tvdbid=80435&season=00&ep=18")
+	search := func(query string) []gh58Item {
+		return gh58Search(t, map[string]string{"Gavin & Stacey": "search_Gavin_and_Stacey.json"},
+			[]string{"b007nf70"}, nil, query)
+	}
 
+	items := search("t=tvsearch&tvdbid=80435&season=00&ep=18")
 	gh58AssertNone(t, items, map[string]bool{"m0026d9p": true}, "one-off Gavin & Stacey: A Fond Farewell")
-	gh58AssertTitle(t, items, "b00gbjhd", "Gavin.and.Stacey.S00E03.Christmas.Special.2008.720p.WEB-DL.AAC.H264-iParr")
-	gh58AssertTitle(t, items, "m000csm7", "Gavin.and.Stacey.S00E08.Christmas.Special.2019.720p.WEB-DL.AAC.H264-iParr")
-	gh58AssertTitle(t, items, "m0026dmr", "Gavin.and.Stacey.S01E09.Gavin.and.Stacey.The.Finale.720p.WEB-DL.AAC.H264-iParr")
+	if got := gh58PIDSet(items); len(got) != 0 {
+		t.Errorf("S00E18: emitted PIDs = %q, want none", got)
+	}
+	gh58AssertTitle(t, search("t=tvsearch&tvdbid=80435&season=0&ep=3"), "b00gbjhd",
+		"Gavin.and.Stacey.S00E03.Christmas.Special.2008.720p.WEB-DL.AAC.H264-iParr")
+	gh58AssertTitle(t, search("t=tvsearch&tvdbid=80435&season=0&ep=8"), "m000csm7",
+		"Gavin.and.Stacey.S00E08.Christmas.Special.2019.720p.WEB-DL.AAC.H264-iParr")
+	gh58AssertTitle(t, search("t=tvsearch&tvdbid=80435&season=1&ep=9"), "m0026dmr",
+		"Gavin.and.Stacey.S01E09.Gavin.and.Stacey.The.Finale.720p.WEB-DL.AAC.H264-iParr")
 }
 
 // TVDB 71753 "EastEnders" is a daily series, so Sonarr searches by air
@@ -272,16 +277,31 @@ func TestGH58_OutOfEraExactBrandSuppressesExtension(t *testing.T) {
 		}
 	})
 
-	// FIXME: episode search leaves one old-era candidate, and
-	// disambiguateByYear returns a lone candidate unchanged, so the 1992
-	// episode goes out under its own title with the 2024 series' tvdbid.
-	// Older than #58 (see the FIXME in writeResultsRSS). Pinned on purpose:
-	// a fix to disambiguateByYear turns this subtest red, and it should
-	// then be flipped to assert that ep_old_1 is absent.
+	// The episode search leaves one old-era candidate. disambiguateByYear
+	// returns a lone candidate unchanged, and v1.9.0 ran it on what the
+	// episode filter left, so the 1992 episode went out under its own
+	// title with the 2024 series' tvdbid. It now runs before the filter,
+	// on both old-era candidates, and drops them as the season search
+	// does. GitHub #60.
 	t.Run("one old-era candidate", func(t *testing.T) {
 		items := gh58Serve(t, newHandlerWithBBC(t, payload), "t=tvsearch&tvdbid=999001&season=1&ep=1")
+		if len(items) != 0 {
+			t.Errorf("got %d items, want none", len(items))
+		}
+	})
+
+	// FIXME: when iPlayer has exactly one programme of the name and it
+	// is from another era, disambiguateByYear returns it unchanged
+	// (len(progs) <= 1), so it goes out under its own title with the 2024
+	// series' tvdbid (see the FIXME in writeResultsRSS). Pinned on
+	// purpose: a fix to disambiguateByYear turns this subtest red, and it
+	// should then be flipped to assert that ep_old_1 is absent.
+	t.Run("only programme of the name is old-era", func(t *testing.T) {
+		const lone = `{"new_search":{"results":[
+			{"id":"ep_old_1","type":"episode","title":"Example Show (1992-2000)","subtitle":"Series 1: Episode 1","release_date":"1992-01-04"}
+		]}}`
+		items := gh58Serve(t, newHandlerWithBBC(t, lone), "t=tvsearch&tvdbid=999001&season=1&ep=1")
 		gh58AssertTitle(t, items, "ep_old_1",
 			"Example.Show.1992-2000.S01E01.Series.1.Episode.1.720p.WEB-DL.AAC.H264-iParr")
-		gh58AssertNone(t, items, map[string]bool{"ep_after_hours": true}, "in-era extension")
 	})
 }

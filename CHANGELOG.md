@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-10-25
+
+### Fixed
+- An episode search no longer returns programmes numbered as other
+  episodes because the BBC gives them no numbers of their own. A Doctor
+  Who (2005) search for S00E15, "Dreamland", returned Doctor Who
+  (2023)'s "Joy to the World" as Doctor.Who.S01E04, which Sonarr matched
+  to "Aliens of London". Three things let it through. A programme with
+  no series or episode number from the BBC was allowed to answer any
+  search, so that shows like Question Time, which go out titled by date,
+  could be found; one titled with a number from its place in iPlayer's
+  list now answers only a search for that number, with any Show Override
+  applied. The check that keeps a show's other eras out ("Doctor Who
+  (2005-2022)" for Doctor Who (2005), not the 2023 "Doctor Who") looked
+  only at what was left after the season and episode filter, so a search
+  no 2005-2022 programme answered kept the 2023 one; it now looks at
+  every programme of the show first, and keeps one of another era only
+  when TheTVDB numbers it for the searched series, as it does Doctor
+  Who's 60th anniversary specials. And a search for season 0, the
+  specials, was not filtered by season at all, so a search for S00E02
+  also returned S01E02 to S13E02. With only the episode searched in the
+  results, its qualities now come from probing that episode: "The
+  Christmas Invasion", made in standard definition, was offered at 1080p
+  and 720p, the qualities of a Series 13 episode probed on behalf of the
+  whole result, and is now offered at 396p. (GitHub #60)
+
 ## [1.9.0] - 2026-10-24
 
 ### Fixed
