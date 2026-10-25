@@ -1211,14 +1211,13 @@ func TestSearch_DoctorWhoClassicTVDB_OnlyMatchesClassicBrand(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	body := w.Body.String()
-
-	if !strings.Contains(body, "Doctor.Who.1963-1996") {
-		t.Errorf("expected classic brand in RSS, got:\n%s", body)
+	// Every item goes out under the series' name (GitHub #60), so the
+	// brand is told by PID.
+	items := gh58ParseItems(t, w.Body.Bytes())
+	if got := gh58PIDSet(items); len(got) != 1 || got[0] != "ep_classic" {
+		t.Errorf("emitted PIDs = %q, want only the classic brand's ep_classic", got)
 	}
-	if strings.Contains(body, "2005-2022") {
-		t.Errorf("unexpected 2005-2022 brand leaked through, got:\n%s", body)
-	}
+	gh58AssertTitle(t, items, "ep_classic", "Doctor.Who.S01E02.Series.1.Episode.2.720p.WEB-DL.AAC.H264-iParr")
 }
 
 func TestSearch_DoctorWhoModernTVDB_OnlyMatchesModernBrand(t *testing.T) {
@@ -1241,14 +1240,11 @@ func TestSearch_DoctorWhoModernTVDB_OnlyMatchesModernBrand(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	body := w.Body.String()
-
-	if !strings.Contains(body, "2005-2022") {
-		t.Errorf("expected 2005-2022 brand in RSS, got:\n%s", body)
+	items := gh58ParseItems(t, w.Body.Bytes())
+	if got := gh58PIDSet(items); len(got) != 1 || got[0] != "ep_legacy" {
+		t.Errorf("emitted PIDs = %q, want only the 2005-2022 brand's ep_legacy", got)
 	}
-	if strings.Contains(body, "1963-1996") {
-		t.Errorf("unexpected classic brand leaked through, got:\n%s", body)
-	}
+	gh58AssertTitle(t, items, "ep_legacy", "Doctor.Who.2005.S01E02.Series.1.Episode.2.720p.WEB-DL.AAC.H264-iParr")
 }
 
 func TestSearch_DoctorWhoClassicTVDB_WarmCacheRetainsYear(t *testing.T) {
@@ -1301,14 +1297,9 @@ func TestSearch_DoctorWhoClassicTVDB_WarmCacheRetainsYear(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	body := w.Body.String()
-
 	// Disambiguation correctness: classic brand emitted, modern brand not
-	if !strings.Contains(body, "Doctor.Who.1963-1996") {
-		t.Errorf("warm-cache test: expected classic brand name in RSS, got:\n%s", body)
-	}
-	if strings.Contains(body, "2005-2022") {
-		t.Errorf("warm-cache test: unexpected 2005-2022 brand leaked through, got:\n%s", body)
+	if got := gh58PIDSet(gh58ParseItems(t, w.Body.Bytes())); len(got) != 1 || got[0] != "ep_classic" {
+		t.Errorf("warm-cache test: emitted PIDs = %q, want only the classic brand's ep_classic", got)
 	}
 
 	// Cache-was-used invariant: Skyhook must not have been called

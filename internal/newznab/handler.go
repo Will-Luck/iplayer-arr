@@ -21,6 +21,9 @@ type Handler struct {
 	// episodes, when non-nil, supplies TheTVDB episode lists for searches
 	// that carry a tvdbid. GitHub #60.
 	episodes EpisodeSource
+	// shows looks up the show a tvdbid names when no series mapping is
+	// stored. Gitea #104.
+	shows *skyhookShows
 	// onRequest, when non-nil, is called on every Newznab request so that the
 	// caller can track the last indexer query time.
 	onRequest func()
@@ -32,6 +35,7 @@ func NewHandler(ibl *bbc.IBL, st *store.Store, ms *bbc.MediaSelector, prober qua
 		store:  st,
 		ms:     ms,
 		prober: prober,
+		shows:  newSkyhookShows(),
 	}
 }
 

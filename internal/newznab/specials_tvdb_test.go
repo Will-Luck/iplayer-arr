@@ -42,10 +42,15 @@ func gh60Fixtures(t *testing.T, skyhookStatus int) (*bbc.IBL, *atomic.Int32) {
 		}
 		return b
 	}
+	// Live iBL returned the same brands for "Doctor Who 2005", Sonarr's
+	// title-tier query, as for "Doctor Who (2005)" (2026-10-25), and the
+	// same for 2023.
 	searches := map[string][]byte{
 		"Porridge":          read("search_Porridge.json"),
 		"Doctor Who (2005)": read("search_Doctor_Who_2005.json"),
+		"Doctor Who 2005":   read("search_Doctor_Who_2005.json"),
 		"Doctor Who (2023)": read("search_Doctor_Who_2023.json"),
+		"Doctor Who 2023":   read("search_Doctor_Who_2023.json"),
 	}
 	episodes := map[string][]byte{}
 	for _, pid := range []string{"b006m9kn", "p05dsmwl", "b006q2x0", "p0gglvqn", "p0ggwr8l", "m001sx3r"} {
@@ -281,7 +286,10 @@ func TestGH60_EpisodeListIsCached(t *testing.T) {
 	}
 }
 
-// When Skyhook fails, the search still answers with BBC's numbering.
+// When Skyhook fails, the search still answers with BBC's numbering, but
+// not with a number iplayer-arr guessed: without TheTVDB's list nothing
+// checks it, and the 1973 pilot's S01E01 and No Way Out's S00E04 are
+// other episodes' numbers. Gitea #104.
 func TestGH60_SkyhookFailureKeepsBBCNumbering(t *testing.T) {
 	ibl, hits := gh60Fixtures(t, http.StatusInternalServerError)
 	st := newTestStore(t)
@@ -290,11 +298,16 @@ func TestGH60_SkyhookFailureKeepsBBCNumbering(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := gh60Handler(t, ibl, st)
-	gh60Check(t, gh60Numbers(t, gh58Serve(t, h, "t=tvsearch&tvdbid=76578")), map[string]string{
-		"b00789bm": "S01E01",
-		"b007894v": "S00E04",
+	got := gh60Numbers(t, gh58Serve(t, h, "t=tvsearch&tvdbid=76578"))
+	gh60Check(t, got, map[string]string{
 		"b007sf76": "S01E01",
+		"b007871w": "S02E01",
 	})
+	for _, pid := range []string{"b00789bm", "b007894v", "b0078956"} {
+		if se, ok := got[pid]; ok {
+			t.Errorf("guessed %s emitted as %s", pid, se)
+		}
+	}
 	if n := hits.Load(); n != 1 {
 		t.Errorf("Skyhook requests = %d, want 1 (the failed episode list)", n)
 	}
@@ -307,10 +320,10 @@ func (f fixedEpisodes) Episodes(context.Context, string) ([]TVDBEpisode, error) 
 	return f, nil
 }
 
-// Only the searched show's episodes are numbered. When the tvdbid lookup
-// fails, handleTVSearch searches iBL for "BBC" with no name, and nothing
-// from that may take the series' numbers. A daily series' season search
-// (season=<year>) keeps its date titles.
+// Only the searched show's episodes are numbered, so nothing is without
+// a name. (When the tvdbid lookup failed, handleTVSearch searched iBL for
+// "BBC" with no name; it now answers with nothing, Gitea #104.) A daily
+// series' season search (season=<year>) keeps its date titles.
 func TestGH60_NumbersOnlyTheNamedShow(t *testing.T) {
 	h := NewHandler(nil, newTestStore(t), nil, nil)
 	h.SetEpisodeSource(fixedEpisodes{{Season: 3, Episode: 1, Title: "Episode 1", AirDate: "2026-10-20"}})
@@ -318,7 +331,7 @@ func TestGH60_NumbersOnlyTheNamedShow(t *testing.T) {
 	run := func(filterSeason int, filterName string) map[string]string {
 		req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
 		w := httptest.NewRecorder()
-		h.writeResultsRSS(w, req, results, nil, filterSeason, 0, "", filterName, 0, "12345", false, 0)
+		h.writeResultsRSS(w, req, results, nil, filterSeason, 0, "", filterName, 0, "12345", "", false, 0)
 		return gh60Numbers(t, gh58ParseItems(t, w.Body.Bytes()))
 	}
 	if got := run(noSeasonFilter, "")["p0000001"]; got != "S01E01" {
@@ -775,7 +788,7 @@ func TestGH60_ContradictedPositionLeftOut(t *testing.T) {
 	run := func() map[string]string {
 		req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
 		w := httptest.NewRecorder()
-		h.writeResultsRSS(w, req, results, nil, noSeasonFilter, 0, "", "Outnumbered", 0, "80592", false, 0)
+		h.writeResultsRSS(w, req, results, nil, noSeasonFilter, 0, "", "Outnumbered", 0, "80592", "", false, 0)
 		return gh60Numbers(t, gh58ParseItems(t, w.Body.Bytes()))
 	}
 
@@ -817,7 +830,7 @@ func TestGH60_CompanionNotMatchedOnAirDate(t *testing.T) {
 	results := []bbc.IBLResult{{PID: "x0000023", Title: "Doctor Who: Unleashed", Subtitle: "The Festive Episode", Position: 6, AirDate: "2024-12-25"}}
 	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
 	w := httptest.NewRecorder()
-	h.writeResultsRSS(w, req, results, nil, 0, 5, "", "Doctor Who (2023)", 0, "449991", false, 0)
+	h.writeResultsRSS(w, req, results, nil, 0, 5, "", "Doctor Who (2023)", 0, "449991", "", false, 0)
 	if got := gh60Numbers(t, gh58ParseItems(t, w.Body.Bytes()))["x0000023"]; got == "S00E05" {
 		t.Errorf("companion numbered as the special S00E05")
 	}
@@ -842,7 +855,7 @@ func TestGH60_SpecialNumberedWithinItsGroup(t *testing.T) {
 	}
 	req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
 	w := httptest.NewRecorder()
-	h.writeResultsRSS(w, req, results, nil, noSeasonFilter, 0, "", "Call the Midwife", 0, "255192", false, 0)
+	h.writeResultsRSS(w, req, results, nil, noSeasonFilter, 0, "", "Call the Midwife", 0, "255192", "", false, 0)
 	gh60Check(t, gh60Numbers(t, gh58ParseItems(t, w.Body.Bytes())), map[string]string{
 		"m002p134": "S00E17",
 		"m002p16x": "S00E18",
@@ -889,8 +902,9 @@ func TestGH60_PositionGuessMatchesGenerateTitle(t *testing.T) {
 }
 
 // TVDB 78804 S00E15 is "Dreamland", which iPlayer has only as the
-// one-off "Doctor Who: Dreamland" (b00p3pvl, not in these fixtures),
-// dropped by exactOnly. v1.9.0 answered it with Joy to the World
+// one-off "Doctor Who: Dreamland" (b00p3pvl, not in these fixtures;
+// TestGH104_ParentOneOffTakesTheTVDBNumber has it as S00E15, Gitea
+// #104). v1.9.0 answered it with Joy to the World
 // (m0026d24), a Doctor Who (2023) special with no BBC numbers, titled
 // Doctor.Who.S01E04 from its position, which Sonarr took as Aliens of
 // London. Whatever a search returns must carry the number searched.
@@ -1010,7 +1024,7 @@ func TestGH60_OverrideNumberIsTheOneFiltered(t *testing.T) {
 	run := func(season, ep int) map[string]string {
 		req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
 		w := httptest.NewRecorder()
-		h.writeResultsRSS(w, req, results, nil, season, ep, "", "Some Show", 0, "", false, 0)
+		h.writeResultsRSS(w, req, results, nil, season, ep, "", "Some Show", 0, "", "", false, 0)
 		return gh60Numbers(t, gh58ParseItems(t, w.Body.Bytes()))
 	}
 	if got := run(3, 5)["p0000005"]; got != "S03E05" {
@@ -1047,7 +1061,7 @@ func TestGH60_UndatedGuessAnswersNoEpisodeSearch(t *testing.T) {
 	run := func(season, ep int) map[string]string {
 		req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
 		w := httptest.NewRecorder()
-		h.writeResultsRSS(w, req, results, nil, season, ep, "", "Some Show", 0, "", false, 0)
+		h.writeResultsRSS(w, req, results, nil, season, ep, "", "Some Show", 0, "", "", false, 0)
 		return gh60Numbers(t, gh58ParseItems(t, w.Body.Bytes()))
 	}
 	if got, ok := run(0, 4)["p0000004"]; ok {
@@ -1067,7 +1081,7 @@ func TestGH60_UnreadableNumberAnswersOnlyUnfilteredSearch(t *testing.T) {
 	run := func(season, ep int) bool {
 		req := httptest.NewRequest("GET", "/newznab/api?t=tvsearch", nil)
 		w := httptest.NewRecorder()
-		h.writeResultsRSS(w, req, results, nil, season, ep, "", "Some Show", 0, "", false, 0)
+		h.writeResultsRSS(w, req, results, nil, season, ep, "", "Some Show", 0, "", "", false, 0)
 		return len(gh58ParseItems(t, w.Body.Bytes())) > 0
 	}
 	if !run(noSeasonFilter, 0) {
@@ -1081,9 +1095,11 @@ func TestGH60_UnreadableNumberAnswersOnlyUnfilteredSearch(t *testing.T) {
 }
 
 // An other-era programme kept because TheTVDB numbers it for the
-// searched series goes out under its own brand's name, not a custom one
-// its brand's Show Override sets, so the name, numbers and tvdbid all
-// point at one series, as numberBrowseFromTVDB does for the feed.
+// searched series goes out under the searched series' name, not its
+// brand's and not a custom one its brand's Show Override sets, so the
+// name, numbers and tvdbid all point at one series, as
+// numberBrowseFromTVDB does for the feed. In its own series it goes out
+// under that series' name, also in place of the custom name.
 func TestGH60_OtherEraProgrammeKeepsNoCustomName(t *testing.T) {
 	ibl, _ := gh60Fixtures(t, http.StatusOK)
 	st := newTestStore(t)
@@ -1092,10 +1108,9 @@ func TestGH60_OtherEraProgrammeKeepsNoCustomName(t *testing.T) {
 	}
 	h := gh60Handler(t, ibl, st)
 	gh58AssertTitle(t, gh58Serve(t, h, "t=tvsearch&tvdbid=78804&season=0&ep=162"), "m001sx3h",
-		"Doctor.Who.S00E162.Specials.1.The.Star.Beast.720p.WEB-DL.AAC.H264-iParr")
-	// In its own series the custom name still applies.
+		"Doctor.Who.2005.S00E162.Specials.1.The.Star.Beast.720p.WEB-DL.AAC.H264-iParr")
 	gh58AssertTitle(t, gh58Serve(t, h, "t=tvsearch&tvdbid=449991&season=0&ep=1"), "m001sx3h",
-		"Doctor.Who.Custom.S00E01.Specials.1.The.Star.Beast.720p.WEB-DL.AAC.H264-iParr")
+		"Doctor.Who.2023.S00E01.Specials.1.The.Star.Beast.720p.WEB-DL.AAC.H264-iParr")
 }
 
 // The era check sees the whole show, not what the episode filter left.

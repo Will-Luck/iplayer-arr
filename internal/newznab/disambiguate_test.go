@@ -151,6 +151,18 @@ func TestDisambiguateByYear_SingleCandidateUnchanged(t *testing.T) {
 	}
 }
 
+// A lone candidate is judged as one among several is: a year suffix
+// that does not cover the hint drops it, and one with no suffix is kept.
+// Gitea #104.
+func TestDisambiguateByYear_SingleOutOfEraCandidateDropped(t *testing.T) {
+	if got := disambiguateByYear([]*store.Programme{{Name: "Doctor Who (1963-1996)"}}, 2005); len(got) != 0 {
+		t.Errorf("expected the out-of-era candidate dropped, got %v", got)
+	}
+	if got := disambiguateByYear([]*store.Programme{{Name: "Doctor Who"}}, 1963); len(got) != 1 {
+		t.Errorf("expected the bare candidate kept, got %v", got)
+	}
+}
+
 func TestDisambiguateByYear_PreferYearSuffixedWhenHintMatches(t *testing.T) {
 	progs := []*store.Programme{
 		{Name: "Doctor Who"},

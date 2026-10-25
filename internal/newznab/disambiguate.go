@@ -99,10 +99,20 @@ func nameMatchesWithYear(progName, wantName string, yearHint int) bool {
 // yearHint == 0 (no Skyhook lookup happened), return the input
 // unchanged.
 //
+// A lone candidate is judged the same way: one whose year suffix does
+// not cover the hint is dropped. Up to v1.9.1 it was returned
+// unchanged, so when iPlayer had one programme of the name, from
+// another era, it went out with the searched series' tvdbid. The
+// caller keeps a dropped programme that TheTVDB numbers for the
+// searched series. There is no year of slack either side of the
+// suffix, lone or not: the year-suffixed brands iPlayer has
+// ("Doctor Who (1963-1996)", "Doctor Who (2005-2022)", "Porridge
+// (2017)") are told apart without one. Gitea #104.
+//
 // This is the second pass of the Phase 4 disambiguation logic. The
 // first pass is nameMatchesWithYear in matchesSearchFilter.
 func disambiguateByYear(progs []*store.Programme, yearHint int) []*store.Programme {
-	if yearHint == 0 || len(progs) <= 1 {
+	if yearHint == 0 {
 		return progs
 	}
 

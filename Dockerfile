@@ -1,5 +1,8 @@
 # Stage 1: Build frontend
-FROM node:22-alpine AS frontend-build
+# The bundle is the same on every platform, so it is built natively. Under
+# QEMU, npm ci for linux/arm64 sometimes dies with SIGILL and then hangs
+# until the job times out (GitHub rebuild runs of 2026-09-13 and 2026-10-25).
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
@@ -7,7 +10,10 @@ COPY frontend/ .
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.24-alpine AS go-build
+# Cross-compiled on the build platform for the same reason; CGO is off.
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS go-build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -18,7 +24,7 @@ ARG VERSION=""
 ARG BUILD_DATE=""
 RUN [ -z "$VERSION" ] && VERSION=$(git describe --tags --always 2>/dev/null || echo "dev"); \
     [ -z "$BUILD_DATE" ] && BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
       -ldflags "-X github.com/Will-Luck/iplayer-arr/internal/api.appVersion=${VERSION} \
                 -X github.com/Will-Luck/iplayer-arr/internal/api.buildDate=${BUILD_DATE}" \
       -o /iplayer-arr ./cmd/iplayer-arr/

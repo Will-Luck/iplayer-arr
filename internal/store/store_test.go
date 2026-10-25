@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -359,6 +360,51 @@ func TestGetSeriesMappingByName_YearSuffix(t *testing.T) {
 	got3, _ := s.GetSeriesMappingByName("Doctor")
 	if got3 != nil {
 		t.Errorf("partial prefix matched unexpectedly: %+v", got3)
+	}
+}
+
+// Gitea #104: Sonarr cleans "Doctor Who (2005)" to the query "Doctor Who
+// 2005" (SearchCriteriaBase.GetCleanSceneTitle), which names that series
+// even when another series of the name is stored.
+func TestGetSeriesMappingByName_YearQuery(t *testing.T) {
+	s := testStore(t)
+	for _, m := range []*SeriesMapping{
+		{TVDBId: "78804", ShowName: "Doctor Who (2005)", Year: 2005},
+		{TVDBId: "449991", ShowName: "Doctor Who (2023)", Year: 2024},
+	} {
+		if err := s.PutSeriesMapping(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for q, want := range map[string]string{"Doctor Who 2005": "78804", "doctor who 2023": "449991", " Doctor Who (2005) ": "78804"} {
+		got, err := s.GetSeriesMappingByName(q)
+		if err != nil || got == nil || got.TVDBId != want {
+			t.Errorf("GetSeriesMappingByName(%q) = %+v, %v; want TVDBId %s", q, got, err, want)
+		}
+	}
+	if got, err := s.GetSeriesMappingByName("Doctor Who 2024"); got != nil || err != nil {
+		t.Errorf("GetSeriesMappingByName(Doctor Who 2024) = %+v, %v; want nil, nil", got, err)
+	}
+}
+
+// Gitea #104: a bare name two stored series share does not say which one
+// is meant. It used to return whichever bolt's key order put first.
+func TestGetSeriesMappingByName_AmbiguousBareName(t *testing.T) {
+	for _, stored := range [][]*SeriesMapping{
+		{{TVDBId: "78804", ShowName: "Doctor Who (2005)", Year: 2005}, {TVDBId: "449991", ShowName: "Doctor Who (2023)", Year: 2024}},
+		{{TVDBId: "76107", ShowName: "Doctor Who", Year: 1963}, {TVDBId: "78804", ShowName: "Doctor Who (2005)", Year: 2005}},
+	} {
+		s := testStore(t)
+		for _, m := range stored {
+			if err := s.PutSeriesMapping(m); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := s.GetSeriesMappingByName("Doctor Who")
+		if got != nil || !errors.Is(err, ErrAmbiguousSeriesName) {
+			t.Errorf("stored %q and %q: GetSeriesMappingByName(Doctor Who) = %+v, %v; want nil, ErrAmbiguousSeriesName",
+				stored[0].ShowName, stored[1].ShowName, got, err)
+		}
 	}
 }
 

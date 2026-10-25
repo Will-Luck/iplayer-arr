@@ -7,6 +7,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-10-25
+
+### Fixed
+- A search by TVDB ID now sends every result out under Sonarr's name
+  for the series, as the RSS feed already did for the episodes it
+  numbers from TheTVDB. Results went out under the BBC programme's
+  name, which for some series is a name Sonarr does not know or knows
+  as another series: Doctor Who (2005) came out as
+  `Doctor.Who.2005-2022.*`, Porridge's "Porridge Rebooted" (TheTVDB's
+  S00E08) as `Porridge.2017.S00E08`, and Doctor Who (2023) as
+  `Doctor.Who.*`, which is the classic Doctor Who's name. Sonarr took
+  them in a search on the TVDB ID alone, but it goes by the name once
+  the download has finished: under a name it has no series for, it did
+  not import one unless it had been grabbed from an interactive search,
+  and it rejected `Porridge.2017.S00E08` outright as the revival,
+  Porridge (2016). They now come out as `Doctor.Who.2005.*`,
+  `Porridge.S00E08.*` and `Doctor.Who.2023.*`, classic Doctor Who as
+  `Doctor.Who.*`, and the same goes for The Apprentice (UK), Ghosts
+  (2019), Gladiators (2024) and Blankety Blank (2021). The
+  downloaded file and folder take the same name. A Show Override is
+  still found under the BBC programme's name and its numbering still
+  applies, but its custom name gives way to Sonarr's. A search for a
+  series named with another country's tag, such as Ghosts (US), no
+  longer returns the BBC's own series of the name, whose episodes went
+  out at the US series' numbers, unless TheTVDB numbers them for it.
+  (GitHub #60)
+- An episode search no longer offers another episode under the number
+  searched for, which Sonarr would grab as that episode. Where part of
+  a programme's number is iplayer-arr's assumption (Series 1 for an
+  episode number with no series, an episode number from air-date order,
+  or a story's part number read as the season's episode number) and
+  TheTVDB has a differently titled episode at that number aired more
+  than a week away, the programme is now left out. QI's "Series F: 1.
+  Family" came out as S01E01, Torchwood's "Children of Earth: 1. Day
+  One" as S01E01, Casualty's "Lethal Legacy: Episode 1" as the first
+  episode of 1986, and classic Doctor Who's "Season 4: The Tenth Planet:
+  Episode 1" as S04E01. A programme whose title TheTVDB has once in the
+  series, and that is not a generic title such as "Episode 1", now
+  takes that episode's number whatever its air date, when TheTVDB does
+  not bear out its own number: Red Dwarf's "X: 1. Trojan", which
+  iPlayer dates only "2012", is S10E01, and QI's "Series P: 2. Peril" is
+  S16E02. A story's part now matches TheTVDB's title for it, so "The
+  Tenth Planet: Episode 1" is S04E05, and an animated or reconstructed
+  version gives way to the original, as a signed version does. And a
+  show TheTVDB bears out nowhere, whose programmes aired more than a
+  year before the series began or more than ten years after it ended,
+  is taken to be another show of the same name: a search for Gladiators
+  (1992) S01E01 returned the 2024 series' first episode and now returns
+  nothing. A series bought in years after TheTVDB's dates keeps the
+  numbers it is assumed to have when TheTVDB bears out others of the
+  same label at theirs: Naruto's "Part I: 13. Crystal Ice Mirrors" is
+  TheTVDB's "Demonic Mirroring Ice Crystals". Titles now match across a
+  macron ("Chūnin", "Chunin"). Episodes numbered only from their place
+  in iPlayer's list keep their numbers, as in 1.9.0. The RSS feed
+  applies the same rules.
+- A search for an episode that iPlayer lists as a one-off of its own,
+  titled with the show's name, a colon and the episode's title, now
+  finds it. "Doctor Who: Dreamland" is TheTVDB's Doctor Who (2005)
+  S00E15, "Doctor Who: The Infinite Quest" S00E05 and "Gavin & Stacey:
+  A Fond Farewell" S00E18, but a search for the show dropped every
+  "Show: Something" title when iPlayer also had the show itself, to keep
+  companion programmes such as "Doctor Who: Unleashed" out (1.8.3). A
+  one-off that is a programme of its own on iPlayer now takes the number
+  of the TheTVDB episode with its title, or its whole title, aired within
+  a month of it, and goes out under the show's name. One TheTVDB does
+  not list still stays out, as do companions. The RSS feed is unchanged.
+- When Skyhook cannot be reached, or returns an empty episode list, a
+  search by TVDB ID no longer offers episodes under a number iplayer-arr
+  guessed from their place in iPlayer's list. Doctor Who (2005) S00E15
+  returned "A Christmas Carol" as S00E15, and S01E04 returned "The
+  Runaway Bride" beside "Aliens of London". Episodes with the BBC's own
+  series and episode numbers are still offered, and the guessed ones
+  come back, numbered from TheTVDB, once Skyhook answers; a failure is
+  retried after 5 minutes. The RSS feed does the same for a show whose
+  list is unavailable.
+- A search by TVDB ID for a show iplayer-arr has not seen before now
+  returns nothing when Skyhook cannot name it. It searched iPlayer for
+  "BBC" instead and gave every result that TVDB ID, so Sonarr could
+  take "BBC Comedy Short Films" S01E01 as the show's S01E01. The Skyhook
+  lookup now gives up after 15 seconds or when Sonarr does, and a
+  failed lookup is retried after 5 minutes rather than on every search.
+- A text search for a show and a year, such as `Doctor Who 2005`, which
+  Sonarr sends when a TVDB ID search found nothing, now finds the show
+  iplayer-arr has stored as "Doctor Who (2005)", and its results go out
+  under that show's name and TVDB ID. A name that more than one stored
+  show shares, such as `Doctor Who` once both Doctor Who (2005) and
+  Doctor Who (2023) have been searched for, gets no results; it was
+  answered as whichever of them iplayer-arr read first.
+- An episode search now finds an episode by the number a Show Override
+  gives it. With a Series Offset of 1, the BBC's Series 2 Episode 3 goes
+  out as S03E03, but a search for S03E03 found nothing and a search for
+  S02E03 returned it, titled S03E03. Episodes numbered from TheTVDB still
+  ignore the series and episode overrides.
+- When iPlayer has only one programme of a show's name and it is from
+  another era, for example "Show (1992-2000)" in a search for the 2024
+  series, a search no longer returns it with the searched series' TVDB
+  ID, unless TheTVDB numbers it for that series. Two or more such
+  programmes were already left out. The era check also counts a brand
+  of the searched era that iPlayer lists but whose episodes it failed
+  to send, so the bare "Doctor Who" no longer stands in for Doctor Who
+  (2005), and it takes the year from a stored series' name when the
+  series was stored without one.
+- The weekly image rebuild could hang until it timed out: under
+  emulation for the arm64 image, `npm ci` sometimes died with "Illegal
+  instruction" and never returned. The frontend and the Go binary are
+  now built natively and cross-compiled, so only the runtime image's
+  packages are installed under emulation.
+
+### Upgrade notes
+- Release titles from a search by TVDB ID change for the series listed
+  above. A release you blocklisted in Sonarr under its old title can be
+  offered again under the new one.
+- A Show Override's custom name no longer applies to a search by TVDB
+  ID, whose results now carry Sonarr's name for the series. Its
+  numbering still applies, and the RSS feed and text searches still use
+  the custom name.
+- Episodes Sonarr imported before this release may be filed as another
+  episode, for example classic Doctor Who serial parts, Red Dwarf X to
+  XII as Series 1, or QI's lettered series as Series 1. They are worth
+  checking. To replace a wrong one, delete its entry from History on
+  iplayer-arr's dashboard, delete the file in Sonarr and search for the
+  episode again, as the 1.9.0 notes describe.
+
 ## [1.9.1] - 2026-10-25
 
 ### Fixed

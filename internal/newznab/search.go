@@ -3,12 +3,15 @@ package newznab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Will-Luck/iplayer-arr/internal/bbc"
@@ -67,7 +70,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeResultsRSS(w, r, results, hitTitles, noSeasonFilter, 0, "", filterName, 0, "", isWildcard, parseLimitParam(r))
+	h.writeResultsRSS(w, r, results, hitTitles, noSeasonFilter, 0, "", filterName, 0, "", "", isWildcard, parseLimitParam(r))
 }
 
 func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
@@ -84,16 +87,47 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	// the <newznab:attr name="tvdbid"> echo in writeResultsRSS still
 	// fires on these follow-ups. The request's own tvdbid parameter
 	// always wins -- we only rehydrate when tvdbid == "".
+	//
+	// A name more than one stored series could be gets no answer. With
+	// Doctor Who (2005) and (2023) stored, Sonarr sends q=Doctor Who for
+	// Doctor Who (2005), from a scene alias, and for the classic Doctor
+	// Who, and it used to be answered as Doctor Who (2023). Without a
+	// tvdbid the answer would be no better: Sonarr would map
+	// "Doctor.Who.S01E02" by its title alone. Sonarr normally sends a
+	// query by title only when the tvdbid query of the same search found
+	// nothing (HttpIndexerBase.FetchReleases stops at the first tier with
+	// results), and that query saw the same programmes, so nothing Sonarr
+	// would take is lost. Gitea #104.
 	var filterYear int
+	// seriesName is the Sonarr title of the series searched for, when
+	// it is known. The series' items go out under it.
+	var seriesName string
+	// iblQuery is what iBL is searched for when it is not q.
+	var iblQuery string
 	if q != "" && tvdbid == "" && h.store != nil {
-		cached, _ := h.store.GetSeriesMappingByName(q)
+		cached, err := h.store.GetSeriesMappingByName(q)
+		if errors.Is(err, store.ErrAmbiguousSeriesName) {
+			log.Printf("[tvsearch] q=%q could be more than one stored series, not answered", q)
+			writeEmptyRSS(w)
+			return
+		}
 		if cached != nil {
+			log.Printf("[tvsearch] rehydrated tvdbid=%q for q=%q from store",
+				cached.TVDBId, q)
+			// From here on it is the tvdbid search for that series: the
+			// stored name is the name filter and the name its items go out
+			// under. "Doctor Who 2005" is no brand's name; "Doctor Who
+			// (2005)" matches "Doctor Who (2005-2022)". iBL is still asked
+			// for the name Sonarr sent: Sonarr sends it when the tvdbid
+			// query, which asked iBL for the stored name, found nothing.
+			// Gitea #104.
 			tvdbid = cached.TVDBId
+			iblQuery = q
+			q = cached.ShowName
+			seriesName = cached.ShowName
 			if cached.Year > 0 {
 				filterYear = cached.Year
 			}
-			log.Printf("[tvsearch] rehydrated tvdbid=%q for q=%q from store",
-				tvdbid, q)
 		}
 	}
 	if q == "" && tvdbid != "" {
@@ -102,18 +136,20 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 		// field in the JSON and deserialise to Year=0 - those need to
 		// be backfilled by re-hitting Skyhook on first use after the
 		// upgrade. See issue #18 and the Phase 4 design doc.
+		var stored *store.SeriesMapping
 		if h.store != nil {
-			cached, _ := h.store.GetSeriesMapping(tvdbid)
-			if cached != nil && cached.Year > 0 {
-				q = cached.ShowName
-				filterYear = cached.Year
+			stored, _ = h.store.GetSeriesMapping(tvdbid)
+			if stored != nil && stored.Year > 0 {
+				q = stored.ShowName
+				filterYear = stored.Year
 			}
 		}
 		// Fall back to Skyhook when there's no warm cache OR when the
 		// warm cache has Year == 0 (backfill case).
 		if q == "" {
-			title, year, err := lookupTVDBShow(tvdbid)
-			if err == nil && title != "" {
+			title, year, err := h.shows.lookup(r.Context(), tvdbid)
+			switch {
+			case err == nil:
 				q = title
 				filterYear = year
 				if h.store != nil {
@@ -123,17 +159,47 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 						Year:     year,
 					})
 				}
+			case stored != nil && stored.ShowName != "":
+				// A mapping stored without a year still names the show,
+				// and its name may carry the year (below). Gitea #104.
+				log.Printf("[tvsearch] tvdbid=%s: Skyhook lookup failed, using the stored name %q: %v", tvdbid, stored.ShowName, err)
+				q = stored.ShowName
 			}
 		}
+		// Without a name nothing tells the show's programmes from any
+		// others. This search used to go to iBL for "BBC" with no name
+		// filter, numbering or era check, and every item carried this
+		// tvdbid, by which Sonarr maps an item to the searched series
+		// whatever its title (ParsingService.FindSeries): "BBC Comedy
+		// Short Films" S01E01 was the series' S01E01. "BBC" was the
+		// default query of an empty search, for Sonarr's indexer test,
+		// which sends no tvdbid and has had the RSS browse since #26.
+		// Gitea #104.
+		if q == "" {
+			log.Printf("[tvsearch] tvdbid=%s: show unknown and the Skyhook lookup failed, answering with nothing", tvdbid)
+			writeEmptyRSS(w)
+			return
+		}
+		seriesName = q
+	}
+
+	// A mapping stored without a year (v1.0.2, v1.1.0) still carries it
+	// in the series' name when TheTVDB's title has one, "Doctor Who
+	// (2005)", and the era check needs it. Gitea #104.
+	if seriesName != "" && filterYear == 0 {
+		filterYear, _ = extractYearRange(seriesName)
 	}
 
 	if h.ibl == nil {
 		writeEmptyRSS(w)
 		return
 	}
-	// Capture the resolved show name (either Sonarr's q= or the
-	// tvdbid → Skyhook lookup) BEFORE the BBC fallback so the wildcard
-	// browse path doesn't accidentally inherit a filter.
+	if iblQuery == "" {
+		iblQuery = q
+	}
+	// The resolved show name (Sonarr's q= or the tvdbid's) filters the
+	// results. A search with neither is the RSS browse, which has no
+	// name filter.
 	filterName := q
 	isWildcard := q == "" && tvdbid == ""
 
@@ -143,10 +209,7 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	if isWildcard {
 		results, err = h.wildcardBrowse(r.Context())
 	} else {
-		if q == "" {
-			q = "BBC"
-		}
-		results, hitTitles, err = h.ibl.SearchTitles(q, 1)
+		results, hitTitles, err = h.ibl.SearchTitles(iblQuery, 1)
 	}
 	if err != nil {
 		writeEmptyRSS(w)
@@ -169,7 +232,7 @@ func (h *Handler) handleTVSearch(w http.ResponseWriter, r *http.Request) {
 	// so detect the daily shape and filter by air date instead.
 	filterDate := parseDailySearchDate(seasonStr, epStr)
 
-	h.writeResultsRSS(w, r, results, hitTitles, season, ep, filterDate, filterName, filterYear, tvdbid, isWildcard, parseLimitParam(r))
+	h.writeResultsRSS(w, r, results, hitTitles, season, ep, filterDate, filterName, filterYear, tvdbid, seriesName, isWildcard, parseLimitParam(r))
 }
 
 // parseLimitParam reads Sonarr's `limit=N` query parameter, the
@@ -224,7 +287,9 @@ func parseDailySearchDate(seasonStr, epStr string) string {
 // then renders them as Newznab RSS. hitTitles are the iBL search-hit
 // titles from IBL.SearchTitles (nil for the wildcard browse); they decide
 // whether nameMatches' subtitle extension may apply. GitHub #58.
-func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, hitTitles []string, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid string, wildcardBrowse bool, limit int) {
+// seriesName is the Sonarr title of the series searched for, "" when no
+// series is known; the items ofSeries accepts go out under it.
+func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, hitTitles []string, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid, seriesName string, wildcardBrowse bool, limit int) {
 	var items []string
 	wantName := strings.TrimSpace(filterName)
 
@@ -242,6 +307,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		res      bbc.IBLResult
 		prog     *store.Programme
 		override *store.ShowOverride
+		asSeries bool // goes out under seriesName
 	}
 
 	// Single pass: filter, dedupe by PID, and build the prefetch list
@@ -281,6 +347,14 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	//         titles from its own positions, so its 1986 episodes went
 	//         out as EastEnders.S01E01 and S01E02, numbered as the
 	//         series' first episodes. TestGH58_DailySearchSkipsColonBrand.
+	//     The exception is a one-off (oneOffTitle) that TheTVDB lists for
+	//     the searched series by its title: numberOneOffs gives it that
+	//     episode's number and the search keeps it, under wantName like
+	//     any extension. "Doctor Who: Dreamland" is Doctor Who (2005)
+	//     S00E15 and A Fond Farewell is S00E18. A one-off TheTVDB does
+	//     not list is still dropped, and so is every one-off in a search
+	//     TheTVDB does not number (a daily search, Skyhook unavailable).
+	//     Gitea #104.
 	//
 	// The search-hit titles count as well as the expanded results, so a
 	// parent brand whose episode listing failed (SearchCtx skips it) still
@@ -297,14 +371,6 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	// hits, because only the out-of-era "(1963-1996)" and "(2005-2022)"
 	// brands would be left to compare against. An empty answer is the
 	// safer failure; a wrong programme imported as the episode is not.
-	//
-	// FIXME: disambiguateByYear returns a lone candidate unchanged
-	// (len(progs) <= 1), year or no year. When iBL has exactly one
-	// programme of the searched name and it is from another era, it is
-	// emitted under its own title with this search's tvdbid. That is
-	// older than #58. Up to v1.9.0 the check ran on what the episode
-	// filter left, so one candidate was common; it now runs on every
-	// programme of the name. No live example was found.
 	//
 	// Known gap, out of scope for #58: hitTitles is only iBL's first
 	// page of search hits (per_page=20). If the parent brand is missing
@@ -336,8 +402,21 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	// the searched series stays: TheTVDB has Doctor Who's 60th
 	// anniversary specials, under the 2023 brand on iPlayer, as Doctor
 	// Who (2005) S00E162 to S00E164 too. GitHub #60.
+	//
+	// A search hit titled with the series' era counts though its episode
+	// listing failed (SearchTitles skips it): with "Doctor Who
+	// (2005-2022)" listed and its episodes missing, the bare brand's
+	// Doctor Who (2023) episodes answered Doctor Who (2005)'s searches
+	// under its name. And a series another country's tag names is not the
+	// BBC's own: the bare "Ghosts" is the BBC series, whose series 3 to 5
+	// answered Ghosts (US)'s searches at its numbers. A UK tag names the
+	// BBC's series. Gitea #104.
+	foreign := countryTag(wantName)
+	if strings.EqualFold(foreign, "UK") || strings.EqualFold(foreign, "GB") {
+		foreign = ""
+	}
 	var outOfEra map[string]bool
-	if filterYear > 0 {
+	if filterYear > 0 || foreign != "" {
 		var candidates []*store.Programme
 		listed := make(map[string]bool, len(progs))
 		for _, p := range progs {
@@ -351,9 +430,16 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		for _, p := range disambiguateByYear(candidates, filterYear) {
 			kept[p] = true
 		}
+		inEraHit := false
+		for _, t := range hitTitles {
+			if start, end := extractYearRange(t); start > 0 && filterYear >= start && filterYear <= end && exactNameMatch(t, wantName) {
+				inEraHit = true
+			}
+		}
 		outOfEra = make(map[string]bool)
 		for _, p := range candidates {
-			if !kept[p] {
+			start, _ := extractYearRange(p.Name)
+			if !kept[p] || inEraHit && start == 0 || foreign != "" && !strings.EqualFold(countryTag(p.Name), foreign) {
 				outOfEra[p.PID] = true
 			}
 		}
@@ -361,25 +447,45 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 
 	// Number episodes from TheTVDB before the season/episode filter, so
 	// a search for S00E04 finds the special TheTVDB has there. Only the
-	// searched show's episodes are numbered, so not when its name is
-	// unknown (the tvdbid lookup failed and the search fell back to
-	// "BBC"). Daily searches, by air date or by year as the season, keep
-	// their date titles. GitHub #60.
+	// searched show's episodes are numbered, so not without its name
+	// (handleTVSearch answers a tvdbid search with nothing when it has
+	// none, Gitea #104). Daily searches, by air date or by year as the
+	// season, keep their date titles. GitHub #60.
+	var oneOffs map[*store.Programme]bool
 	if h.episodes != nil && tvdbid != "" && wantName != "" && filterDate == "" && filterSeason < 1900 {
+		eligible := func(p *store.Programme) bool {
+			return nameMatches(p.Name, wantName) && (!exactOnly || exactNameMatch(p.Name, wantName))
+		}
 		eps, err := h.episodes.Episodes(r.Context(), tvdbid)
+		if err == nil && len(eps) == 0 {
+			err = errors.New("empty episode list")
+		}
 		if err != nil {
-			log.Printf("[tvsearch] TheTVDB episodes for tvdbid=%s unavailable, keeping BBC numbering: %v", tvdbid, err)
+			// Without the list, BBC's own numbers go out as before but no
+			// guessed one does, since nothing can check it: Doctor Who
+			// (2005) S00E15 returned "A Christmas Carol", 15th under the
+			// brand, and S01E04 "The Runaway Bride" beside "Aliens of
+			// London", the GitHub #60 bug, which Sonarr accepts as the
+			// episode searched. The failure is cached for
+			// skyhookEpisodesFailTTL, so they come back, numbered from
+			// the list, once Skyhook answers. An empty list counts as a
+			// failure here, as it does in SkyhookEpisodes and the feed.
+			// Gitea #104.
+			n := markUnchecked(progs, eligible)
+			log.Printf("[tvsearch] TheTVDB episodes for tvdbid=%s unavailable, keeping BBC numbering, %d guessed numbers left out: %v", tvdbid, n, err)
 		} else {
 			// A companion brand ("Show: Something") can be among the
 			// programmes when iPlayer has nothing titled exactly as the
 			// show, so only the show's own programmes are numbered by
 			// their air date alone.
-			n := newTVDBIndex(eps).numberFromTVDB(progs, func(p *store.Programme) bool {
-				return nameMatches(p.Name, wantName) && (!exactOnly || exactNameMatch(p.Name, wantName))
-			}, func(p *store.Programme) bool {
+			idx := newTVDBIndex(eps)
+			n := idx.numberFromTVDB(progs, eligible, func(p *store.Programme) bool {
 				return exactNameMatch(p.Name, wantName)
 			})
-			log.Printf("[tvsearch] tvdbid=%s: %d episodes numbered from TheTVDB", tvdbid, n)
+			// The show's one-offs are numbered by their own title, and
+			// exactOnly keeps those it numbers. Gitea #104.
+			oneOffs = idx.numberOneOffs(results, progs, wantName)
+			log.Printf("[tvsearch] tvdbid=%s: %d episodes numbered from TheTVDB", tvdbid, n+len(oneOffs))
 		}
 	}
 	// The RSS feed has no tvdbid, so it numbers from the series Sonarr
@@ -394,17 +500,19 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			continue
 		}
 		prog := progs[i]
-		if exactOnly && !exactNameMatch(prog.Name, wantName) || outOfEra[res.PID] && !prog.TVDBNumbered {
+		if exactOnly && !exactNameMatch(prog.Name, wantName) && !oneOffs[prog] || outOfEra[res.PID] && !prog.TVDBNumbered {
 			continue
 		}
 		var override *store.ShowOverride
 		if h.store != nil {
 			override, _ = h.store.GetOverride(emitName(prog, wantName))
 		}
-		// A programme of another era kept for its TheTVDB number goes out
-		// under its brand's name, not a custom one, so the name, numbers
-		// and tvdbid all point at the searched series.
-		if outOfEra[res.PID] && override != nil && override.CustomName != "" {
+		// In a search for a known series the item goes out under the
+		// series' name (below), not a custom one. The override is still
+		// the brand's, the name users key it by, so its numbering
+		// applies.
+		asSeries := seriesName != "" && ofSeries(prog, seriesName, filterYear)
+		if asSeries && override != nil && override.CustomName != "" {
 			o := *override
 			o.CustomName = ""
 			override = &o
@@ -412,8 +520,24 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		if !matchesSearchFilter(prog, override, wantName, filterDate, filterSeason, filterEp) {
 			continue
 		}
+		// A doubtful number that TheTVDB has for another episode would
+		// have Sonarr grab it as that episode ("At Christmas 2025 -
+		// Signed" as The Repair Shop's 2017 special, QI's "Series F: 1.
+		// Family" as S01E01, the 2024 Gladiators as the 1992 series').
+		// Unless an override renumbers it, leave it out. GitHub #60,
+		// Gitea #104. The same goes for any guessed number that TheTVDB's
+		// list, being unavailable, could not check. Left out here, before
+		// the quality probe asks the BBC about it. Gitea #104.
+		if (prog.TVDBContradicted || prog.TVDBUnchecked) && !overridesNumbering(prog, override) {
+			why := "TheTVDB has another episode at its number"
+			if prog.TVDBUnchecked {
+				why = "its number is a guess and TheTVDB's episode list is unavailable"
+			}
+			log.Printf("[tvsearch] %s %q left out: %s", res.PID, prog.Episode, why)
+			continue
+		}
 		seen[res.PID] = struct{}{}
-		filtered = append(filtered, filteredItem{res: res, prog: prog, override: override})
+		filtered = append(filtered, filteredItem{res: res, prog: prog, override: override, asSeries: asSeries})
 		probeItems = append(probeItems, bbc.ProbeItem{PID: res.PID, ShowName: prog.Name})
 	}
 
@@ -461,18 +585,21 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 
 		prog.Name = emitName(prog, wantName)
 
-		// A special's guessed number that TheTVDB has for another
-		// episode would have Sonarr grab it as that episode ("At
-		// Christmas 2025 - Signed" as The Repair Shop's 2017 special).
-		// Unless an override renumbers it, leave it out. GitHub #60.
-		if prog.TVDBContradicted && !overridesNumbering(prog, override) {
-			log.Printf("[tvsearch] %s %q left out: TheTVDB has another episode at its guessed number", res.PID, prog.Episode)
-			continue
-		}
-		// A feed item numbered from a stored series goes out under that
-		// series' name, not a custom one, so the name, numbers and tvdbid
-		// all point at one series.
+		// A search item goes out under the searched series' name, and a
+		// feed item numbered from a stored series under that series'
+		// name, not a custom one, so the name, numbers and tvdbid all
+		// point at one series. A search takes a release whose name is no
+		// series' on the tvdbid alone (ParsingService.FindSeries), but
+		// once it is downloaded Sonarr goes by the name, and does not
+		// import a grab matched only by its ID unless it came from an
+		// interactive search (CompletedDownloadService.Check). Sonarr
+		// has no series called "Doctor.Who.2005-2022" or "Porridge.2017",
+		// and "Doctor.Who.S00E05" is the classic Doctor Who's S00E05.
+		// GitHub #60.
 		itemTVDB := tvdbid
+		if it.asSeries {
+			prog.Name = seriesName
+		}
 		if m := browseSeries[res.PID]; m != nil {
 			prog.Name = m.ShowName
 			itemTVDB = m.TVDBId
@@ -653,17 +780,18 @@ func IBLResultToProgramme(r bbc.IBLResult) *store.Programme {
 		series = 1
 	}
 	return &store.Programme{
-		PID:           r.PID,
-		Name:          r.Title,
-		Episode:       r.Subtitle,
-		Series:        series,
-		SeriesAssumed: series != r.Series,
-		EpisodeNum:    r.EpisodeNum,
-		Position:      r.Position,
-		AirDate:       r.AirDate,
-		Channel:       r.Channel,
-		Thumbnail:     r.Thumbnail,
-		Duration:      r.Duration,
+		PID:            r.PID,
+		Name:           r.Title,
+		Episode:        r.Subtitle,
+		Series:         series,
+		SeriesAssumed:  series != r.Series,
+		EpisodeNum:     r.EpisodeNum,
+		EpisodeAssumed: r.EpisodeNumAssigned,
+		Position:       r.Position,
+		AirDate:        r.AirDate,
+		Channel:        r.Channel,
+		Thumbnail:      r.Thumbnail,
+		Duration:       r.Duration,
 	}
 }
 
@@ -699,14 +827,22 @@ func baseURL(r *http.Request) string {
 var skyhookBaseURL = "https://skyhook.sonarr.tv"
 
 // lookupTVDBShow resolves a TVDB ID to (showName, firstAiredYear) via
-// the Skyhook service. Returns ("", 0, err) on any failure - callers
-// fall back to bare-name behaviour with no year disambiguation.
+// the Skyhook service. Returns ("", 0, err) on any failure; handleTVSearch
+// then uses a mapping stored without a year if it has one, and answers
+// with nothing if not (Gitea #104).
 //
 // Replaces the v1.1.0 lookupTVDBTitle which only returned the show
 // name. The year is needed for Phase 4 disambiguation of shows with
 // duplicate BBC brand names (classic Doctor Who vs modern Doctor Who).
-func lookupTVDBShow(tvdbid string) (title string, year int, err error) {
-	resp, err := http.Get(skyhookBaseURL + "/v1/tvdb/shows/en/" + tvdbid)
+func lookupTVDBShow(ctx context.Context, tvdbid string) (title string, year int, err error) {
+	if tvdbid == "" || strings.Trim(tvdbid, "0123456789") != "" {
+		return "", 0, fmt.Errorf("tvdbid %q is not a number", tvdbid)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, skyhookBaseURL+"/v1/tvdb/shows/en/"+tvdbid, nil)
+	if err != nil {
+		return "", 0, err
+	}
+	resp, err := skyhookShowClient.Do(req)
 	if err != nil {
 		return "", 0, err
 	}
@@ -719,7 +855,7 @@ func lookupTVDBShow(tvdbid string) (title string, year int, err error) {
 		Title      string `json:"title"`
 		FirstAired string `json:"firstAired"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&show); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, skyhookEpisodesMaxBody)).Decode(&show); err != nil {
 		return "", 0, err
 	}
 
@@ -729,6 +865,60 @@ func lookupTVDBShow(tvdbid string) (title string, year int, err error) {
 	}
 	log.Printf("[tvsearch] resolved TVDB %s -> %q (year %d)", tvdbid, title, year)
 	return title, year, nil
+}
+
+// skyhookShowClient bounds a show lookup as SkyhookEpisodes bounds an
+// episode list. The lookup used http.Get, which has no timeout and does
+// not stop with the search, so a Skyhook that took the connection and
+// never answered held the search long after Sonarr had given up.
+// Gitea #104.
+var skyhookShowClient = &http.Client{Timeout: skyhookEpisodesTimeout}
+
+// skyhookShows looks shows up with lookupTVDBShow and remembers a
+// failure for skyhookEpisodesFailTTL, as SkyhookEpisodes does, so a
+// Skyhook outage costs one request per series every few minutes rather
+// than one per search: Sonarr searches a newly added series a season at
+// a time. A name found is stored as a series mapping, so only failures
+// are kept here. Gitea #104.
+type skyhookShows struct {
+	now func() time.Time
+
+	mu     sync.Mutex
+	failed map[string]time.Time // tvdbid -> when Skyhook may be asked again
+}
+
+func newSkyhookShows() *skyhookShows {
+	return &skyhookShows{now: time.Now, failed: make(map[string]time.Time)}
+}
+
+func (s *skyhookShows) lookup(ctx context.Context, tvdbid string) (title string, year int, err error) {
+	now := s.now()
+	s.mu.Lock()
+	retry, failed := s.failed[tvdbid]
+	s.mu.Unlock()
+	if failed && now.Before(retry) {
+		return "", 0, fmt.Errorf("skyhook show lookup for tvdbid %s failed in the last %v", tvdbid, skyhookEpisodesFailTTL)
+	}
+
+	title, year, err = lookupTVDBShow(ctx, tvdbid)
+	if err == nil && title == "" {
+		err = errors.New("skyhook returned no title")
+	}
+	if err != nil && ctx.Err() != nil {
+		// The search was cancelled, which says nothing about Skyhook.
+		return "", 0, err
+	}
+	s.mu.Lock()
+	for id, t := range s.failed {
+		if !now.Before(t) {
+			delete(s.failed, id)
+		}
+	}
+	if err != nil {
+		s.failed[tvdbid] = now.Add(skyhookEpisodesFailTTL)
+	}
+	s.mu.Unlock()
+	return title, year, err
 }
 
 // qualityCeilingHeight returns the maximum video height (pixels) the
@@ -825,6 +1015,33 @@ func overridesNumbering(p *store.Programme, o *store.ShowOverride) bool {
 	return with != without
 }
 
+// ofSeries reports whether p, a programme of a search for seriesName,
+// which first aired in year, can go out under that series' name:
+// TheTVDB numbers it for the series, or nothing in its BBC title says it
+// is another series. A year suffix must cover year, and a country tag
+// must be the series' own. The name filter lets both through when the
+// era check cannot see them: exactNameMatch ignores a country tag, so
+// "Show (US)" answers a search for "Show (2019)", and with no year known
+// there is no era check. Under its own name Sonarr can still tell such a
+// programme is not the series'. GitHub #60.
+func ofSeries(p *store.Programme, seriesName string, year int) bool {
+	if p.TVDBNumbered {
+		return true
+	}
+	if tag := countryTag(p.Name); tag != "" && !strings.EqualFold(tag, countryTag(seriesName)) {
+		return false
+	}
+	start, end := extractYearRange(p.Name)
+	return start == 0 || year >= start && year <= end
+}
+
+// countryTag returns the country tag bareName strips from s, "US" for
+// "Ghosts (US)", or "".
+func countryTag(s string) string {
+	m := reCountryTag.FindString(reYearSuffix.ReplaceAllString(s, ""))
+	return strings.Trim(strings.TrimSpace(m), "()")
+}
+
 // emitName is the name p's title goes out under. When the BBC title has
 // a subtitle that the Sonarr query doesn't (e.g. "Talking Tom Heroes:
 // Suddenly Super" vs "Talking Tom Heroes"), it is the Sonarr-provided
@@ -881,6 +1098,22 @@ func nameMatches(progName, wantName string) bool {
 	return false
 }
 
+// oneOffTitle returns X for a one-off of wantName "Show": a programme
+// titled "Show: X" with no subtitle that iPlayer lists as a programme of
+// its own (its tleo_id is its own PID), such as b00p3pvl "Doctor Who:
+// Dreamland". Its title is the episode's. An episode of a companion
+// brand ("Doctor Who: Unleashed") has the brand as its top-level
+// programme, so it is never one. Gitea #104.
+func oneOffTitle(res bbc.IBLResult, wantName string) (string, bool) {
+	if res.Subtitle != "" || res.BrandPID != res.PID || wantName == "" ||
+		!nameMatches(res.Title, wantName) || exactNameMatch(res.Title, wantName) {
+		return "", false
+	}
+	bare := strings.TrimSpace(bareName(res.Title))
+	want := strings.TrimSpace(bareName(wantName))
+	return strings.TrimSpace(bare[len(want)+2:]), true
+}
+
 // noSeasonFilter is filterSeason when the search has no season.
 const noSeasonFilter = -1
 
@@ -896,34 +1129,56 @@ func matchesSearchFilter(prog *store.Programme, o *store.ShowOverride, wantName,
 		return prog.AirDate == filterDate
 	}
 	series, episodeNum := prog.Series, prog.EpisodeNum
-	if series == 0 && episodeNum == 0 && prog.AirDate != "" {
-		// Topical/weekly escape hatch. Shows like Question Time or
-		// Newsnight arrive from iPlayer with no series/episode numbering
-		// (Series=0, EpisodeNum=0) but a valid AirDate. A strict
-		// integer-S/E filter would reject every such release, which is
-		// why Sonarr's interactive search returns nothing even though
-		// the in-app search finds the episode. Accept them so
-		// GenerateTitle can emit a date-tier title; the user must set
-		// the series type to "Daily" in Sonarr for it to match by air
-		// date. See GitHub issue #20.
-		//
-		// A programme GenerateTitle numbers anyway, from its position
-		// (S01E<position>) or as a special (S00E<position or MMDD>), is
-		// filtered on that number, the one Sonarr reads. v1.9.0 let Joy
-		// to the World answer a Doctor Who (2005) search for S00E15 as
-		// Doctor.Who.S01E04, which Sonarr took as Aliens of London.
-		// One with no air date keeps its BBC numbers, as before: TheTVDB
-		// cannot check a guess without a date. GitHub #60.
+	// Topical/weekly escape hatch. Shows like Question Time or
+	// Newsnight arrive from iPlayer with no series/episode numbering
+	// (Series=0, EpisodeNum=0) but a valid AirDate. A strict
+	// integer-S/E filter would reject every such release, which is
+	// why Sonarr's interactive search returns nothing even though
+	// the in-app search finds the episode. Accept them so
+	// GenerateTitle can emit a date-tier title; the user must set
+	// the series type to "Daily" in Sonarr for it to match by air
+	// date. See GitHub issue #20.
+	//
+	// A programme GenerateTitle numbers anyway, from its position
+	// (S01E<position>) or as a special (S00E<position or MMDD>), is
+	// filtered on that number, the one Sonarr reads. v1.9.0 let Joy
+	// to the World answer a Doctor Who (2005) search for S00E15 as
+	// Doctor.Who.S01E04, which Sonarr took as Aliens of London.
+	// One with no air date keeps its BBC numbers, as before: TheTVDB
+	// cannot check a guess without a date. GitHub #60.
+	hatch := series == 0 && episodeNum == 0 && prog.AirDate != ""
+	// A Show Override that changes the number in the title moves the
+	// programme to that number's search, whatever numbers the BBC gives
+	// it: with a Series Offset of 1, BBC's Series 2 Episode 3 goes out
+	// as S03E03 and answers S03E03, not S02E03. Up to v1.9.1 only the
+	// hatch population was filtered on the override's number, so the
+	// S03E03 search found nothing and the S02E03 one returned S03E03.
+	// The override is the user's numbering, so this holds with no air
+	// date too. TheTVDB's numbers ignore the numbering overrides
+	// (GenerateTitle), so overridesNumbering is false for them unless
+	// Force Date Based dates them. Gitea #104.
+	if hatch || overridesNumbering(prog, o) {
 		s, e, numbered := emittedNumber(prog, o)
-		if !numbered {
-			return true
-		}
-		if e == 0 {
+		switch {
+		case numbered && e > 0:
+			series, episodeNum = s, e
+		case !hatch:
+			// Outside the hatch, a programme keeps the numbers it has
+			// when the override's title has none to read. A date title
+			// (Force Date Based) then answers the search for those
+			// numbers, as before, and only that one: Sonarr reads a date
+			// title only for a Daily series, which it searches by air
+			// date, so an S/E search shows it but never grabs it, and
+			// answering every S/E search, as the hatch does, would add to
+			// that noise (Gitea #100). A number ParseTitle cannot read
+			// back ("Series 2024") keeps the search it answered before.
+		case numbered:
 			// ParseTitle cannot read the number back (a season over 99,
 			// an episode over 9999), so no search can ask for it.
 			return filterSeason == noSeasonFilter && filterEp <= 0
+		default:
+			return true
 		}
-		series, episodeNum = s, e
 	}
 	if filterSeason != noSeasonFilter && series != filterSeason {
 		return false

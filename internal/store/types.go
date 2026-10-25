@@ -100,9 +100,17 @@ type Programme struct {
 	// SeriesAssumed marks Series as the Series 1 iplayer-arr assumes
 	// for an episode number with no series (GitHub #32), not BBC's.
 	SeriesAssumed bool `json:"series_assumed,omitempty"`
-	// TVDBContradicted marks a programme whose only number is a guess
-	// from its iPlayer position, where TheTVDB has another episode at
-	// that number aired more than a week away. GitHub #60.
+	// EpisodeAssumed marks EpisodeNum as the air-date order iplayer-arr
+	// gives a series BBC numbers no episode of, not BBC's. Gitea #104.
+	EpisodeAssumed bool `json:"episode_assumed,omitempty"`
+	// TVDBUnchecked marks a programme whose only number is a guess from
+	// its iPlayer position, when the TheTVDB list that would check it is
+	// unavailable. Gitea #104.
+	TVDBUnchecked bool `json:"tvdb_unchecked,omitempty"`
+	// TVDBContradicted marks a programme whose number is a guess or partly
+	// assumed, or belongs to another show of the name, where TheTVDB has
+	// another episode at that number aired more than a week away. GitHub
+	// #60, Gitea #104.
 	TVDBContradicted bool      `json:"tvdb_contradicted,omitempty"`
 	CachedAt         time.Time `json:"cached_at"`
 }

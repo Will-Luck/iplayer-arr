@@ -152,16 +152,23 @@ func TestGH60_BrowseFeedNumbersSearchedShows(t *testing.T) {
 
 // A brand stays as it was when any of its candidate series' lists is
 // unavailable: without Doctor Who (2005)'s list, nothing says Joy to the
-// World is not one of its specials.
+// World is not one of its specials. Its number, S01E04, is a guess from
+// its position, so it is left out (Gitea #104): Sonarr takes
+// "Doctor.Who.S01E04" as Aliens of London.
 func TestGH60_BrowseFeedNeedsEveryCandidate(t *testing.T) {
 	gh60Fixtures(t, http.StatusOK)
 	ibl := gh60BrowseIBL(t, []string{"m0026d24", "b007894v"})
 	h := NewHandler(ibl, gh60SearchedShows(t), nil, nil)
 	h.SetEpisodeSource(failingEpisodes{fail: "78804", next: NewSkyhookEpisodes()})
-	gh60CheckItems(t, gh58Serve(t, h, "t=tvsearch"), map[string]gh60Want{
-		"m0026d24": {"Doctor.Who.S01E04.Joy.to.the.World.", ""},
+	items := gh58Serve(t, h, "t=tvsearch")
+	gh60CheckItems(t, items, map[string]gh60Want{
 		"b007894v": {"Porridge.S00E02.", "76578"},
 	})
+	for _, it := range items {
+		if it.PID == "m0026d24" {
+			t.Errorf("Joy to the World emitted as %q", it.Title)
+		}
+	}
 }
 
 // A feed item whose position number Porridge's TheTVDB list has for
@@ -252,15 +259,23 @@ func TestGH60_BrowseFeedIgnoresCustomNameOnNumberedItems(t *testing.T) {
 }
 
 // An empty list is treated as unavailable, as SkyhookEpisodes treats it:
-// probably Skyhook mid-refresh, not a series with no episodes.
+// probably Skyhook mid-refresh, not a series with no episodes. So Joy to
+// the World's guessed S01E04 is left out, as in
+// TestGH60_BrowseFeedNeedsEveryCandidate.
 func TestGH60_BrowseFeedEmptyListIsUnavailable(t *testing.T) {
 	gh60Fixtures(t, http.StatusOK)
-	ibl := gh60BrowseIBL(t, []string{"m0026d24"})
+	ibl := gh60BrowseIBL(t, []string{"m0026d24", "b007894v"})
 	h := NewHandler(ibl, gh60SearchedShows(t), nil, nil)
 	h.SetEpisodeSource(extraEpisodes{id: "78804", eps: []TVDBEpisode{}, next: NewSkyhookEpisodes()})
-	gh60CheckItems(t, gh58Serve(t, h, "t=tvsearch"), map[string]gh60Want{
-		"m0026d24": {"Doctor.Who.S01E04.", ""},
+	items := gh58Serve(t, h, "t=tvsearch")
+	gh60CheckItems(t, items, map[string]gh60Want{
+		"b007894v": {"Porridge.S00E02.", "76578"},
 	})
+	for _, it := range items {
+		if it.PID == "m0026d24" {
+			t.Errorf("Joy to the World emitted as %q", it.Title)
+		}
+	}
 }
 
 // The series an unnumbered item is checked against is found ignoring

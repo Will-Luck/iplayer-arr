@@ -63,11 +63,10 @@ func TestGH58_DoctorWho2023YearBucketSkipsCompanions(t *testing.T) {
 	items := gh58Search(t, map[string]string{"Doctor Who (2023)": "search_Doctor_Who_2023.json"},
 		gh58DoctorWhoBrands, nil, "t=tvsearch&tvdbid=449991&season=2&ep=1")
 
-	// The parent keeps the bare BBC title, as in v1.8.2. This pins current
-	// behaviour, not the ideal title: if parent items later get the Sonarr
-	// name (Doctor.Who.2023.*), update this line.
+	// The parent goes out under the Sonarr name, not the bare BBC title
+	// v1.8.2 gave it, which Sonarr reads as the classic Doctor Who.
 	gh58AssertTitle(t, items, "m0029db8",
-		"Doctor.Who.S02E01.Season.2.1.The.Robot.Revolution.720p.WEB-DL.AAC.H264-iParr")
+		"Doctor.Who.2023.S02E01.Season.2.1.The.Robot.Revolution.720p.WEB-DL.AAC.H264-iParr")
 	gh58AssertNone(t, items, map[string]bool{"m0026d24": true}, "Joy to the World, S01E04 by position")
 	gh58AssertNone(t, items, gh58BrandPIDs(t, "m001sx3r"), "Doctor Who: Unleashed")
 	gh58AssertNone(t, items, gh58DoctorWhoOneOffs, "one-off Doctor Who: X")
@@ -87,7 +86,9 @@ func TestGH58_DoctorWho2023YearBucketSkipsCompanions(t *testing.T) {
 // exactOnly. v1.8.2 and v1.9.0 answered it with four 2005-2022 programmes numbered
 // otherwise (S01E39, S13E05, S09E05 and S00E25): season=00 was no
 // season filter, and a programme with no BBC numbers answered any
-// search. Now nothing does. GitHub #60.
+// search. Now nothing does here. GitHub #60. With TheTVDB's episode
+// list, which this handler lacks, the one-off answers it as S00E05
+// (TestGH104_ParentOneOffTakesTheTVDBNumber, Gitea #104).
 func TestGH58_DoctorWho2005AnswersFromItsOwnEra(t *testing.T) {
 	search := func(query string) []gh58Item {
 		return gh58Search(t, map[string]string{"Doctor Who (2005)": "search_Doctor_Who_2005.json"},
@@ -95,7 +96,7 @@ func TestGH58_DoctorWho2005AnswersFromItsOwnEra(t *testing.T) {
 	}
 
 	items := search("t=tvsearch&tvdbid=78804&season=2&ep=1")
-	gh58AssertTitle(t, items, "b0074fll", "Doctor.Who.2005-2022.S02E01.New.Earth.720p.WEB-DL.AAC.H264-iParr")
+	gh58AssertTitle(t, items, "b0074fll", "Doctor.Who.2005.S02E01.New.Earth.720p.WEB-DL.AAC.H264-iParr")
 	if got, want := gh58PIDSet(items), []string{"b0074fll"}; !slices.Equal(got, want) {
 		t.Errorf("S02E01: emitted PIDs = %q, want %q", got, want)
 	}
@@ -106,29 +107,27 @@ func TestGH58_DoctorWho2005AnswersFromItsOwnEra(t *testing.T) {
 }
 
 // TVDB 75795 "The Apprentice (UK)". exactNameMatch strips the country
-// tag, so the bare BBC brand "The Apprentice" counts as exact and keeps
-// its own title (v1.8.2 titled it the same way). Two real per-episode
-// collisions: You're Fired! reuses "Series 17: 1. Antigua Tourism" and
-// Unfinished Business carries "Apprentice Series 20: 12. The Final".
-// v1.8.2 renamed both companions to the query name, which is why its
-// only The.Apprentice.UK.* titles were companion episodes.
+// tag, so the bare BBC brand "The Apprentice" counts as exact. v1.8.2
+// gave it its own title and renamed both companions to the query name,
+// so its only The.Apprentice.UK.* titles were companion episodes. Two
+// real per-episode collisions: You're Fired! reuses "Series 17: 1.
+// Antigua Tourism" and Unfinished Business carries "Apprentice Series
+// 20: 12. The Final". Now the parent goes out under the Sonarr name and
+// the companions not at all.
 func TestGH58_CountryTaggedParentSkipsCompanions(t *testing.T) {
 	cases := []struct {
 		query, parentPID, parentTitle string
 	}{
 		{"t=tvsearch&tvdbid=75795&season=17&ep=1", "m001gr7b",
-			"The.Apprentice.S17E01.Antigua.Tourism.720p.WEB-DL.AAC.H264-iParr"},
+			"The.Apprentice.UK.S17E01.Antigua.Tourism.720p.WEB-DL.AAC.H264-iParr"},
 		{"t=tvsearch&tvdbid=75795&season=20&ep=12", "m002v3q0",
-			"The.Apprentice.S20E12.The.Final.720p.WEB-DL.AAC.H264-iParr"},
+			"The.Apprentice.UK.S20E12.The.Final.720p.WEB-DL.AAC.H264-iParr"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.parentPID, func(t *testing.T) {
 			items := gh58Search(t, map[string]string{"The Apprentice (UK)": "search_The_Apprentice_UK.json"},
 				[]string{"b0071b63", "b007qgcl", "m002qm1x"}, nil, tc.query)
 
-			// parentTitle pins v1.8.2's bare-brand title, not the ideal
-			// one: if parent items later get the Sonarr name
-			// (The.Apprentice.UK.*), update the cases above.
 			gh58AssertTitle(t, items, tc.parentPID, tc.parentTitle)
 			gh58AssertNone(t, items, gh58BrandPIDs(t, "b007qgcl"), "The Apprentice: You're Fired!")
 			gh58AssertNone(t, items, gh58BrandPIDs(t, "m002qm1x"), "The Apprentice: Unfinished Business")
@@ -138,14 +137,16 @@ func TestGH58_CountryTaggedParentSkipsCompanions(t *testing.T) {
 
 // TVDB 80435 "Gavin & Stacey". m0026d9p "Gavin & Stacey: A Fond
 // Farewell" is not a companion with a series of its own: TVDB lists it
-// as the parent's S00E18. It is dropped anyway, on purpose (see the
-// exactOnly comment in writeResultsRSS): v1.8.2 offered it only as
+// as the parent's S00E18. This handler has no TheTVDB episode list, so
+// nothing numbers it and it is dropped, on purpose (see the exactOnly
+// comment in writeResultsRSS): v1.8.2 offered it only as
 // Gavin.and.Stacey.2025.01.01.*, a daily-style title Sonarr rejects for
-// a Standard series, so the search loses nothing that worked. This test
-// stops a later change from assuming every dropped title is a
-// companion. The parent's three unnumbered specials still answer the
-// searches for their own numbers. v1.9.0 also offered them for S00E18,
-// numbered otherwise. GitHub #60.
+// a Standard series, so the search loses nothing that worked. With the
+// list it is S00E18 (TestGH104_ParentOneOffUnderTheShowsFullTitle,
+// Gitea #104). This test stops a later change from assuming every
+// dropped title is a companion. The parent's three unnumbered specials
+// still answer the searches for their own numbers. v1.9.0 also offered
+// them for S00E18, numbered otherwise. GitHub #60.
 func TestGH58_ParentOneOffSpecialDroppedByDesign(t *testing.T) {
 	search := func(query string) []gh58Item {
 		return gh58Search(t, map[string]string{"Gavin & Stacey": "search_Gavin_and_Stacey.json"},
@@ -290,18 +291,47 @@ func TestGH58_OutOfEraExactBrandSuppressesExtension(t *testing.T) {
 		}
 	})
 
-	// FIXME: when iPlayer has exactly one programme of the name and it
-	// is from another era, disambiguateByYear returns it unchanged
-	// (len(progs) <= 1), so it goes out under its own title with the 2024
-	// series' tvdbid (see the FIXME in writeResultsRSS). Pinned on
-	// purpose: a fix to disambiguateByYear turns this subtest red, and it
-	// should then be flipped to assert that ep_old_1 is absent.
+	// When iPlayer has exactly one programme of the name and it is from
+	// another era, it is dropped as several would be. Up to v1.9.1
+	// disambiguateByYear returned a lone candidate unchanged, so the 1992
+	// episode went out under its own title with the 2024 series' tvdbid.
+	// Gitea #104.
+	const lone = `{"new_search":{"results":[
+		{"id":"ep_old_1","type":"episode","title":"Example Show (1992-2000)","subtitle":"Series 1: Episode 1","release_date":"1992-01-04"}
+	]}}`
 	t.Run("only programme of the name is old-era", func(t *testing.T) {
-		const lone = `{"new_search":{"results":[
-			{"id":"ep_old_1","type":"episode","title":"Example Show (1992-2000)","subtitle":"Series 1: Episode 1","release_date":"1992-01-04"}
+		for _, q := range []string{"t=tvsearch&tvdbid=999001&season=1&ep=1", "t=tvsearch&tvdbid=999001&season=1", "t=tvsearch&tvdbid=999001"} {
+			if items := gh58Serve(t, newHandlerWithBBC(t, lone), q); len(items) != 0 {
+				t.Errorf("%s: got %d items, want none", q, len(items))
+			}
+		}
+	})
+
+	// A lone programme of another era that TheTVDB numbers for the
+	// searched series stays, as one among several does (GitHub #60):
+	// here TheTVDB lists the 1992 episode as the 2024 series' S00E01. It
+	// goes out under the searched series' name, as its number does.
+	t.Run("only programme of the name is old-era, TheTVDB numbers it", func(t *testing.T) {
+		const pilot = `{"new_search":{"results":[
+			{"id":"ep_old_1","type":"episode","title":"Example Show (1992-2000)","subtitle":"Series 1: 1. The Pilot","release_date":"1992-01-04"}
 		]}}`
-		items := gh58Serve(t, newHandlerWithBBC(t, lone), "t=tvsearch&tvdbid=999001&season=1&ep=1")
-		gh58AssertTitle(t, items, "ep_old_1",
-			"Example.Show.1992-2000.S01E01.Series.1.Episode.1.720p.WEB-DL.AAC.H264-iParr")
+		h := newHandlerWithBBC(t, pilot)
+		h.SetEpisodeSource(fixedEpisodes{{Season: 0, Episode: 1, Title: "The Pilot", AirDate: "1992-01-04"}})
+		gh58AssertTitle(t, gh58Serve(t, h, "t=tvsearch&tvdbid=999001&season=0&ep=1"), "ep_old_1",
+			"Example.Show.2024.S00E01.The.Pilot.720p.WEB-DL.AAC.H264-iParr")
+	})
+
+	// A lone programme whose suffix covers the year, or that has none,
+	// is kept.
+	t.Run("only programme of the name is in era or bare", func(t *testing.T) {
+		for _, title := range []string{"Example Show (2024)", "Example Show"} {
+			payload := `{"new_search":{"results":[
+				{"id":"ep_1","type":"episode","title":"` + title + `","subtitle":"Series 1: Episode 1","release_date":"2024-03-02"}
+			]}}`
+			items := gh58Serve(t, newHandlerWithBBC(t, payload), "t=tvsearch&tvdbid=999001&season=1&ep=1")
+			if len(items) == 0 {
+				t.Errorf("%q: got no items, want ep_1", title)
+			}
+		}
 	})
 }

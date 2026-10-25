@@ -48,6 +48,10 @@ var (
 		"ý", "y", "ÿ", "y",
 		// Consonants.
 		"Ç", "C", "ç", "c", "Ñ", "N", "ñ", "n",
+		// Macrons, as in romanised Japanese: TheTVDB has Naruto's "The
+		// Chūnin Exam" where iPlayer has "The Chunin Exam". Gitea #104.
+		"Ā", "A", "Ē", "E", "Ī", "I", "Ō", "O", "Ū", "U",
+		"ā", "a", "ē", "e", "ī", "i", "ō", "o", "ū", "u",
 	)
 	// reDateSubtitle matches a bare date subtitle in DD/MM/YYYY (or .  / -)
 	// form, used by BBC daily soaps where the iPlayer subtitle is just the

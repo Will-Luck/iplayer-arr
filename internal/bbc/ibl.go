@@ -40,6 +40,9 @@ type IBLResult struct {
 	BrandPID   string
 	Duration   int       // seconds
 	Available  time.Time // iPlayer availability start (downloadable version); zero if unknown
+	// EpisodeNumAssigned marks EpisodeNum as the air-date order
+	// assignMissingEpisodeNumbers gave, not a number from BBC. Gitea #104.
+	EpisodeNumAssigned bool
 }
 
 var (
@@ -396,6 +399,7 @@ func assignMissingEpisodeNumbers(results []IBLResult) {
 
 		for ep, i := range indices {
 			results[i].EpisodeNum = ep + 1
+			results[i].EpisodeNumAssigned = true
 		}
 	}
 }
