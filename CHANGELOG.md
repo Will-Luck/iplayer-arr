@@ -38,8 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match to any episode. A show iPlayer never numbers, such as Question
   Time or Newsnight, still gets its dated programmes on those searches,
   and a search by air date or for the whole show still returns them.
-  A programme whose BBC air date is a year only, with no day, still
-  answers every season and episode search for now. (Gitea #100)
+  A programme the BBC dates with a year only, with no day, no longer
+  answers those searches either: "Wallace & Gromit: A Grand Day Out"
+  used to come back as `Wallace.and.Gromit.1992.*`. (Gitea #100)
 - A Daily series' season search, which Sonarr makes with the year as the
   season, now returns only that year's dated programmes. It used to
   return every dated programme of the show. (Gitea #100)

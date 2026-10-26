@@ -289,7 +289,9 @@ func TestGH104_OneOffAdmissionRules(t *testing.T) {
 // so the subtitle extension was already on and they answered every
 // search as Wallace.and.Gromit.2008.12.25, a title Sonarr rejects for a
 // standard series. b01pzqj3 "A Grand Day Out" has only a year from iBL
-// ("1992"), so TheTVDB cannot check it and it keeps its title.
+// ("1992"). A year is no date a title can carry and TheTVDB cannot check
+// it, but a programme with no BBC numbers answers no season or episode
+// search of a numbered show all the same, so it is dropped too.
 func TestGH104_OneOffWithoutTheShowNumbered(t *testing.T) {
 	h := NewHandler(nil, newTestStore(t), nil, nil)
 	h.SetEpisodeSource(fixedEpisodes{
@@ -311,5 +313,5 @@ func TestGH104_OneOffWithoutTheShowNumbered(t *testing.T) {
 		"Wallace.and.Gromit.S01E04.A.Matter.of.Loaf.and.Death.720p.WEB-DL.AAC.H264-iParr")
 	items := run(1, 1)
 	gh58AssertNone(t, items, map[string]bool{"b00g8hbw": true}, "S01E04 in a search for S01E01")
-	gh58AssertTitle(t, items, "b01pzqj3", "Wallace.and.Gromit.1992.720p.WEB-DL.AAC.H264-iParr")
+	gh58AssertNone(t, items, map[string]bool{"b01pzqj3": true}, "year-only air date in a search for S01E01")
 }

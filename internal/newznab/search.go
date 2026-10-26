@@ -1322,12 +1322,13 @@ func numberedEpisode(p *store.Programme, o *store.ShowOverride) bool {
 // unnumberedHatch reports whether p passes matchesSearchFilter's
 // season and episode filter only through the topical escape hatch: it
 // has no BBC numbers, it has an air date, and its title under o carries
-// no number. A year-only air date (iBL gives "1992" for some old
-// one-offs) is no date a title can carry, and TheTVDB cannot check it,
-// so that programme keeps its title (TestGH104_OneOffWithoutTheShowNumbered).
+// no number. An air date of any length counts: a programme the BBC dates
+// with a year only (iBL gives "1992" for some old one-offs) has no date a
+// title can carry and TheTVDB cannot check it, so it answers no season or
+// episode search of a numbered show (TestGH104_OneOffWithoutTheShowNumbered).
 // Gitea #100.
 func unnumberedHatch(p *store.Programme, o *store.ShowOverride) bool {
-	if p.Series != 0 || p.EpisodeNum != 0 || len(p.AirDate) < len("2006-01-02") {
+	if p.Series != 0 || p.EpisodeNum != 0 || p.AirDate == "" {
 		return false
 	}
 	_, _, ok := emittedNumber(p, o)
