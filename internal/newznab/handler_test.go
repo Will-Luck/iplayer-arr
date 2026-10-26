@@ -1166,6 +1166,14 @@ func TestMatchesSearchFilter_TableDriven(t *testing.T) {
 		{"topical without air date still rejected",
 			&store.Programme{Name: "Question Time"},
 			"question time", "", 48, 23, false},
+		// A Daily series' season search sends the year as the season and
+		// no episode: only that year's dated programmes answer it.
+		{"daily season search answers its own year",
+			&store.Programme{Name: "Question Time", AirDate: "2025-10-01"},
+			"question time", "", 2025, 0, true},
+		{"daily season search does not answer another year",
+			&store.Programme{Name: "Question Time", AirDate: "2026-10-01"},
+			"question time", "", 2025, 0, false},
 		// Subtitle prefix: BBC brands a show with ": Subtitle" but Sonarr
 		// searches the bare name. GitHub #21.
 		{"subtitle prefix match",

@@ -292,6 +292,9 @@ func parseDailySearchDate(seasonStr, epStr string) string {
 func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, results []bbc.IBLResult, hitTitles []string, filterSeason, filterEp int, filterDate, filterName string, filterYear int, tvdbid, seriesName string, wildcardBrowse bool, limit int) {
 	var items []string
 	wantName := strings.TrimSpace(filterName)
+	// With a tvdbid the name is TheTVDB's (searched or rehydrated), not
+	// Sonarr's q, and its leading article is significant.
+	theTVDB := tvdbid != ""
 
 	// Sonarr applies its configured apikey to the initial tvsearch but
 	// fetches the grab URL straight from the feed, so every link/guid/
@@ -380,7 +383,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	// page 1 and ranked above its companion for every colliding pair
 	// found, though not always first ("Gladiators (2024)" put "Election
 	// 2024" first), which is why hasExactTitle checks every hit.
-	exactOnly := wantName != "" && hasExactTitle(wantName, hitTitles, results)
+	exactOnly := wantName != "" && hasExactTitleFor(wantName, hitTitles, results, theTVDB)
 
 	progs := make([]*store.Programme, len(results))
 	for i, res := range results {
@@ -420,7 +423,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		var candidates []*store.Programme
 		listed := make(map[string]bool, len(progs))
 		for _, p := range progs {
-			if listed[p.PID] || !nameMatches(p.Name, wantName) || exactOnly && !exactNameMatch(p.Name, wantName) {
+			if listed[p.PID] || !nameMatchesFor(p.Name, wantName, theTVDB) || exactOnly && !exactNameMatchFor(p.Name, wantName, theTVDB) {
 				continue
 			}
 			listed[p.PID] = true
@@ -432,7 +435,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		}
 		inEraHit := false
 		for _, t := range hitTitles {
-			if start, end := extractYearRange(t); start > 0 && filterYear >= start && filterYear <= end && exactNameMatch(t, wantName) {
+			if start, end := extractYearRange(t); start > 0 && filterYear >= start && filterYear <= end && exactNameMatchFor(t, wantName, theTVDB) {
 				inEraHit = true
 			}
 		}
@@ -454,7 +457,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 	var oneOffs map[*store.Programme]bool
 	if h.episodes != nil && tvdbid != "" && wantName != "" && filterDate == "" && filterSeason < 1900 {
 		eligible := func(p *store.Programme) bool {
-			return nameMatches(p.Name, wantName) && (!exactOnly || exactNameMatch(p.Name, wantName))
+			return nameMatchesFor(p.Name, wantName, theTVDB) && (!exactOnly || exactNameMatchFor(p.Name, wantName, theTVDB))
 		}
 		eps, err := h.episodes.Episodes(r.Context(), tvdbid)
 		if err == nil && len(eps) == 0 {
@@ -480,11 +483,11 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			// their air date alone.
 			idx := newTVDBIndex(eps)
 			n := idx.numberFromTVDB(progs, eligible, func(p *store.Programme) bool {
-				return exactNameMatch(p.Name, wantName)
+				return exactNameMatchFor(p.Name, wantName, theTVDB)
 			})
 			// The show's one-offs are numbered by their own title, and
 			// exactOnly keeps those it numbers. Gitea #104.
-			oneOffs = idx.numberOneOffs(results, progs, wantName)
+			oneOffs = idx.numberOneOffs(results, progs, wantName, theTVDB)
 			log.Printf("[tvsearch] tvdbid=%s: %d episodes numbered from TheTVDB", tvdbid, n+len(oneOffs))
 		}
 	}
@@ -495,17 +498,53 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 		browseSeries = h.numberBrowseFromTVDB(r.Context(), progs)
 	}
 
+	// The topical escape hatch in matchesSearchFilter lets a programme
+	// with no numbers and an air date answer every season and episode
+	// search under a date title. It is there for a show iPlayer never
+	// numbers, such as Question Time or Newsnight (GitHub #20). When a
+	// programme of the searched show goes out with a season and episode
+	// the BBC or TheTVDB gave it, the show is numbered, and a date title
+	// is none of its episodes: Sonarr reads one only for a Daily series,
+	// which it searches by air date. The Celebrity Traitors' "Traitor or
+	// Faithful? Claudia Decides" answered every season and episode search
+	// as The.Celebrity.Traitors.2026.10.01. A daily search (by air date)
+	// and a search that asks no number are unchanged, and so is a search
+	// with a year as the season: Sonarr's season search of a Daily series
+	// sends season=<year> with no ep, and the dated programmes are its
+	// episodes (the numbering above skips it for the same reason). The
+	// programmes counted are those the loop below would filter: the same
+	// name, exact title and era gates. Gitea #100.
+	showNumbered := false
+	if wantName != "" && filterDate == "" && filterSeason < 1900 && (filterSeason != noSeasonFilter || filterEp > 0) {
+		for i, res := range results {
+			prog := progs[i]
+			if !nameMatchesFor(prog.Name, wantName, theTVDB) ||
+				exactOnly && !exactNameMatchFor(prog.Name, wantName, theTVDB) && !oneOffs[prog] ||
+				outOfEra[res.PID] && !prog.TVDBNumbered {
+				continue
+			}
+			var override *store.ShowOverride
+			if h.store != nil {
+				override, _ = h.store.GetOverride(emitName(prog, wantName, theTVDB))
+			}
+			if numberedEpisode(prog, override) {
+				showNumbered = true
+				break
+			}
+		}
+	}
+
 	for i, res := range results {
 		if _, dup := seen[res.PID]; dup {
 			continue
 		}
 		prog := progs[i]
-		if exactOnly && !exactNameMatch(prog.Name, wantName) && !oneOffs[prog] || outOfEra[res.PID] && !prog.TVDBNumbered {
+		if exactOnly && !exactNameMatchFor(prog.Name, wantName, theTVDB) && !oneOffs[prog] || outOfEra[res.PID] && !prog.TVDBNumbered {
 			continue
 		}
 		var override *store.ShowOverride
 		if h.store != nil {
-			override, _ = h.store.GetOverride(emitName(prog, wantName))
+			override, _ = h.store.GetOverride(emitName(prog, wantName, theTVDB))
 		}
 		// In a search for a known series the item goes out under the
 		// series' name (below), not a custom one. The override is still
@@ -517,7 +556,11 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			o.CustomName = ""
 			override = &o
 		}
-		if !matchesSearchFilter(prog, override, wantName, filterDate, filterSeason, filterEp) {
+		if !matchesSearchFilterFor(prog, override, wantName, theTVDB, filterDate, filterSeason, filterEp) {
+			continue
+		}
+		if showNumbered && unnumberedHatch(prog, override) {
+			log.Printf("[tvsearch] %s %q left out: a date title is no episode of a numbered show", res.PID, prog.Episode)
 			continue
 		}
 		// A doubtful number that TheTVDB has for another episode would
@@ -583,7 +626,7 @@ func (h *Handler) writeResultsRSS(w http.ResponseWriter, r *http.Request, result
 			continue
 		}
 
-		prog.Name = emitName(prog, wantName)
+		prog.Name = emitName(prog, wantName, theTVDB)
 
 		// A search item goes out under the searched series' name, and a
 		// feed item numbered from a stored series under that series'
@@ -1047,19 +1090,38 @@ func countryTag(s string) string {
 // Suddenly Super" vs "Talking Tom Heroes"), it is the Sonarr-provided
 // name, so Sonarr can match it back to TVDB. Show Overrides are looked
 // up by it.
-func emitName(p *store.Programme, wantName string) string {
-	if wantName != "" && !exactNameMatch(p.Name, wantName) {
+func emitName(p *store.Programme, wantName string, theTVDB bool) string {
+	if wantName != "" && !exactNameMatchFor(p.Name, wantName, theTVDB) {
 		return wantName
 	}
 	return p.Name
 }
 
-// exactNameMatch reports whether progName equals wantName, ignoring case
-// and the year and country suffixes bareName strips.
+// exactNameMatch reports whether progName equals wantName, ignoring the
+// year and country suffixes bareName strips and all that
+// store.ShowNameKey folds: case, punctuation, "&" against "and" and one
+// leading "The". Sonarr's title search sends "The Celebrity Traitors"
+// as "Celebrity Traitors" and "David Fuller: Monster in the Morgue" as
+// "David Fuller Monster In The Morgue". Gitea #97.
 func exactNameMatch(progName, wantName string) bool {
-	return strings.EqualFold(
-		strings.TrimSpace(bareName(progName)),
-		strings.TrimSpace(bareName(wantName)))
+	return exactNameMatchFor(progName, wantName, false)
+}
+
+// nameKey is store.ShowNameKey, or its article-keeping form when the name
+// is TheTVDB's (theTVDB). The article fold is for Sonarr's title search,
+// which drops a leading "The" from some queries. A name from TheTVDB is
+// the show's own: "Missing (2012)" is not the BBC's "The Missing".
+func nameKey(name string, theTVDB bool) string {
+	if theTVDB {
+		return store.ShowNameKeyKeepArticle(name)
+	}
+	return store.ShowNameKey(name)
+}
+
+// exactNameMatchFor is exactNameMatch, keeping the leading article
+// significant when wantName is TheTVDB's name (theTVDB).
+func exactNameMatchFor(progName, wantName string, theTVDB bool) bool {
+	return nameKey(bareName(progName), theTVDB) == nameKey(bareName(wantName), theTVDB)
 }
 
 // hasExactTitle reports whether iBL returned anything titled exactly
@@ -1067,35 +1129,67 @@ func exactNameMatch(progName, wantName string) bool {
 // failed) or an expanded episode. writeResultsRSS uses it to decide
 // whether the subtitle extension in nameMatches may apply. GitHub #58.
 func hasExactTitle(wantName string, hitTitles []string, results []bbc.IBLResult) bool {
+	return hasExactTitleFor(wantName, hitTitles, results, false)
+}
+
+func hasExactTitleFor(wantName string, hitTitles []string, results []bbc.IBLResult, theTVDB bool) bool {
 	for _, t := range hitTitles {
-		if exactNameMatch(t, wantName) {
+		if exactNameMatchFor(t, wantName, theTVDB) {
 			return true
 		}
 	}
 	for _, r := range results {
-		if exactNameMatch(r.Title, wantName) {
+		if exactNameMatchFor(r.Title, wantName, theTVDB) {
 			return true
 		}
 	}
 	return false
 }
 
-// nameMatches reports whether progName matches wantName after stripping
-// year suffixes. Also accepts a BBC subtitle extension ("Show: Subtitle"
-// matches a query for "Show"). GitHub #21. writeResultsRSS turns the
-// extension off when an exact match is present (GitHub #58).
+// nameMatches reports whether progName matches wantName as
+// exactNameMatch does, or is wantName with a BBC subtitle extension
+// ("Show: Subtitle" matches a query for "Show"). GitHub #21.
+// writeResultsRSS turns the extension off when an exact match is present
+// (GitHub #58).
 func nameMatches(progName, wantName string) bool {
-	if exactNameMatch(progName, wantName) {
+	return nameMatchesFor(progName, wantName, false)
+}
+
+func nameMatchesFor(progName, wantName string, theTVDB bool) bool {
+	if exactNameMatchFor(progName, wantName, theTVDB) {
 		return true
+	}
+	_, ok := nameExtensionFor(progName, wantName, theTVDB)
+	return ok
+}
+
+// nameExtension returns X when progName is "Show: X" for a wantName of
+// "Show", where "Show" is compared by store.ShowNameKey: "The Celebrity
+// Traitors: Uncloaked" extends "Celebrity Traitors". iPlayer's colon is
+// still needed, and its title loses year and country suffixes only at
+// its end, so "Doctor Who (1963-1996): Shada" does not extend "Doctor
+// Who". X is cut from iPlayer's title, not at the query's length.
+// Gitea #97.
+func nameExtension(progName, wantName string) (string, bool) {
+	return nameExtensionFor(progName, wantName, false)
+}
+
+func nameExtensionFor(progName, wantName string, theTVDB bool) (string, bool) {
+	want := nameKey(bareName(wantName), theTVDB)
+	if want == "" {
+		return "", false
 	}
 	bare := strings.TrimSpace(bareName(progName))
-	want := strings.TrimSpace(bareName(wantName))
-	if len(bare) > len(want)+2 &&
-		strings.EqualFold(bare[:len(want)], want) &&
-		bare[len(want):len(want)+2] == ": " {
-		return true
+	for i := 0; ; i += 2 {
+		j := strings.Index(bare[i:], ": ")
+		if j < 0 {
+			return "", false
+		}
+		i += j
+		if rest := strings.TrimSpace(bare[i+2:]); rest != "" && nameKey(bare[:i], theTVDB) == want {
+			return rest, true
+		}
 	}
-	return false
 }
 
 // oneOffTitle returns X for a one-off of wantName "Show": a programme
@@ -1105,13 +1199,15 @@ func nameMatches(progName, wantName string) bool {
 // brand ("Doctor Who: Unleashed") has the brand as its top-level
 // programme, so it is never one. Gitea #104.
 func oneOffTitle(res bbc.IBLResult, wantName string) (string, bool) {
+	return oneOffTitleFor(res, wantName, false)
+}
+
+func oneOffTitleFor(res bbc.IBLResult, wantName string, theTVDB bool) (string, bool) {
 	if res.Subtitle != "" || res.BrandPID != res.PID || wantName == "" ||
-		!nameMatches(res.Title, wantName) || exactNameMatch(res.Title, wantName) {
+		exactNameMatchFor(res.Title, wantName, theTVDB) {
 		return "", false
 	}
-	bare := strings.TrimSpace(bareName(res.Title))
-	want := strings.TrimSpace(bareName(wantName))
-	return strings.TrimSpace(bare[len(want)+2:]), true
+	return nameExtensionFor(res.Title, wantName, theTVDB)
 }
 
 // noSeasonFilter is filterSeason when the search has no season.
@@ -1122,7 +1218,11 @@ const noSeasonFilter = -1
 // they cannot drift out of sync. o is the Show Override prog's title
 // will be generated with.
 func matchesSearchFilter(prog *store.Programme, o *store.ShowOverride, wantName, filterDate string, filterSeason, filterEp int) bool {
-	if wantName != "" && !nameMatches(prog.Name, wantName) {
+	return matchesSearchFilterFor(prog, o, wantName, false, filterDate, filterSeason, filterEp)
+}
+
+func matchesSearchFilterFor(prog *store.Programme, o *store.ShowOverride, wantName string, theTVDB bool, filterDate string, filterSeason, filterEp int) bool {
+	if wantName != "" && !nameMatchesFor(prog.Name, wantName, theTVDB) {
 		return false
 	}
 	if filterDate != "" {
@@ -1177,7 +1277,11 @@ func matchesSearchFilter(prog *store.Programme, o *store.ShowOverride, wantName,
 			// an episode over 9999), so no search can ask for it.
 			return filterSeason == noSeasonFilter && filterEp <= 0
 		default:
-			return true
+			// Sonarr's season search of a Daily series sends the year as
+			// the season with no episode (filterDate is empty): the
+			// dated programmes of that year are its episodes, and those
+			// of another year are not.
+			return filterSeason < 1900 || strings.HasPrefix(prog.AirDate, strconv.Itoa(filterSeason))
 		}
 	}
 	if filterSeason != noSeasonFilter && series != filterSeason {
@@ -1199,6 +1303,35 @@ func emittedNumber(p *store.Programme, o *store.ShowOverride) (season, episode i
 	}
 	id := ParseTitle(title)
 	return id.Season, id.Episode, true
+}
+
+// numberedEpisode reports whether p goes out under o with a season and
+// episode the BBC or TheTVDB gave it, rather than one GenerateTitle
+// guesses from its position or air date (S01E<position>, a special's
+// S00E<position or MMDD>). A topical show's specials get guessed
+// numbers too, so only these numbers say the show is numbered.
+// Gitea #100.
+func numberedEpisode(p *store.Programme, o *store.ShowOverride) bool {
+	if !p.TVDBNumbered && (p.Series == 0 || p.EpisodeNum == 0) {
+		return false
+	}
+	_, _, ok := emittedNumber(p, o)
+	return ok
+}
+
+// unnumberedHatch reports whether p passes matchesSearchFilter's
+// season and episode filter only through the topical escape hatch: it
+// has no BBC numbers, it has an air date, and its title under o carries
+// no number. A year-only air date (iBL gives "1992" for some old
+// one-offs) is no date a title can carry, and TheTVDB cannot check it,
+// so that programme keeps its title (TestGH104_OneOffWithoutTheShowNumbered).
+// Gitea #100.
+func unnumberedHatch(p *store.Programme, o *store.ShowOverride) bool {
+	if p.Series != 0 || p.EpisodeNum != 0 || len(p.AirDate) < len("2006-01-02") {
+		return false
+	}
+	_, _, ok := emittedNumber(p, o)
+	return !ok
 }
 
 // wildcardBrowse runs the BrowseFresh fan-out and applies the

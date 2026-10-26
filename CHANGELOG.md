@@ -30,6 +30,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trusted that. Those saved rows are now marked, and Search checks such
   an episode itself; the feed still reuses them. Rows saved by earlier
   versions are not marked. (Gitea #75)
+- A season or episode search no longer offers a programme that iPlayer
+  gives no series or episode number, under a date title, when the
+  show's other episodes are numbered. The Celebrity Traitors' "Traitor
+  or Faithful? Claudia Decides" came back on every season and episode
+  search as `The.Celebrity.Traitors.2026.10.01.*`, which Sonarr cannot
+  match to any episode. A show iPlayer never numbers, such as Question
+  Time or Newsnight, still gets its dated programmes on those searches,
+  and a search by air date or for the whole show still returns them.
+  A programme whose BBC air date is a year only, with no day, still
+  answers every season and episode search for now. (Gitea #100)
+- A Daily series' season search, which Sonarr makes with the year as the
+  season, now returns only that year's dated programmes. It used to
+  return every dated programme of the show. (Gitea #100)
+- Sonarr's search by title, which it makes when its search by TVDB ID
+  finds nothing, now finds a show whose name starts with "The" or has
+  punctuation in it. Sonarr drops a leading "The" and turns punctuation
+  into spaces, so `Celebrity Traitors` never matched "The Celebrity
+  Traitors" and `David Fuller Monster In The Morgue` never matched
+  "David Fuller: Monster in the Morgue". A series searched before by
+  TVDB ID was not recognised under such a title either, so its results
+  went out without the series' TVDB ID. Show names are now compared the
+  way Sonarr writes them: case, punctuation and "&" against "and" make
+  no difference, and neither does a leading "The" in Sonarr's own title
+  search. A search that names the show as TheTVDB does keeps the
+  leading "The" as part of the name. (Gitea #97)
 
 ## [1.9.2] - 2026-10-25
 

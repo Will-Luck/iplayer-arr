@@ -734,7 +734,7 @@ func (idx tvdbIndex) matchOneOff(title, fullTitle, airDate string) (TVDBEpisode,
 // programme, which answers the search for it already, so the number
 // stays as resolve decided. It returns the programmes it numbered.
 // Gitea #104.
-func (idx tvdbIndex) numberOneOffs(results []bbc.IBLResult, progs []*store.Programme, wantName string) map[*store.Programme]bool {
+func (idx tvdbIndex) numberOneOffs(results []bbc.IBLResult, progs []*store.Programme, wantName string, theTVDB bool) map[*store.Programme]bool {
 	taken := map[[2]int]bool{}
 	for _, p := range progs {
 		if p.TVDBNumbered {
@@ -743,7 +743,7 @@ func (idx tvdbIndex) numberOneOffs(results []bbc.IBLResult, progs []*store.Progr
 	}
 	numbered := map[*store.Programme]bool{}
 	for i, p := range progs {
-		title, ok := oneOffTitle(results[i], wantName)
+		title, ok := oneOffTitleFor(results[i], wantName, theTVDB)
 		if !ok {
 			continue
 		}
@@ -794,7 +794,7 @@ func (h *Handler) numberBrowseFromTVDB(ctx context.Context, progs []*store.Progr
 		cs, seen := byName[p.Name]
 		if !seen {
 			for i := range mappings {
-				if exactNameMatch(p.Name, mappings[i].ShowName) {
+				if exactNameMatchFor(p.Name, mappings[i].ShowName, true) {
 					cs = append(cs, &mappings[i])
 				}
 			}
@@ -890,7 +890,7 @@ func (h *Handler) numberBrowseFromTVDB(ctx context.Context, progs []*store.Progr
 			continue
 		}
 		eligible := func(p *store.Programme) bool {
-			return complete(p) && exactNameMatch(p.Name, c.ShowName)
+			return complete(p) && exactNameMatchFor(p.Name, c.ShowName, true)
 		}
 		won, contradicted := idx.resolve(progs, eligible, eligible)
 		for _, w := range won {
