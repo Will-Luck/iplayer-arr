@@ -61,6 +61,11 @@ export interface SearchResult {
   // be deferred; "unknown" means the probe could not answer. Optional:
   // older servers omit it. Issue #52.
   Availability?: "available" | "not_yet_available" | "unknown";
+  // Heights lists the video heights the prober verified for this
+  // episode, highest first (for example [720, 540, 396]). Sent only with
+  // Availability "available"; absent otherwise and from older servers.
+  // Gitea #89.
+  Heights?: number[];
 }
 
 export interface ShowOverride {

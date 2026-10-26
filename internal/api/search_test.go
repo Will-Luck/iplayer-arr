@@ -353,3 +353,175 @@ func TestSearch_EmptyQueryUnchanged(t *testing.T) {
 		t.Errorf("prober called %d times for an empty query, want 0", prober.calls)
 	}
 }
+
+// searchRawRows runs the fixture search and decodes each row key by key,
+// indexed by PID, so a test can tell an absent key from a null or empty
+// one: the SPA treats an absent Heights as "fall back to the static list".
+func searchRawRows(t *testing.T, h *Handler) map[string]map[string]json.RawMessage {
+	t.Helper()
+	req := authedRequest("GET", "/api/search?q=match+of+the+day&apikey=test-api-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	byPID := make(map[string]map[string]json.RawMessage, len(rows))
+	for _, row := range rows {
+		var pid string
+		if err := json.Unmarshal(row["PID"], &pid); err != nil || pid == "" {
+			t.Fatalf("row without a string PID: %v", row)
+		}
+		byPID[pid] = row
+	}
+	// Every caller serves searchFixtureJSON. Without this a broken fixture
+	// would hand back no rows and the absent-key loops below would pass
+	// on nothing.
+	if len(byPID) != 2 {
+		t.Fatalf("got %d distinct PIDs, want the 2 in searchFixtureJSON: %s", len(byPID), w.Body.String())
+	}
+	return byPID
+}
+
+// TestSearch_ReturnsVerifiedHeights is Gitea #89: /api/search ran the
+// quality probe for its availability verdict and then dropped the
+// heights, so the web UI offered 1080p from a static list for an episode
+// the prober had verified at 720p and below. The available result must
+// carry the probe's heights; a not-yet-available result must not, even
+// when the prober handed some back for it.
+func TestSearch_ReturnsVerifiedHeights(t *testing.T) {
+	h, closeSrv := searchAPI(t, searchFixtureJSON)
+	defer closeSrv()
+
+	h.SetProber(&fakeSearchProber{out: bbc.PrefetchResult{
+		Heights: map[string][]int{
+			"m00pub01": {720, 540, 396},
+			// Capable fixture for the negative assertion below: a
+			// handler that copied Heights for every PID would emit this.
+			"m00new03": {720},
+		},
+		NotYetAvailable: map[string]bool{"m00new03": true},
+	}})
+
+	rows := searchRawRows(t, h)
+
+	pub, ok := rows["m00pub01"]
+	if !ok {
+		t.Fatalf("m00pub01 missing from the response: %v", rows)
+	}
+	if got := string(pub["Availability"]); got != `"available"` {
+		t.Errorf("m00pub01 Availability = %s, want \"available\"", got)
+	}
+	raw, ok := pub["Heights"]
+	if !ok {
+		t.Fatalf("available result has no Heights key; the UI cannot know which qualities BBC serves: %v", pub)
+	}
+	var heights []int
+	if err := json.Unmarshal(raw, &heights); err != nil {
+		t.Fatalf("Heights = %s, want a JSON array of ints: %v", raw, err)
+	}
+	if got := fmt.Sprint(heights); got != "[720 540 396]" {
+		t.Errorf("m00pub01 Heights = %s, want [720 540 396] in probe order", got)
+	}
+
+	// Additive only: the existing keys are still there.
+	if got := string(pub["Title"]); got != `"Match of the Day"` {
+		t.Errorf("Title = %s, want \"Match of the Day\"", got)
+	}
+
+	nya, ok := rows["m00new03"]
+	if !ok {
+		t.Fatalf("m00new03 missing from the response: %v", rows)
+	}
+	if got := string(nya["Availability"]); got != `"not_yet_available"` {
+		t.Errorf("m00new03 Availability = %s, want \"not_yet_available\"", got)
+	}
+	if raw, has := nya["Heights"]; has {
+		t.Errorf("not-yet-available result carries Heights %s; it must be absent", raw)
+	}
+}
+
+// TestSearch_HeightsOmittedWhenNothingLearned: when the probe learned
+// nothing the key is absent, not null or [], so the SPA falls back to its
+// static list exactly as it does for an older server.
+func TestSearch_HeightsOmittedWhenNothingLearned(t *testing.T) {
+	t.Run("no prober wired", func(t *testing.T) {
+		h, closeSrv := searchAPI(t, searchFixtureJSON)
+		defer closeSrv()
+
+		for pid, row := range searchRawRows(t, h) {
+			if raw, has := row["Heights"]; has {
+				t.Errorf("%s: Heights = %s with no prober, want the key absent", pid, raw)
+			}
+		}
+	})
+
+	t.Run("probe answered with no heights", func(t *testing.T) {
+		h, closeSrv := searchAPI(t, searchFixtureJSON)
+		defer closeSrv()
+
+		// m00pub01: probed, BBC listed no video (empty, non-nil slice).
+		// m00new03: absent from both maps, a transient failure.
+		h.SetProber(&fakeSearchProber{out: bbc.PrefetchResult{
+			Heights:         map[string][]int{"m00pub01": {}},
+			NotYetAvailable: map[string]bool{},
+		}})
+
+		for pid, row := range searchRawRows(t, h) {
+			if got := string(row["Availability"]); got != `"unknown"` {
+				t.Errorf("%s: Availability = %s, want \"unknown\"", pid, got)
+			}
+			if raw, has := row["Heights"]; has {
+				t.Errorf("%s: Heights = %s, want the key absent when nothing was learned", pid, raw)
+			}
+		}
+	})
+}
+
+// TestSearch_HeightsOnlyWithinProbeCap: results past
+// maxSearchProbeResults are never probed, so they carry no Heights;
+// results inside the cap carry the heights their own probe returned.
+func TestSearch_HeightsOnlyWithinProbeCap(t *testing.T) {
+	h, _ := testAPI(t)
+	h.SetProber(&fakeSearchProber{echo: true}) // answers {720} for each PID it is handed
+
+	total := maxSearchProbeResults + 3
+	results := make([]bbc.IBLResult, 0, total)
+	for i := 0; i < total; i++ {
+		results = append(results, bbc.IBLResult{
+			PID:   fmt.Sprintf("m00hgt%03d", i),
+			Title: "Capped Show",
+		})
+	}
+
+	body, err := json.Marshal(h.markAvailability(context.Background(), results))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rows); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if len(rows) != total {
+		t.Fatalf("len(rows) = %d, want %d", len(rows), total)
+	}
+	for i, row := range rows {
+		raw, has := row["Heights"]
+		if i < maxSearchProbeResults {
+			if !has {
+				t.Errorf("result %d has no Heights key; its probe answered [720]", i)
+				continue
+			}
+			if got := string(raw); got != "[720]" {
+				t.Errorf("result %d Heights = %s, want [720]", i, got)
+			}
+			continue
+		}
+		if has {
+			t.Errorf("result %d is past the probe cap but carries Heights %s", i, raw)
+		}
+	}
+}

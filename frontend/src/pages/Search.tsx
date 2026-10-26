@@ -1,6 +1,6 @@
 import { createSignal, onCleanup, For, Show } from "solid-js";
 import type { SearchResult } from "../types";
-import { QUALITY_OPTIONS } from "../types";
+import { chosenQuality, qualityOptionsFor } from "../lib/quality";
 import { api } from "../api";
 import { addToast } from "../toast";
 import { Card } from "../ui/Card";
@@ -10,7 +10,12 @@ import { Select } from "../ui/Select";
 import { EmptyState } from "../ui/EmptyState";
 import { Icon } from "../ui/icons";
 
-const QUALITY_SELECT_OPTIONS = QUALITY_OPTIONS.map((q) => ({ value: q, label: q }));
+// selectOptionsFor builds one result's quality dropdown from the heights
+// /api/search verified for it, or the static list when none came back.
+// Gitea #89.
+function selectOptionsFor(r: SearchResult) {
+  return qualityOptionsFor(r.Heights).map((q) => ({ value: q, label: q }));
+}
 
 type Tier = { variant: BadgeVariant; label: string };
 
@@ -93,7 +98,7 @@ export default function Search() {
   });
 
   async function startDownload(r: SearchResult) {
-    const quality = selectedQuality()[r.PID] || "720p";
+    const quality = qualityFor(r);
     try {
       // Pass the episode identity metadata so the backend can build a
       // Sonarr-parseable release title (dated for daily shows). Issue #48.
@@ -110,8 +115,8 @@ export default function Search() {
     }
   }
 
-  function qualityFor(pid: string) {
-    return selectedQuality()[pid] || "720p";
+  function qualityFor(r: SearchResult) {
+    return chosenQuality(qualityOptionsFor(r.Heights), selectedQuality()[r.PID]);
   }
 
   function setQuality(pid: string, val: string) {
@@ -148,6 +153,7 @@ export default function Search() {
       <For each={results()}>
         {(r) => {
           const tier = tierFor(r);
+          const options = selectOptionsFor(r);
           return (
             <Card>
               <Card.Body>
@@ -172,9 +178,9 @@ export default function Search() {
                     </div>
                     <div class="mt-1 flex flex-wrap items-center gap-2 sm:justify-end">
                       <Select
-                        value={qualityFor(r.PID)}
+                        value={qualityFor(r)}
                         onChange={(v) => setQuality(r.PID, v)}
-                        options={QUALITY_SELECT_OPTIONS}
+                        options={options}
                         ariaLabel={`Download quality for ${r.Title}`}
                       />
                       <Button

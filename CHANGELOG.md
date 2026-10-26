@@ -55,6 +55,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no difference, and neither does a leading "The" in Sonarr's own title
   search. A search that names the show as TheTVDB does keeps the
   leading "The" as part of the name. (Gitea #97)
+- `/api/search` said whether each result could be downloaded but not at
+  which qualities, so a client could not tell an episode BBC serves only
+  up to 720p from a 1080p one. Each available result now also carries
+  `Heights`, the video heights BBC actually serves for it, highest first
+  (Gitea #89).
+- The web UI's Search page offered 1080p for every result, even for an
+  episode BBC serves only up to 720p; the download then came back at
+  720p and was renamed to match. The quality list now shows only the
+  qualities BBC serves for that episode, pre-selects 720p when it is
+  one of them (otherwise the highest), shows only the lowest quality
+  when every known one is below it, and still shows the full list
+  when the qualities are not known (Gitea #89).
+- A release build that hung could hold its GitHub Actions runner
+  indefinitely, leaving a pushed tag with no images and no GitHub
+  Release. The release job now stops after 25 minutes, as the scheduled
+  rebuild already does (Gitea #79).
 
 ## [1.9.2] - 2026-10-25
 

@@ -66,13 +66,23 @@ type searchQualityProber interface {
 	PrefetchPIDsIndividually(ctx context.Context, items []bbc.ProbeItem) bbc.PrefetchResult
 }
 
-// searchResult is an IBL result plus its availability verdict. The IBL
-// result is embedded, so encoding/json promotes every existing field to
-// the top level and the added key is purely additive: the SPA Search
-// page keeps reading the response unchanged.
+// searchResult is an IBL result plus its availability verdict and, when
+// the probe answered, the verified video heights. The IBL result is
+// embedded, so encoding/json promotes every existing field to the top
+// level and the added keys are purely additive: the SPA Search page
+// keeps reading the response unchanged.
+//
+// Heights is this PID's probe answer, highest first, after the prober's
+// FHD verification (a 1080 that mediaselector lists but BBC does not
+// serve is normally gone; a transient verification error keeps the
+// listed heights for that response). It is sent only with
+// availabilityAvailable and is absent otherwise, so a client falls back
+// to its own quality list exactly as it does for a server that predates
+// the key. Gitea #89.
 type searchResult struct {
 	bbc.IBLResult
 	Availability string
+	Heights      []int `json:",omitempty"`
 }
 
 func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -132,9 +142,15 @@ func (h *Handler) markAvailability(ctx context.Context, results []bbc.IBLResult)
 
 	out := make([]searchResult, 0, len(results))
 	for _, res := range results {
+		availability := availabilityFor(probe, res.PID)
+		var heights []int
+		if availability == availabilityAvailable {
+			heights = probe.Heights[res.PID]
+		}
 		out = append(out, searchResult{
 			IBLResult:    res,
-			Availability: availabilityFor(probe, res.PID),
+			Availability: availability,
+			Heights:      heights,
 		})
 	}
 	return out

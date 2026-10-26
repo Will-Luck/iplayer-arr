@@ -11,6 +11,13 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Hard cap, as in rebuild.yml (issue #40): docker/build-push-action
+    # has hung here before, 55 minutes on the v1.7.0 tag where a healthy
+    # multi-arch build takes about 12. Without a cap the job holds a
+    # runner indefinitely and the tag sits on both remotes with no images
+    # and no GitHub Release. 25 minutes fails the job visibly instead.
+    # Gitea #79.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
