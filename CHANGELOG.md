@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- When the BBC's media selector was down (a server error or its error
+  page on every try), a grab failed for good as `stream_unavailable`
+  after about two minutes, and every later grab of the same episode got
+  the dead download back. It now waits and retries every 5 minutes for
+  up to an hour as `metadata_unavailable`, and a fresh grab starts it
+  again. A real "no streams" answer from the BBC (a normal reply, or a 404 or 410) still fails as before.
+  (Gitea #94)
+- Subtitles were fetched from one captions supplier only, and it was the
+  last one the BBC listed rather than the first, so if that supplier
+  refused or answered with an error page the episode came without
+  subtitles and nothing said why. Each supplier is now tried in turn,
+  starting with the first. (Gitea #91)
+- The check for a hidden or claimed 1080p asked only the first HLS
+  supplier. If that one refused, the quality was left unchecked and not
+  remembered, so the same check ran again on every search. The other
+  suppliers of the same stream are now asked in turn. (Gitea #91)
+- The Search page could mark an episode as available before the BBC had
+  published it. Once Sonarr's feed had seen a show, every listed episode
+  had the show's qualities saved as if it had been checked, and Search
+  trusted that. Those saved rows are now marked, and Search checks such
+  an episode itself; the feed still reuses them. Rows saved by earlier
+  versions are not marked. (Gitea #75)
+
 ## [1.9.2] - 2026-10-25
 
 ### Fixed

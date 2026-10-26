@@ -820,3 +820,149 @@ func TestLiveSuppliersOnly_RealMediaselectorReplies(t *testing.T) {
 		}
 	}
 }
+
+// --- Gitea #91: FHD check fails over between HLS suppliers ---
+
+const (
+	fhdSupplierA = "https://cdn-a.example/master.m3u8"
+	fhdSupplierB = "https://cdn-b.example/master.m3u8"
+)
+
+// perURLFHDProber answers per master URL, so a test can make one supplier
+// fail while the next one answers. It records the URLs asked, in order.
+type perURLFHDProber struct {
+	mu         sync.Mutex
+	errByURL   map[string]error
+	has1080    bool
+	maxListed  int
+	found      bool
+	verifyURLs []string
+	probeURLs  []string
+}
+
+func (f *perURLFHDProber) VerifyFHD(ctx context.Context, hlsMasterURL string) (bool, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.verifyURLs = append(f.verifyURLs, hlsMasterURL)
+	if err := f.errByURL[hlsMasterURL]; err != nil {
+		return false, 0, err
+	}
+	return f.has1080, f.maxListed, nil
+}
+
+func (f *perURLFHDProber) ProbeHiddenFHD(ctx context.Context, hlsMasterURL string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.probeURLs = append(f.probeURLs, hlsMasterURL)
+	if err := f.errByURL[hlsMasterURL]; err != nil {
+		return "", false, err
+	}
+	return "https://cdn.example/stream-video=12000000.m3u8", f.found, nil
+}
+
+// twoSupplierStreams is one rendition offered by two suppliers at the same
+// bitrate, in mediaselector order, the layout of
+// testdata/ibl/mediaselector_m0033jgj.xml (mf_akamai, then mf_cloudfront).
+func twoSupplierStreams(height int) *fakeMediaSelector {
+	return &fakeMediaSelector{byVPID: map[string]*StreamSet{
+		"vpid-p1": {Video: []VideoStream{
+			{Height: height, Width: height * 16 / 9, Bitrate: 8490, Format: "hls", Supplier: "mf_akamai", URL: fhdSupplierA},
+			{Height: height, Width: height * 16 / 9, Bitrate: 8490, Format: "hls", Supplier: "mf_cloudfront", URL: fhdSupplierB},
+		}},
+	}}
+}
+
+// The first supplier refuses the 1080 verification; the second answers
+// that the master tops out at 720p. The phantom 1080 must be replaced and
+// the answer cached, not kept unverified.
+func TestPrefetch_FHDVerifyFailsOverToNextSupplier(t *testing.T) {
+	fhd := &perURLFHDProber{
+		errByURL:  map[string]error{fhdSupplierA: errors.New("FHD probe returned 403")},
+		maxListed: 720,
+	}
+	st := newFakeCacheStore()
+	p := NewQualityProber(&fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}, twoSupplierStreams(1080), fhd, st, 1, time.Second)
+
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
+
+	if got := out.Heights["p1"]; len(got) != 1 || got[0] != 720 {
+		t.Errorf("heights = %v, want [720] from the second supplier's answer", got)
+	}
+	if st.data["p1"] == nil {
+		t.Error("a definitive answer from the second supplier must be cached")
+	}
+	if want := []string{fhdSupplierA, fhdSupplierB}; !equalStrings(fhd.verifyURLs, want) {
+		t.Errorf("VerifyFHD asked %v, want %v", fhd.verifyURLs, want)
+	}
+}
+
+// Same for the hidden-1080p probe on a 720p listing.
+func TestPrefetch_HiddenFHDProbeFailsOverToNextSupplier(t *testing.T) {
+	fhd := &perURLFHDProber{
+		errByURL: map[string]error{fhdSupplierA: errors.New("master playlist fetch: HTTP 503")},
+		found:    true,
+	}
+	st := newFakeCacheStore()
+	p := NewQualityProber(&fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}, twoSupplierStreams(720), fhd, st, 1, time.Second)
+
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
+
+	if got := out.Heights["p1"]; len(got) != 2 || got[0] != 1080 || got[1] != 720 {
+		t.Errorf("heights = %v, want [1080 720]", got)
+	}
+	if st.data["p1"] == nil {
+		t.Error("a definitive answer from the second supplier must be cached")
+	}
+	if want := []string{fhdSupplierA, fhdSupplierB}; !equalStrings(fhd.probeURLs, want) {
+		t.Errorf("ProbeHiddenFHD asked %v, want %v", fhd.probeURLs, want)
+	}
+}
+
+// Review focus: when every supplier errors, every one is tried, the
+// claim is kept for this response, and nothing is cached (the existing
+// transient contract).
+func TestPrefetch_FHDVerifyAllSuppliersFail_KeepsClaimSkipsCache(t *testing.T) {
+	fhd := &perURLFHDProber{errByURL: map[string]error{
+		fhdSupplierA: errors.New("FHD probe returned 403"),
+		fhdSupplierB: errors.New("FHD probe returned 503"),
+	}}
+	st := newFakeCacheStore()
+	p := NewQualityProber(&fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}, twoSupplierStreams(1080), fhd, st, 1, time.Second)
+
+	out := p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
+
+	if got := out.Heights["p1"]; len(got) != 1 || got[0] != 1080 {
+		t.Errorf("heights = %v, want the unverified [1080] kept for this response", got)
+	}
+	if st.writes != 0 {
+		t.Errorf("cache writes = %d, want 0 when every supplier errored", st.writes)
+	}
+	if want := []string{fhdSupplierA, fhdSupplierB}; !equalStrings(fhd.verifyURLs, want) {
+		t.Errorf("VerifyFHD asked %v, want %v", fhd.verifyURLs, want)
+	}
+}
+
+// A healthy first supplier is the only one asked: failover costs nothing
+// when nothing fails.
+func TestPrefetch_FHDFirstSupplierAnswers_NoFailover(t *testing.T) {
+	fhd := &perURLFHDProber{maxListed: 720}
+	p := NewQualityProber(&fakePlaylistResolver{byPID: map[string]*PlaylistInfo{}}, twoSupplierStreams(1080), fhd, newFakeCacheStore(), 1, time.Second)
+
+	_ = p.PrefetchPIDs(context.Background(), []ProbeItem{{PID: "p1", ShowName: "show"}})
+
+	if want := []string{fhdSupplierA}; !equalStrings(fhd.verifyURLs, want) {
+		t.Errorf("VerifyFHD asked %v, want %v", fhd.verifyURLs, want)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -186,9 +186,16 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 		if m.stopIfCancelled(ctx, dl, "media selector") {
 			return
 		}
-		if bbc.IsGeoBlocked(err) {
+		switch {
+		case bbc.IsGeoBlocked(err):
 			m.failDownload(dl, store.FailCodeGeoBlocked, err)
-		} else {
+		case errors.Is(err, bbc.ErrMediaSelectorUnavailable):
+			// The BBC did not answer (5xx, its HTML error page, a
+			// transport failure). That says nothing about the episode,
+			// so retry on the metadata budget, which a later grab
+			// supersedes, instead of failing it for good. Gitea #94.
+			m.failDownload(dl, store.FailCodeMetadataUnavailable, fmt.Errorf("media selector: %w", err))
+		default:
 			m.failDownload(dl, store.FailCodeUnavailable, err)
 		}
 		return
@@ -349,9 +356,10 @@ func (m *Manager) processDownload(ctx context.Context, dl *store.Download) {
 	// dl.ActualQuality is still set so the frontend shows truth.
 	m.reconcileDownload(dl, actualQual)
 
-	// 9. Download subtitles (best-effort)
-	if streams.SubtitleURL != "" {
-		m.downloadSubtitles(streams.SubtitleURL, dl.OutputDir, dl.Title)
+	// 9. Download subtitles (best-effort), failing over between the
+	// captions suppliers. Gitea #91.
+	if len(streams.SubtitleURLs) > 0 {
+		m.downloadSubtitles(ctx, streams.SubtitleURLs, dl.OutputDir, dl.Title)
 	}
 
 	// 10. Atomic-rename the staging directory out of incomplete/ so the
@@ -524,30 +532,52 @@ func (m *Manager) failDownload(dl *store.Download, code string, err error) {
 	}
 }
 
-// downloadSubtitles fetches TTML subtitles from the BBC and converts to SRT.
-// Failures are logged but do not fail the download.
-func (m *Manager) downloadSubtitles(subURL, outputDir, title string) {
-	body, err := m.client.Get(subURL)
-	if err != nil {
-		log.Printf("subtitle download failed (continuing): %v", err)
+const (
+	subtitlesURLTimeout   = 10 * time.Second
+	subtitlesTotalTimeout = 30 * time.Second
+)
+
+// downloadSubtitles fetches TTML subtitles from the BBC and converts them
+// to SRT, trying each captions URL in turn (mediaselector lists one per
+// supplier) until one fetches and parses. A write failure is local, so it
+// ends the attempt. Failures are logged but do not fail the download.
+// Gitea #91.
+func (m *Manager) downloadSubtitles(ctx context.Context, subURLs []string, outputDir, title string) {
+	// Bound the whole stage: it runs before the finished download moves
+	// out of incomplete/, so a hanging captions CDN must not hold it.
+	ctx, cancel := context.WithTimeout(ctx, subtitlesTotalTimeout)
+	defer cancel()
+	for i, subURL := range subURLs {
+		if ctx.Err() != nil {
+			log.Printf("subtitles: stopped before supplier %d of %d: %v", i+1, len(subURLs), ctx.Err())
+			return
+		}
+		urlCtx, urlCancel := context.WithTimeout(ctx, subtitlesURLTimeout)
+		body, err := m.client.GetCtx(urlCtx, subURL)
+		urlCancel()
+		if err != nil {
+			log.Printf("subtitle download failed on supplier %d of %d (continuing): %v", i+1, len(subURLs), err)
+			continue
+		}
+
+		srt, err := bbc.TTMLToSRT(body)
+		if err != nil {
+			log.Printf("subtitle conversion failed on supplier %d of %d (continuing): %v", i+1, len(subURLs), err)
+			continue
+		}
+
+		// Tag as English so Plex/Jellyfin label the track correctly. BBC iPlayer
+		// only ships English captions on this CDN, so a fixed code is safe.
+		srtPath := filepath.Join(outputDir, sanitiseFilename(title)+".en.srt")
+		if err := os.WriteFile(srtPath, srt, 0o644); err != nil {
+			log.Printf("subtitle write failed (continuing): %v", err)
+			return
+		}
+
+		log.Printf("subtitles saved: %s", srtPath)
 		return
 	}
-
-	srt, err := bbc.TTMLToSRT(body)
-	if err != nil {
-		log.Printf("subtitle conversion failed (continuing): %v", err)
-		return
-	}
-
-	// Tag as English so Plex/Jellyfin label the track correctly. BBC iPlayer
-	// only ships English captions on this CDN, so a fixed code is safe.
-	srtPath := filepath.Join(outputDir, sanitiseFilename(title)+".en.srt")
-	if err := os.WriteFile(srtPath, srt, 0o644); err != nil {
-		log.Printf("subtitle write failed (continuing): %v", err)
-		return
-	}
-
-	log.Printf("subtitles saved: %s", srtPath)
+	log.Printf("subtitles: all %d captions suppliers failed, continuing without", len(subURLs))
 }
 
 // broadcast sends a typed event to SSE subscribers if a hub is connected.

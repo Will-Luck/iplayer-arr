@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -156,9 +157,10 @@ func (p *QualityProber) PrefetchPIDs(ctx context.Context, items []ProbeItem) Pre
 // available. Callers that need a per-PID availability answer rather than
 // a per-show quality set use this instead. Issue #52.
 //
-// The per-PID cache short-circuit in probeOne still applies, so a PID
-// whose cache row was written by a previous grouped probe reads as
-// available without a fresh playlist fetch.
+// The per-PID cache short-circuit in probeOne still applies to rows a
+// probe of that PID wrote. A row probeShowGroup propagated to a sibling
+// it never probed is a miss there, so it cannot report an unpublished
+// episode as available. Gitea #75.
 //
 // Honours ctx and the same concurrency bound as PrefetchPIDs.
 func (p *QualityProber) PrefetchPIDsIndividually(ctx context.Context, items []ProbeItem) PrefetchResult {
@@ -201,20 +203,11 @@ func (p *QualityProber) PrefetchPIDsIndividually(ctx context.Context, items []Pr
 // probeOne and reuses its result for the rest. If the first PID
 // fails, falls back to probing remaining items individually.
 func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) (heights []int, notYetAvailable bool) {
-	// 1. Check if any PID in the group is already cached.
+	// 1. Check if any PID in the group is already cached. A propagated
+	// row counts: the feed only needs the show's heights. Gitea #75.
 	for _, item := range group {
 		if cached, err := p.store.GetQualityCache(item.PID); err == nil && cached != nil {
-			for _, sibling := range group {
-				if sibling.PID == item.PID {
-					continue
-				}
-				_ = p.store.PutQualityCache(&store.QualityCache{
-					PID:      sibling.PID,
-					ShowName: sibling.ShowName,
-					Heights:  cached.Heights,
-					ProbedAt: cached.ProbedAt,
-				})
-			}
+			p.propagateToSiblings(group, item.PID, cached.Heights, cached.ProbedAt)
 			log.Printf("show-group cache hit: show=%q leader=%s heights=%v siblings=%d",
 				item.ShowName, item.PID, cached.Heights, len(group)-1)
 			return cached.Heights, false
@@ -232,15 +225,7 @@ func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) (
 		// (a transient FHD error, an accessibility-only version, live-only
 		// suppliers) must not reach the cache through the group either.
 		if leaderCached {
-			now := time.Now()
-			for _, sibling := range group[1:] {
-				_ = p.store.PutQualityCache(&store.QualityCache{
-					PID:      sibling.PID,
-					ShowName: sibling.ShowName,
-					Heights:  leaderHeights,
-					ProbedAt: now,
-				})
-			}
+			p.propagateToSiblings(group, group[0].PID, leaderHeights, time.Now())
 		}
 		log.Printf("show-group probed: show=%q leader=%s heights=%v siblings=%d cached=%v",
 			group[0].ShowName, group[0].PID, leaderHeights, len(group)-1, leaderCached)
@@ -269,6 +254,29 @@ func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) (
 	return nil, anyNotYetAvailable
 }
 
+// propagateToSiblings writes heights as a propagated cache row for every
+// group member except fromPID, so the newznab feed can reuse the show's
+// heights without probing each episode. A sibling that already has a row
+// from its own probe keeps it. probeOne treats a propagated row as a
+// miss, so these rows never answer per-PID availability. Gitea #75.
+func (p *QualityProber) propagateToSiblings(group []ProbeItem, fromPID string, heights []int, probedAt time.Time) {
+	for _, sibling := range group {
+		if sibling.PID == fromPID {
+			continue
+		}
+		if row, err := p.store.GetQualityCache(sibling.PID); err == nil && row != nil && !row.Propagated {
+			continue
+		}
+		_ = p.store.PutQualityCache(&store.QualityCache{
+			PID:        sibling.PID,
+			ShowName:   sibling.ShowName,
+			Heights:    heights,
+			ProbedAt:   probedAt,
+			Propagated: true,
+		})
+	}
+}
+
 // probeOne runs the full probe for a single item. Returns the heights
 // slice on success (possibly empty if BBC has no streams), or nil on
 // any error (cached entries are never nil, but the result-map entry
@@ -279,8 +287,11 @@ func (p *QualityProber) probeShowGroup(ctx context.Context, group []ProbeItem) (
 // whether the heights are (now) in the cache, so a show group only hands
 // cacheable heights on to its siblings.
 func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (heights []int, notYetAvailable bool, cached bool) {
-	// 1. Cache hit short-circuit.
-	if row, err := p.store.GetQualityCache(item.PID); err == nil && row != nil {
+	// 1. Cache hit short-circuit. A propagated row (probeShowGroup wrote
+	// it for a sibling it never probed) is a miss: it holds the show's
+	// heights, not this PID's availability. A successful probe below
+	// replaces it with a probed row. Gitea #75.
+	if row, err := p.store.GetQualityCache(item.PID); err == nil && row != nil && !row.Propagated {
 		return row.Heights, false, true
 	}
 
@@ -338,9 +349,9 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (hei
 	// top height; when it holds, that height is added beneath it so
 	// the feed carries a 720p fallback either way. GitHub #54.
 	fhdProbeTransientErr := false
-	if bestHLS := pickBestHLSURL(streams.Video); bestHLS != "" && len(heights) > 0 && heights[0] >= 720 {
+	if masters := bestHLSURLs(streams.Video); len(masters) > 0 && len(heights) > 0 && heights[0] >= 720 {
 		if containsInt(heights, 1080) {
-			has1080, maxListed, err := p.fhdProber.VerifyFHD(probeCtx, bestHLS)
+			has1080, maxListed, err := p.verifyFHDWithFailover(probeCtx, item.PID, masters)
 			switch {
 			case err != nil:
 				log.Printf("quality probe: fhd verify transient err pid=%s err=%v (keeping %v, skipping cache)", item.PID, err, heights)
@@ -352,7 +363,7 @@ func (p *QualityProber) probeOne(parentCtx context.Context, item ProbeItem) (hei
 				heights = insertHeight(heights, maxListed)
 			}
 		} else {
-			_, found, err := p.fhdProber.ProbeHiddenFHD(probeCtx, bestHLS)
+			found, err := p.probeHiddenFHDWithFailover(probeCtx, item.PID, masters)
 			switch {
 			case err != nil:
 				log.Printf("quality probe: fhd transient err pid=%s err=%v (keeping %v, skipping cache)", item.PID, err, heights)
@@ -438,21 +449,69 @@ func dedupedSortedHeights(streams []VideoStream) []int {
 	return out
 }
 
-// pickBestHLSURL returns the URL of the highest-bitrate HLS stream in
-// the slice, or "" if none is present.
-func pickBestHLSURL(streams []VideoStream) string {
+// bestHLSURLs returns the URL of every HLS stream at the highest bitrate,
+// in mediaselector order (parseResponse keeps that order for equal
+// streams), without repeats. The first is the URL the FHD check used to
+// take alone; the rest are other suppliers of the same rendition, tried
+// when it fails. Nil when no HLS stream has a bitrate. Gitea #91.
+func bestHLSURLs(streams []VideoStream) []string {
 	bestBitrate := 0
-	bestURL := ""
 	for _, s := range streams {
-		if s.Format != "hls" {
-			continue
-		}
-		if s.Bitrate > bestBitrate {
+		if s.Format == "hls" && s.Bitrate > bestBitrate {
 			bestBitrate = s.Bitrate
-			bestURL = s.URL
 		}
 	}
-	return bestURL
+	if bestBitrate == 0 {
+		return nil
+	}
+	var urls []string
+	for _, s := range streams {
+		if s.Format == "hls" && s.Bitrate == bestBitrate && !slices.Contains(urls, s.URL) {
+			urls = append(urls, s.URL)
+		}
+	}
+	return urls
+}
+
+// verifyFHDWithFailover runs VerifyFHD on each master URL in turn and
+// returns the first answer that is not an error, so one refusing
+// supplier no longer leaves a 1080 claim unverified and uncached. Only
+// when every supplier errors, or the probe deadline passes, is the last
+// error returned. Gitea #91.
+func (p *QualityProber) verifyFHDWithFailover(ctx context.Context, pid string, masters []string) (has1080 bool, maxListed int, err error) {
+	for i, master := range masters {
+		has1080, maxListed, err = p.fhdProber.VerifyFHD(ctx, master)
+		if err == nil {
+			return has1080, maxListed, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		if i+1 < len(masters) {
+			log.Printf("quality probe: fhd verify failed on supplier %d of %d pid=%s err=%v, trying the next", i+1, len(masters), pid, err)
+		}
+	}
+	return false, 0, err
+}
+
+// probeHiddenFHDWithFailover runs ProbeHiddenFHD on each master URL in
+// turn and returns the first answer that is not an error. Only when every
+// supplier errors, or the probe deadline passes, is the last error
+// returned. Gitea #91.
+func (p *QualityProber) probeHiddenFHDWithFailover(ctx context.Context, pid string, masters []string) (found bool, err error) {
+	for i, master := range masters {
+		_, found, err = p.fhdProber.ProbeHiddenFHD(ctx, master)
+		if err == nil {
+			return found, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		if i+1 < len(masters) {
+			log.Printf("quality probe: hidden fhd probe failed on supplier %d of %d pid=%s err=%v, trying the next", i+1, len(masters), pid, err)
+		}
+	}
+	return false, err
 }
 
 // replaceHeight returns heights with every occurrence of old removed and

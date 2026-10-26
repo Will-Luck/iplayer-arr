@@ -12,17 +12,16 @@ import (
 // Availability verdicts reported per result by /api/search. The strings
 // are the wire contract; do not change them without a client note.
 const (
-	// availabilityAvailable: BBC returned usable stream qualities, so a
-	// grab of this PID should download.
+	// availabilityAvailable: BBC returned usable stream qualities for
+	// this PID, so a grab of it should download.
 	//
-	// Best-effort, not a guarantee. probeOne short-circuits on the
-	// per-PID quality cache, and probeShowGroup (the newznab feed path)
-	// writes cache rows for siblings it never probed. Those rows have no
-	// TTL. So for a show Sonarr has already polled, a newly listed
-	// episode can read available here while its playlist is unpublished.
-	// availabilityNotYetAvailable is trustworthy; this one is a strong
-	// hint. Fixing it means changing the feed path's cache propagation
-	// and is tracked separately.
+	// probeOne answers from the per-PID quality cache only when the row
+	// came from a probe of that PID. Rows probeShowGroup (the newznab
+	// feed path) propagates to siblings it never probed are a miss here,
+	// so a newly listed episode of a show Sonarr has already polled is
+	// checked itself rather than read as available. Rows written by
+	// older releases carry no provenance and still read as probed.
+	// Gitea #75.
 	availabilityAvailable = "available"
 
 	// availabilityNotYetAvailable: the episode is in BBC metadata but

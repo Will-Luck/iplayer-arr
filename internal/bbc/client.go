@@ -51,6 +51,17 @@ func (c *Client) GetCtx(ctx context.Context, url string) ([]byte, error) {
 	return c.doWithRetryCtx(ctx, url, c.maxRetry)
 }
 
+// HTTPStatusError reports a 4xx answer. The body is discarded, so the
+// status is all a caller can tell apart.
+type HTTPStatusError struct {
+	Status int
+	URL    string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.Status, e.URL)
+}
+
 // ErrNotJSON matches a *NotJSONError: the BBC answered a JSON endpoint
 // with an HTML page or an empty body. GitHub #57.
 var ErrNotJSON = errors.New("not a JSON response")
@@ -180,7 +191,7 @@ func (c *Client) fetchWithRetryCtx(ctx context.Context, url string, maxAttempts 
 		}
 
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, url)
+			return nil, &HTTPStatusError{Status: resp.StatusCode, URL: url}
 		}
 
 		if resp.StatusCode >= 500 {

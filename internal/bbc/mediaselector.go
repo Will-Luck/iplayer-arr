@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"net/http"
 	"sort"
 	"strings"
 )
@@ -14,6 +15,17 @@ import (
 const defaultMediaSelectorBase = "https://open.live.bbc.co.uk/mediaselector"
 
 var errGeoBlocked = errors.New("geo-blocked: BBC iPlayer is only available in the UK")
+
+// ErrMediaSelectorUnavailable matches a ResolveCtx failure in which no
+// attempt got a mediaSelection document back: every request failed
+// (transport error, timeout, HTTP error) or answered with something else
+// (the BBC's HTML error page, an empty body). The BBC could not answer,
+// which says nothing about whether the programme has streams. Gitea #94.
+var ErrMediaSelectorUnavailable = errors.New("mediaselector gave no answer")
+
+// errSelectionUnavailable is mediaselector's own "nothing for this vpid"
+// answer: a real answer about the programme.
+var errSelectionUnavailable = errors.New("content unavailable")
 
 // isGeoBlockedBody reports whether a mediaselector body indicates a geo-block.
 // Single source of truth for the markers, shared by parseResponse and CheckGeo.
@@ -41,10 +53,13 @@ func NewMediaSelector(client *Client) *MediaSelector {
 	}
 }
 
-// StreamSet holds the resolved video streams and optional subtitle URL.
+// StreamSet holds the resolved video streams and the captions URLs.
 type StreamSet struct {
-	Video       []VideoStream
-	SubtitleURL string
+	Video []VideoStream
+	// SubtitleURLs lists every captions URL mediaselector offered, the
+	// https ones first, each group in mediaselector (supplier priority)
+	// order, so a refusing supplier can be skipped. Gitea #91.
+	SubtitleURLs []string
 }
 
 // VideoStream is a single resolved HLS video stream.
@@ -90,12 +105,17 @@ type connectionXML struct {
 	Href           string `xml:"href,attr"`
 }
 
-// Resolve queries BBC mediaselector for the given VPID and returns a StreamSet.
-// It tries v6 "iptv-all" first, then falls back through v5 and the "pc" mediaset.
+// ResolveCtx queries BBC mediaselector for the given VPID and returns a
+// StreamSet. It tries v6 "iptv-all" first, then falls back through v5 and
+// the "pc" mediaset. When no attempt got a mediaSelection document back
+// the error matches ErrMediaSelectorUnavailable; when the BBC answered at
+// least once but listed no usable video it does not. Gitea #94.
 func (ms *MediaSelector) ResolveCtx(ctx context.Context, vpid string) (*StreamSet, error) {
 	mediasets := []string{"iptv-all", "pc"}
 	versions := []int{6, 5}
 
+	answered := false
+	var lastErr error
 	for _, mediaset := range mediasets {
 		for _, ver := range versions {
 			cb := fmt.Sprintf("%05d", rand.Intn(100000))
@@ -104,6 +124,15 @@ func (ms *MediaSelector) ResolveCtx(ctx context.Context, vpid string) (*StreamSe
 
 			body, err := ms.client.GetCtx(ctx, reqURL)
 			if err != nil {
+				// The mediaselector answers "no streams" as a 404 or
+				// 410; the client drops the body, so the status is the
+				// answer. 429, other 4xx, 5xx and transport errors stay
+				// "no answer".
+				var se *HTTPStatusError
+				if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusGone) {
+					answered = true
+				}
+				lastErr = err
 				continue
 			}
 
@@ -112,8 +141,13 @@ func (ms *MediaSelector) ResolveCtx(ctx context.Context, vpid string) (*StreamSe
 				if errors.Is(err, errGeoBlocked) {
 					return nil, err
 				}
+				if errors.Is(err, errSelectionUnavailable) {
+					answered = true
+				}
+				lastErr = err
 				continue
 			}
+			answered = true
 
 			if len(result.Video) > 0 {
 				return result, nil
@@ -121,6 +155,9 @@ func (ms *MediaSelector) ResolveCtx(ctx context.Context, vpid string) (*StreamSe
 		}
 	}
 
+	if !answered {
+		return nil, fmt.Errorf("%w for vpid %s: %w", ErrMediaSelectorUnavailable, vpid, lastErr)
+	}
 	return nil, fmt.Errorf("no streams found for vpid %s", vpid)
 }
 
@@ -138,7 +175,7 @@ func (ms *MediaSelector) parseResponse(body []byte) (*StreamSet, error) {
 	}
 	bodyStr := string(body)
 	if strings.Contains(bodyStr, "selectionunavailable") {
-		return nil, fmt.Errorf("content unavailable")
+		return nil, errSelectionUnavailable
 	}
 
 	var sel mediaSelectionXML
@@ -148,12 +185,20 @@ func (ms *MediaSelector) parseResponse(body []byte) (*StreamSet, error) {
 
 	result := &StreamSet{}
 	seen := map[string]bool{}
+	var httpsSubs, otherSubs []string
+	seenSub := map[string]bool{}
 
 	for _, m := range sel.Media {
 		if m.Kind == "captions" {
 			for _, c := range m.Connections {
-				if c.Protocol == "https" || result.SubtitleURL == "" {
-					result.SubtitleURL = c.Href
+				if c.Href == "" || seenSub[c.Href] {
+					continue
+				}
+				seenSub[c.Href] = true
+				if c.Protocol == "https" {
+					httpsSubs = append(httpsSubs, c.Href)
+				} else {
+					otherSubs = append(otherSubs, c.Href)
 				}
 			}
 			continue
@@ -192,6 +237,8 @@ func (ms *MediaSelector) parseResponse(body []byte) (*StreamSet, error) {
 			})
 		}
 	}
+
+	result.SubtitleURLs = append(httpsSubs, otherSubs...)
 
 	// Stable, so streams of equal height and bitrate keep mediaselector's
 	// order and the downloader's "first HLS entry" is the first supplier

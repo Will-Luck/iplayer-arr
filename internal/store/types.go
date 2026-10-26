@@ -161,6 +161,12 @@ type QualityCache struct {
 	ShowName string    `json:"show_name"` // normalised: lowercase + trimmed
 	Heights  []int     `json:"heights"`   // sorted descending, e.g. [1080, 720, 540, 396]
 	ProbedAt time.Time `json:"probed_at"`
+	// Propagated marks a row the show-group probe wrote for a sibling it
+	// never probed: the show's heights, which the newznab feed reuses,
+	// but no evidence that this PID is published. The per-PID probe
+	// treats it as a miss. Additive (omitempty): older builds ignore it,
+	// and rows they wrote read as probed. Gitea #75.
+	Propagated bool `json:"propagated,omitempty"`
 }
 
 const (
